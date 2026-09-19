@@ -714,7 +714,6 @@ async function ideTools(
   const document = await vscode.workspace.openTextDocument(file);
   const selector = { scheme: file.scheme, pattern: "**/ide-tools.txt" };
   const full = new vscode.Range(0, 0, 0, 5);
-  let boundedSymbols = false;
   let formatMode: "normal" | "overlap" | "change" = "normal";
   const disposables = [
     vscode.languages.registerWorkspaceSymbolProvider({
@@ -755,18 +754,6 @@ async function ideTools(
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       provideDocumentSymbols: () => {
-        if (boundedSymbols)
-          return Array.from(
-            { length: 1000 },
-            (_, index) =>
-              new vscode.SymbolInformation(
-                `symbol-${index}`,
-                vscode.SymbolKind.Class,
-                "",
-                new vscode.Location(index === 999 ? file : outside, full),
-              ),
-          );
-
         const parent = new vscode.DocumentSymbol(
           "parent",
           "",
@@ -786,6 +773,24 @@ async function ideTools(
         return [parent];
       },
     }),
+    // A separate document/provider avoids VS Code's version-keyed outline cache.
+    vscode.languages.registerDocumentSymbolProvider(
+      { scheme: file.scheme, pattern: "**/symbol-target.txt" },
+      {
+        provideDocumentSymbols: () =>
+          Array.from(
+            { length: 1000 },
+            (_, index) =>
+              new vscode.DocumentSymbol(
+                `symbol-${index}`,
+                "",
+                vscode.SymbolKind.Method,
+                full,
+                full,
+              ),
+          ),
+      },
+    ),
     vscode.languages.registerDocumentFormattingEditProvider(selector, {
       provideDocumentFormattingEdits: async (doc) => {
         if (formatMode === "change") {
@@ -863,14 +868,12 @@ async function ideTools(
         ?.containerName,
       "parent",
     );
-    boundedSymbols = true;
-    const completeSymbols = await service.documentSymbols({
-      uri: file.toString(),
+    const bounded = await service.documentSymbols({
+      uri: symbolTarget.toString(),
     });
-    assert.equal(completeSymbols.symbols.length, 1);
-    assert.equal(completeSymbols.omitted, 999);
-    assert.equal(completeSymbols.truncated, false);
-    boundedSymbols = false;
+    assert.equal(bounded.symbols.length, 100);
+    assert.equal(bounded.omitted, 0);
+    assert.equal(bounded.truncated, true);
     await disposedUiOperations(provider, file, document.version);
     const version = document.version;
     const preview = await service.format({ uri: file.toString(), version });
