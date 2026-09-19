@@ -593,6 +593,26 @@ test("identity rotation checks ownership again after key generation before stora
   await f.command("stop");
 });
 
+test("malformed stored tokens give rotation remediation without exposing their value", async () => {
+  for (const token of ["", "a".repeat(63), "z".repeat(64)]) {
+    const f = fixture("allow");
+    await f.command("start");
+    f.values.set(preferences.TOKEN_KEY, token);
+    f.changed();
+    await tick();
+    assert.equal(f.connections[0]!.closed, true);
+    assert.ok(f.warnings.some((message) => /Rotate Token/.test(message)));
+    assert.ok(
+      f.warnings.every(
+        (message) => !/storage could not be read|Restart/.test(message),
+      ),
+    );
+    if (token)
+      assert.ok(f.warnings.every((message) => !message.includes(token)));
+    await f.command("stop");
+  }
+});
+
 test("invalid identity from a successful secret read gives explicit rotation remediation", async () => {
   const f = fixture("allow");
   await f.command("start");

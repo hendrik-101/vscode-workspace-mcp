@@ -159,6 +159,13 @@ export function activate(context: vscode.ExtensionContext): void {
         .then(([token, rawIdentity]) => {
           if (running !== session || requestedSecret !== secretGeneration)
             return;
+          if (token !== undefined && !/^[a-f0-9]{64}$/.test(token)) {
+            void stop().catch(report);
+            void vscode.window.showWarningMessage(
+              "Workspace MCP stopped because its stored token is invalid. Use Rotate Token, then update client configuration.",
+            );
+            return;
+          }
           let current: ServerIdentity;
           try {
             current = parseIdentity(rawIdentity ?? "");
