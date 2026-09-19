@@ -1,0 +1,7 @@
+**/*
+!dist/extension.cjs
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+!SECURITY.md

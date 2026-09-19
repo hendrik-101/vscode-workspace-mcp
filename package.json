@@ -1,0 +1,74 @@
+{
+  "name": "vscode-workspace-mcp",
+  "displayName": "Workspace MCP",
+  "description": "A small, authenticated MCP bridge to VS Code virtual workspaces and live editors.",
+  "version": "0.1.0",
+  "publisher": "hendrik-101",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hendrik-101/vscode-workspace-mcp.git"
+  },
+  "engines": {
+    "vscode": "^1.102.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "workspaceMcp.start",
+        "title": "Workspace MCP: Start"
+      },
+      {
+        "command": "workspaceMcp.stop",
+        "title": "Workspace MCP: Stop"
+      },
+      {
+        "command": "workspaceMcp.connection",
+        "title": "Workspace MCP: Show Connection Details"
+      },
+      {
+        "command": "workspaceMcp.enableWrites",
+        "title": "Workspace MCP: Enable Writes for This Session"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:vscode": "node scripts/test-vscode.mjs",
+    "package": "npm run build && vsce package --no-dependencies --out artifacts/workspace-mcp.vsix"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "@types/vscode": "1.102.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.8",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "vscode-workspace-mcp",
+  "version": "0.1.0",
+  "description": "Work with VS Code virtual workspaces through a separately paired MCP server.",
+  "author": { "name": "hendrik-101" },
+  "license": "MIT",
+  "skills": "./skills/"
+}
