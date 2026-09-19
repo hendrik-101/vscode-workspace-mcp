@@ -290,16 +290,28 @@ export function activate(context: vscode.ExtensionContext): void {
                 secrets.get(TLS_KEY),
               ]);
               if (requestedSecret !== secretGeneration) continue;
+              if (current !== undefined && !/^[a-f0-9]{64}$/.test(current))
+                throw new Error(
+                  "Stored Workspace MCP token is invalid. Use Rotate Token, then update client configuration.",
+                );
               const currentIdentity = parseIdentity(rawIdentity ?? "");
-              stable =
-                current === token &&
-                currentIdentity.cert === identity.cert &&
-                currentIdentity.key === identity.key;
+              if (
+                currentIdentity.cert !== identity.cert ||
+                currentIdentity.key !== identity.key
+              )
+                throw new Error(
+                  "Stored Workspace MCP server identity changed during startup. Restart the bridge and refresh client configuration, including its trusted certificate.",
+                );
+              if (current !== token)
+                throw new Error(
+                  "Stored Workspace MCP token changed during startup. Restart the bridge and refresh client configuration.",
+                );
+              stable = true;
               break;
             }
             if (!stable)
               throw new Error(
-                "Stored Workspace MCP token changed during startup. Restart the bridge.",
+                "Stored Workspace MCP token or server identity kept changing during startup. Retry when credential changes have finished, then refresh client configuration.",
               );
           } catch (error) {
             if (pending === started) {

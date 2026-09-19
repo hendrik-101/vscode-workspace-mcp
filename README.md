@@ -19,7 +19,8 @@ nor stores SAP credentials.
 ## Install and connect
 
 Requires **VS Code 1.137 or later**. The extension uses VS Code's bundled Node.js
-runtime; a separate Node.js installation is only needed for development.
+runtime. The MCP client launches the bundled stdio adapter, so the client host
+also needs Node.js 24 or later.
 
 1. Download the `workspace-mcp-vsix` artifact from a successful GitHub Actions run,
    or build it below. In VS Code, run **Extensions: Install from VSIX**.

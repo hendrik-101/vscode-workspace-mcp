@@ -816,3 +816,38 @@ test("overlapping credential rotations serialize their actual writes", async () 
   assert.equal(f.services.at(-1)!.canWrite(), true);
   await f.command("stop");
 });
+
+for (const kind of ["malformed", "missing", "changed", "identity"] as const) {
+  test(`final startup verification diagnoses ${kind} credentials`, async () => {
+    const f = fixture("allow");
+    f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+    const originalGet = f.context.secrets.get;
+    f.context.secrets.get = async (key) => {
+      if (f.connections.length && key === preferences.TOKEN_KEY) {
+        if (kind === "malformed") return "private-invalid-token";
+        if (kind === "missing") return undefined;
+        if (kind === "changed") return "b".repeat(64);
+        f.values.set(
+          TLS_KEY,
+          JSON.stringify({ cert: "replacement", key: "replacement" }),
+        );
+      }
+      return originalGet(key);
+    };
+    await f.command("start");
+    assert.equal(f.connections[0]!.closed, true);
+    assert.equal(f.services[0]!.canWrite(), false);
+    assert.equal(f.errors.length, 1);
+    const message = f.errors[0]!;
+    assert.match(
+      message,
+      kind === "malformed"
+        ? /Rotate Token/
+        : kind === "identity"
+          ? /server identity changed.*trusted certificate/
+          : /token changed.*refresh client configuration/,
+    );
+    assert.ok(!message.includes("private-invalid-token"));
+    await f.command("stop");
+  });
+}
