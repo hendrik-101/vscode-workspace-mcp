@@ -7,6 +7,11 @@ The server selects a new loopback port and bearer token each time it starts.
 Update the client configuration and reconnect after every restart. Each window
 has its own connection; inspect the returned workspace roots before working.
 
+Before enabling agent edits, turn **Files: Auto Save** off for the workspace.
+Otherwise VS Code may save an edited buffer automatically even though the bridge
+does not call save. Leave Auto Save off when you need to review changes before
+the separate save operation.
+
 Keep connection details in private machine configuration, outside version control.
 Do not paste tokens into chats, issues, or the optional plugin. Stopping the bridge
 revokes its running connection. It starts read-only; editing requires **Workspace

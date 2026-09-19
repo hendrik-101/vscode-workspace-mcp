@@ -32,8 +32,15 @@ try {
     );
   }
   const workspace = join(temporary, "workspace");
+  const workspaceFile = join(temporary, "integration.code-workspace");
   const userData = join(temporary, "user-data");
   await mkdir(workspace);
+  // Begin in multi-root mode: converting a single folder during a test restarts
+  // the extension host and cancels the running suite.
+  await writeFile(
+    workspaceFile,
+    JSON.stringify({ folders: [{ path: workspace }] }),
+  );
   await mkdir(join(userData, "User"), { recursive: true });
   await writeFile(
     join(userData, "User/settings.json"),
@@ -50,7 +57,7 @@ try {
     extensionDevelopmentPath: project,
     extensionTestsPath: join(project, "dist/test/vscode.cjs"),
     launchArgs: [
-      workspace,
+      workspaceFile,
       "--no-sandbox",
       "--disable-gpu",
       "--disable-workspace-trust",

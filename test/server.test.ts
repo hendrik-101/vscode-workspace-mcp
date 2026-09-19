@@ -3,17 +3,44 @@ import { request } from "node:http";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startServer, type WorkspaceApi } from "../src/server.js";
+import { startServer } from "../src/server.js";
+import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 
 const workspace: WorkspaceApi = {
-  roots: () => ({ roots: [{ uri: "memfs:/project", name: "project" }] }),
-  context: () => ({ activeEditor: null }),
-  list: async ({ uri }) => ({ uri, entries: [] }),
-  read: async ({ uri }) => ({ uri, text: "unsaved buffer", version: 4 }),
-  search: async ({ query }) => ({ query, matches: [], incomplete: false }),
-  edit: async ({ version }) => ({ version: version + 1, saved: false }),
-  save: async () => ({ saved: false }),
-  diagnostics: async () => ({ diagnostics: [] }),
+  roots: async () => [{ uri: "memfs:/project", name: "project", index: 0 }],
+  context: async () => ({ roots: [], tabs: [], truncated: false }),
+  list: async ({ uri }) => ({
+    uri,
+    entries: [],
+    truncated: false,
+    blockedEntries: 0,
+  }),
+  read: async ({ uri }) => ({
+    uri,
+    text: "unsaved buffer",
+    version: 4,
+    dirty: true,
+    languageId: "abap",
+    lineCount: 1,
+    startLine: 0,
+    endLine: 1,
+  }),
+  search: async ({ uri, query }) => ({
+    uri,
+    query,
+    matches: [],
+    filesSearched: 0,
+    truncated: false,
+    incomplete: false,
+    errors: [],
+  }),
+  edit: async ({ uri, version }) => ({
+    uri,
+    version: version + 1,
+    dirty: true,
+  }),
+  save: async ({ uri, version }) => ({ uri, version, dirty: false }),
+  diagnostics: async ({ uri }) => ({ uri, diagnostics: [], truncated: false }),
 };
 
 async function http(
@@ -96,6 +123,11 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       uri: "memfs:/project/a.abap",
       text: "unsaved buffer",
       version: 4,
+      dirty: true,
+      languageId: "abap",
+      lineCount: 1,
+      startLine: 0,
+      endLine: 1,
     },
   });
   assert.equal(read.isError, undefined);
@@ -103,7 +135,27 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     name: "save_document",
     arguments: { uri: "memfs:/project/a.abap", version: 4 },
   });
-  assert.deepEqual(save.structuredContent, { result: { saved: false } });
+  assert.deepEqual(save.structuredContent, {
+    result: { uri: "memfs:/project/a.abap", version: 4, dirty: false },
+  });
+  assert.equal(
+    (
+      await client.callTool({
+        name: "search_workspace",
+        arguments: { uri: "memfs:/project", query: "text", maxResults: 100 },
+      })
+    ).isError,
+    undefined,
+  );
+  assert.equal(
+    (
+      await client.callTool({
+        name: "search_workspace",
+        arguments: { uri: "memfs:/project", query: "text", maxResults: 101 },
+      })
+    ).isError,
+    true,
+  );
   for (const arguments_ of [
     { uri: "memfs:/project/a.abap", version: -1 },
     { uri: "memfs:/project/a.abap" },
@@ -199,10 +251,10 @@ test("bounds concurrent requests and closes in-flight connections on shutdown", 
   });
   const server = await startServer({
     ...workspace,
-    read: async () => {
+    read: async (input) => {
       entered++;
       await blocked;
-      return { text: "done" };
+      return workspace.read(input);
     },
   });
   t.after(async () => {
@@ -231,4 +283,116 @@ test("bounds concurrent requests and closes in-flight connections on shutdown", 
   await server.close();
   assert.equal((await Promise.all(pending)).length, 16);
   await assert.rejects(http(server.url, headers));
+});
+
+test("disconnected requests retain capacity only until their provider work settles", async (t) => {
+  let entered = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const server = await startServer({
+    ...workspace,
+    read: async (input) => {
+      entered++;
+      await blocked;
+      return workspace.read(input);
+    },
+  });
+  t.after(async () => {
+    release();
+    await server.close();
+  });
+  const headers = {
+    Authorization: `Bearer ${server.token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "read_document", arguments: { uri: "memfs:/project/a" } },
+  });
+  const pending = Array.from({ length: 16 }, () => {
+    const req = request(server.url, { method: "POST", headers });
+    req.on("error", () => {});
+    req.end(body);
+    return req;
+  });
+  t.after(() => {
+    for (const req of pending) req.destroy();
+  });
+  for (let retries = 0; entered < 16 && retries < 100; retries++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(entered, 16);
+  await Promise.all(
+    pending.map(
+      (req) =>
+        new Promise<void>((resolve) => {
+          req.once("close", resolve);
+          req.destroy();
+        }),
+    ),
+  );
+  // Give the server a turn to process the disconnects before probing capacity.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal((await http(server.url, headers, body)).status, 503);
+  assert.equal(
+    entered,
+    16,
+    "disconnection must not admit more background work",
+  );
+  release();
+  let response = await http(server.url, headers, body);
+  for (let retries = 0; response.status === 503 && retries < 100; retries++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    response = await http(server.url, headers, body);
+  }
+  assert.equal(
+    response.status,
+    200,
+    "settled provider work must free the request slots",
+  );
+});
+
+test("returns a safe actionable auto-save refusal", async (t) => {
+  const server = await startServer({
+    ...workspace,
+    edit: async () => {
+      throw new WorkspaceError("AUTO_SAVE_ENABLED", "private provider details");
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "workspace-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const result = await client.callTool({
+    name: "edit_document",
+    arguments: {
+      uri: "memfs:/project/a",
+      version: 4,
+      edits: [
+        {
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+          text: "x",
+        },
+      ],
+    },
+  });
+  assert.equal(result.isError, true);
+  assert.equal(
+    (result.structuredContent as { error: { code: string } }).error.code,
+    "AUTO_SAVE_ENABLED",
+  );
+  assert.match(JSON.stringify(result.content), /auto.?save/i);
+  assert.doesNotMatch(JSON.stringify(result), /private provider/);
 });

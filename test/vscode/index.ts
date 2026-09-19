@@ -44,6 +44,7 @@ async function updateRoots(
 }
 
 export async function run(): Promise<void> {
+  console.log("VS Code integration: registering virtual providers");
   const provider = new MemoryProvider();
   const readonlyProvider = new MemoryProvider();
   const registration = vscode.workspace.registerFileSystemProvider(
@@ -70,8 +71,8 @@ export async function run(): Promise<void> {
   );
   const initialRootCount = vscode.workspace.workspaceFolders?.length ?? 0;
   assert.ok(
-    initialRootCount > 0,
-    "Launch with a temporary folder to avoid restarting the extension host when the first root changes",
+    initialRootCount > 0 && vscode.workspace.workspaceFile,
+    "Launch with a saved .code-workspace to avoid restarting the extension host when adding roots",
   );
   let rootsAdded = false;
   let allowWrites = false;
@@ -93,12 +94,14 @@ export async function run(): Promise<void> {
   readonlyProvider.refuseWrites = true;
 
   try {
+    console.log("VS Code integration: adding virtual workspace roots");
     await updateRoots(initialRootCount, 0, [
       { uri: first, name: "Alpha virtual" },
       { uri: second, name: "Beta virtual" },
       { uri: readonlyRoot, name: "Read-only virtual" },
     ]);
     rootsAdded = true;
+    console.log("VS Code integration: reading roots and live buffers");
     assert.equal(
       vscode.workspace.isTrusted,
       true,
@@ -200,6 +203,7 @@ export async function run(): Promise<void> {
     );
 
     allowWrites = true;
+    console.log("VS Code integration: validating edits and explicit save");
     await rejectsCode(
       service.edit({
         uri: file.toString(),
@@ -249,6 +253,67 @@ export async function run(): Promise<void> {
     assert.equal(provider.stored(file), "edited needle\nsecond needle\n");
     assert.equal(provider.writes, 1);
 
+    console.log("VS Code integration: refusing resource-scoped auto-save");
+    // Configure one virtual folder so this also verifies resource-scoped settings.
+    provider.seed(
+      vscode.Uri.joinPath(first, ".vscode"),
+      "",
+      vscode.FileType.Directory,
+    );
+    provider.seed(
+      vscode.Uri.joinPath(first, ".vscode", "settings.json"),
+      "{}\n",
+    );
+    const filesConfiguration = vscode.workspace.getConfiguration("files", file);
+    const previousAutoSave =
+      filesConfiguration.inspect<string>("autoSave")?.workspaceFolderValue;
+    try {
+      await filesConfiguration.update(
+        "autoSave",
+        "afterDelay",
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
+      assert.equal(
+        vscode.workspace.getConfiguration("files", file).get("autoSave"),
+        "afterDelay",
+      );
+      assert.equal(
+        vscode.workspace.getConfiguration("files", sibling).get("autoSave"),
+        "off",
+      );
+      const backendBefore = provider.stored(file);
+      const writesBefore = provider.writes;
+      const versionBefore = document.version;
+      await rejectsCode(
+        service.edit({
+          uri: file.toString(),
+          version: versionBefore,
+          edits: [{ range: range(0, 6), text: "must not auto-save" }],
+        }),
+        "AUTO_SAVE_ENABLED",
+      );
+      assert.equal(document.getText(), backendBefore);
+      assert.equal(document.version, versionBefore);
+      assert.equal(document.isDirty, false);
+      assert.equal(
+        provider.stored(file),
+        backendBefore,
+        "Refused edit must leave backend bytes unchanged",
+      );
+      assert.equal(
+        provider.writes,
+        writesBefore,
+        "Refused edit must not invoke provider writes",
+      );
+    } finally {
+      await filesConfiguration.update(
+        "autoSave",
+        previousAutoSave,
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
+    }
+
+    console.log("VS Code integration: diagnostics and access boundaries");
     const diagnostic = new vscode.Diagnostic(
       new vscode.Range(0, 0, 0, 6),
       "Synthetic diagnostic",
@@ -298,6 +363,7 @@ export async function run(): Promise<void> {
       !outsideContext.tabs.some((tab) => tab.uri === outside.toString()),
     );
 
+    console.log("VS Code integration: refusing read-only provider writes");
     const locked = await service.read({ uri: readonlyFile.toString() });
     let readonlyFailed = false;
     try {

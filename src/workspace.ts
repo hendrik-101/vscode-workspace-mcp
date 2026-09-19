@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
   WorkspaceError,
@@ -40,26 +41,6 @@ function integer(value: number, name: string, min = 0): void {
   if (!Number.isSafeInteger(value) || value < min) {
     fail("INVALID_ARGUMENT", `${name} must be an integer >= ${min}.`);
   }
-}
-
-function byteLength(text: string): number {
-  let bytes = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code < 0x80) bytes++;
-    else if (code < 0x800) bytes += 2;
-    else if (
-      code >= 0xd800 &&
-      code <= 0xdbff &&
-      i + 1 < text.length &&
-      text.charCodeAt(i + 1) >= 0xdc00 &&
-      text.charCodeAt(i + 1) <= 0xdfff
-    ) {
-      bytes += 4;
-      i++;
-    } else bytes += 3;
-  }
-  return bytes;
 }
 
 function pathKey(uri: vscode.Uri): string {
@@ -224,7 +205,7 @@ export class WorkspaceService implements WorkspaceApi {
       fail("LIMIT_EXCEEDED", "Document buffer exceeds the 1 MiB limit.");
     }
     const text = document.getText();
-    if (byteLength(text) > MAX_FILE_BYTES)
+    if (Buffer.byteLength(text) > MAX_FILE_BYTES)
       fail("LIMIT_EXCEEDED", "Document buffer exceeds the 1 MiB limit.");
     return text;
   }
@@ -488,7 +469,7 @@ export class WorkspaceService implements WorkspaceApi {
           filesVisited++;
           const document = await this.document(item.uri);
           const text = this.text(document);
-          bytes += byteLength(text);
+          bytes += Buffer.byteLength(text);
           if (bytes > MAX_SEARCH_BYTES) {
             result.truncated = true;
             break;
@@ -610,7 +591,7 @@ export class WorkspaceService implements WorkspaceApi {
           "Edit ranges must not overlap or share an insertion point.",
         );
       }
-      addedBytes += byteLength(edit.text);
+      addedBytes += Buffer.byteLength(edit.text);
       if (addedBytes > MAX_FILE_BYTES)
         fail("LIMIT_EXCEEDED", "Replacement text exceeds the 1 MiB limit.");
     }
@@ -621,12 +602,22 @@ export class WorkspaceService implements WorkspaceApi {
       previousEnd = edit.end;
     }
     parts.push(original.slice(previousEnd));
-    if (byteLength(parts.join("")) > MAX_FILE_BYTES) {
+    if (Buffer.byteLength(parts.join("")) > MAX_FILE_BYTES) {
       fail("LIMIT_EXCEEDED", "Edited document would exceed the 1 MiB limit.");
     }
     await this.authorize(uri);
     this.writable();
     this.expected(document, version);
+    if (
+      vscode.workspace
+        .getConfiguration("files", document)
+        .get<string>("autoSave", "off") !== "off"
+    ) {
+      fail(
+        "AUTO_SAVE_ENABLED",
+        "Disable automatic saving for this document before applying agent edits. Changes must remain unsaved until explicitly saved.",
+      );
+    }
     const workspaceEdit = new vscode.WorkspaceEdit();
     for (const edit of checked)
       workspaceEdit.replace(uri, edit.range, edit.text);

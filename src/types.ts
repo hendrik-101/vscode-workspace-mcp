@@ -113,6 +113,7 @@ export type WorkspaceErrorCode =
   | "SYMLINK_DENIED"
   | "WRITES_DISABLED"
   | "UNTRUSTED_WORKSPACE"
+  | "AUTO_SAVE_ENABLED"
   | "VERSION_CONFLICT"
   | "LIMIT_EXCEEDED"
   | "NOT_A_FILE"

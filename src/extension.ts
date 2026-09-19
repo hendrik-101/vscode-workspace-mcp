@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 import { clientConfiguration } from "./configuration";
 import { startServer } from "./server";
+import { BridgeSession } from "./session";
 import { WorkspaceService } from "./workspace";
 
-type RunningServer = Awaited<ReturnType<typeof startServer>>;
-let running: RunningServer | undefined;
-let writes = false;
-let lifecycle = Promise.resolve();
+let running: BridgeSession | undefined;
+let starting = Promise.resolve();
+let generation = 0;
 
 export function activate(context: vscode.ExtensionContext): void {
   const status = vscode.window.createStatusBarItem(
@@ -14,69 +14,93 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   status.command = "workspaceMcp.connection";
   const refresh = () => {
-    status.text = `$(plug) MCP: ${writes ? "read/write" : "read only"}`;
+    status.text = `$(plug) MCP: ${running?.canWrite() ? "read/write" : "read only"}`;
     status.tooltip =
       "Workspace MCP is listening on this host's loopback interface. Stop it from the command palette.";
     if (running) status.show();
     else status.hide();
   };
-  const workspace = new WorkspaceService(
-    () => writes && vscode.workspace.isTrusted,
-  );
   const register = (id: string, action: () => Promise<void>) =>
     context.subscriptions.push(
-      vscode.commands.registerCommand(id, () => {
-        lifecycle = lifecycle.then(action).catch(() => {
+      vscode.commands.registerCommand(id, () =>
+        action().catch(() => {
           void vscode.window.showErrorMessage(
             "Workspace MCP could not complete the operation. Check workspace trust and restart the bridge.",
           );
-        });
-        return lifecycle;
-      }),
+        }),
+      ),
     );
-  register("workspaceMcp.start", async () => {
-    if (!vscode.workspace.isTrusted) {
-      await vscode.window.showWarningMessage(
-        "Trust this workspace before starting Workspace MCP.",
-      );
-      return;
-    }
-    if (!running) {
-      writes = false;
-      running = await startServer(workspace);
-    }
-    refresh();
-    const choice = await vscode.window.showInformationMessage(
-      "Workspace MCP started with read-only access.",
-      "Connection details",
-    );
-    if (choice) void vscode.commands.executeCommand("workspaceMcp.connection");
+  register("workspaceMcp.start", () => {
+    const requestedGeneration = generation;
+    starting = starting
+      .catch(() => {})
+      .then(async () => {
+        if (requestedGeneration !== generation || running) return;
+        if (!vscode.workspace.isTrusted) {
+          void vscode.window.showWarningMessage(
+            "Trust this workspace before starting Workspace MCP.",
+          );
+          return;
+        }
+        // Each service captures its own session, never the mutable global session.
+        let session: BridgeSession | undefined;
+        const workspace = new WorkspaceService(
+          () => !!session?.canWrite() && vscode.workspace.isTrusted,
+        );
+        session = new BridgeSession(await startServer(workspace));
+        if (requestedGeneration !== generation) {
+          await session.stop();
+          return;
+        }
+        running = session;
+        refresh();
+        // An informational toast must never hold the lifecycle or Stop command open.
+        void vscode.window
+          .showInformationMessage(
+            "Workspace MCP started with read-only access.",
+            "Connection details",
+          )
+          .then((choice) => {
+            if (choice && running === session)
+              void vscode.commands.executeCommand("workspaceMcp.connection");
+          });
+      });
+    return starting;
   });
   register("workspaceMcp.stop", async () => {
-    writes = false;
-    const server = running;
+    generation++;
+    const session = running;
     running = undefined;
+    const closing = session?.stop(); // Revoke synchronously before any await.
     refresh();
-    await server?.close();
+    await closing;
+    await starting;
   });
   register("workspaceMcp.enableWrites", async () => {
-    if (!running || !vscode.workspace.isTrusted) {
-      await vscode.window.showWarningMessage(
+    const session = running;
+    if (!session || !vscode.workspace.isTrusted) {
+      void vscode.window.showWarningMessage(
         "Start Workspace MCP in a trusted workspace first.",
       );
       return;
     }
     const choice = await vscode.window.showWarningMessage(
-      "Allow connected MCP clients to edit and save documents in this window's workspace roots until the bridge stops? Saving may trigger your filesystem provider's backend operations.",
+      "Allow connected MCP clients to edit and save documents in this window's workspace roots until the bridge stops? Saving may trigger your filesystem provider's backend operations. Agent edits require Auto Save to be off.",
       { modal: true },
       "Enable writes",
     );
-    if (choice === "Enable writes") writes = true;
+    if (
+      choice === "Enable writes" &&
+      running === session &&
+      vscode.workspace.isTrusted
+    )
+      session.enableWrites();
     refresh();
   });
   register("workspaceMcp.connection", async () => {
-    if (!running) {
-      await vscode.window.showInformationMessage(
+    const session = running;
+    if (!session) {
+      void vscode.window.showInformationMessage(
         "Run Workspace MCP: Start first.",
       );
       return;
@@ -98,29 +122,28 @@ export function activate(context: vscode.ExtensionContext): void {
           "Contains a private token. Keep it out of repositories and shared logs.",
       },
     );
-    if (!client) return;
+    if (!client || running !== session) return;
+    const { url, token } = session.connection;
     const document = await vscode.workspace.openTextDocument({
       language: client.value === "claude" ? "json" : "toml",
-      content: clientConfiguration(client.value, running.url, running.token),
+      content: clientConfiguration(client.value, url, token),
     });
     await vscode.window.showTextDocument(document, { preview: false });
-    await vscode.window.showInformationMessage(
+    void vscode.window.showInformationMessage(
       "This private token expires when the bridge stops. Copy these settings to your client's user configuration. The client must run on the same host.",
     );
   });
   context.subscriptions.push(status, {
     dispose: () => {
-      writes = false;
-      void running?.close();
-      running = undefined;
+      void deactivate();
     },
   });
 }
 
 export async function deactivate(): Promise<void> {
-  await lifecycle;
-  writes = false;
-  const server = running;
+  generation++;
+  const session = running;
   running = undefined;
-  await server?.close();
+  await session?.stop();
+  await starting;
 }

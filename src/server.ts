@@ -9,35 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-// Structural boundary keeps the transport usable without loading VS Code.
-export interface WorkspaceApi {
-  roots(): unknown;
-  context(): unknown;
-  list(args: { uri: string }): Promise<unknown>;
-  read(args: {
-    uri: string;
-    startLine?: number;
-    endLine?: number;
-  }): Promise<unknown>;
-  search(args: {
-    uri: string;
-    query: string;
-    maxResults?: number;
-  }): Promise<unknown>;
-  edit(args: {
-    uri: string;
-    version: number;
-    edits: {
-      range: {
-        start: { line: number; character: number };
-        end: { line: number; character: number };
-      };
-      text: string;
-    }[];
-  }): Promise<unknown>;
-  save(args: { uri: string; version: number }): Promise<unknown>;
-  diagnostics(args: { uri: string }): Promise<unknown>;
-}
+import type { WorkspaceApi } from "./types.js";
 
 const MAX_BODY = 1024 * 1024;
 const MAX_REQUESTS = 16;
@@ -51,6 +23,8 @@ const errors: Record<string, string> = {
   SYMLINK_DENIED: "Symbolic links are not admitted.",
   WRITES_DISABLED: "Writes require explicit approval for this session.",
   UNTRUSTED_WORKSPACE: "Workspace Trust is required.",
+  AUTO_SAVE_ENABLED:
+    "Disable editor auto-save before applying buffer-only edits.",
   VERSION_CONFLICT:
     "Document changed; read its current version before writing.",
   LIMIT_EXCEEDED: "Workspace operation exceeded its limit.",
@@ -60,7 +34,10 @@ const errors: Record<string, string> = {
   SAVE_FAILED: "The editor refused to save the document.",
 };
 
-function createMcpServer(workspace: WorkspaceApi) {
+function createMcpServer(
+  workspace: WorkspaceApi,
+  execute: (operation: () => unknown) => Promise<unknown>,
+) {
   const server = new McpServer({
     name: "vscode-workspace-mcp",
     version: "0.1.0",
@@ -85,7 +62,9 @@ function createMcpServer(workspace: WorkspaceApi) {
       },
       async (args) => {
         try {
-          const result = await operation(args as z.output<typeof schema>);
+          const result = await execute(() =>
+            operation(args as z.output<typeof schema>),
+          );
           const structuredContent = { result };
           return {
             content: [
@@ -159,7 +138,7 @@ function createMcpServer(workspace: WorkspaceApi) {
     z.strictObject({
       uri,
       query: z.string().min(1).max(4096),
-      maxResults: z.number().int().min(1).max(1000).optional(),
+      maxResults: z.number().int().min(1).max(100).optional(),
     }),
     (args) => workspace.search(args),
   );
@@ -314,24 +293,52 @@ export async function startServer(
       return reject(response, 413, "Request body too large.");
     active++;
     let mcp: McpServer | undefined;
+    let finished = false;
+    let running = 0;
+    let released = false;
+    const release = () => {
+      if (finished && running === 0 && !released) {
+        released = true;
+        active--;
+      }
+    };
+    const execute = async (operation: () => unknown) => {
+      if (finished) throw new RequestError(408, "Request ended.");
+      running++;
+      try {
+        return await operation();
+      } finally {
+        running--;
+        release();
+      }
+    };
     const timeout = setTimeout(() => {
       reject(response, 408, "Request timed out.");
       request.destroy();
     }, REQUEST_TIMEOUT);
     const cleanup = () => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timeout);
+      // A disconnected client cannot release capacity while provider work runs.
+      release();
       if (mcp) {
         sessions.delete(mcp);
         void mcp.close().catch(() => {});
       }
     };
-    response.once("close", cleanup);
+    const disconnected = new Promise<void>((resolve) => {
+      response.once("close", () => {
+        cleanup();
+        resolve();
+      });
+    });
     try {
       const body = await readBody(request);
       if (response.destroyed || closed) return;
       if (Array.isArray(body))
         return reject(response, 400, "Batch requests are not supported.");
-      mcp = createMcpServer(workspace);
+      mcp = createMcpServer(workspace, execute);
       sessions.add(mcp);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -339,7 +346,11 @@ export async function startServer(
       });
       await mcp.connect(transport);
       response.setHeader("Cache-Control", "no-store");
-      await transport.handleRequest(request, response, body);
+      // The SDK's JSON-response promise can remain pending after transport.close().
+      await Promise.race([
+        transport.handleRequest(request, response, body),
+        disconnected,
+      ]);
     } catch (error) {
       reject(
         response,
@@ -347,8 +358,6 @@ export async function startServer(
         error instanceof RequestError ? error.message : "Request failed.",
       );
     } finally {
-      clearTimeout(timeout);
-      active--;
       cleanup();
     }
   }
