@@ -425,6 +425,10 @@ export async function run(): Promise<void> {
       "../private.txt",
       "%2e%2e/private.txt",
       "%252e%252e/private.txt",
+      "%25252e%25252e/private.txt",
+      "folder%252fprivate.txt",
+      "folder%25255cprivate.txt",
+      "bad%2500name.txt",
       "folder%2f..%2fprivate.txt",
       "folder%5cprivate.txt",
     ]) {
@@ -480,6 +484,42 @@ export async function run(): Promise<void> {
     await rejectsCode(
       service.read({ uri: sibling.toString() }),
       "OUTSIDE_WORKSPACE",
+    );
+    console.log("VS Code integration: canonical percent names remain usable");
+    const percentRoot = first.with({ path: "/100%" });
+    const percentFile = vscode.Uri.joinPath(percentRoot, "50% complete.txt");
+    provider.seed(percentRoot, "", vscode.FileType.Directory);
+    provider.seed(percentFile, "percent needle\n");
+    await updateRoots(vscode.workspace.workspaceFolders!.length, 0, [
+      { uri: percentRoot, name: "100%" },
+    ]);
+    const advertised = (await service.roots()).find(
+      (root) => root.name === "100%",
+    );
+    assert.equal(advertised?.uri, percentRoot.toString());
+    const percentListing = await service.list({ uri: advertised!.uri });
+    assert.equal(percentListing.entries[0]?.uri, percentFile.toString());
+    const percentRead = await service.read({ uri: percentFile.toString() });
+    assert.equal(percentRead.text, "percent needle\n");
+    const percentSearch = await service.search({
+      uri: percentRoot.toString(),
+      query: "needle",
+    });
+    assert.equal(percentSearch.matches[0]?.uri, percentFile.toString());
+    const percentEdited = await service.edit({
+      uri: percentFile.toString(),
+      version: percentRead.version,
+      edits: [{ range: range(0, 7), text: "changed" }],
+    });
+    await service.save({
+      uri: percentFile.toString(),
+      version: percentEdited.version,
+    });
+    assert.equal(provider.stored(percentFile), "changed needle\n");
+    // An admitted percent root must not prevent other workspace roots being used.
+    assert.equal(
+      (await service.read({ uri: file.toString() })).uri,
+      file.toString(),
     );
     console.log("VS Code virtual-workspace integration assertions passed.");
     console.log(
