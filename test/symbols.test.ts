@@ -8,7 +8,7 @@ import { transformSync } from "esbuild";
 import * as contracts from "../src/types";
 import type { WorkspaceService } from "../src/workspace";
 
-/** Minimal URI fixture for this legacy provider-result boundary test. */
+/** Minimal URI fixture for deterministic workspace API boundary tests. */
 class Uri {
   private constructor(private readonly value: URL) {}
   static parse(value: string): Uri {
@@ -80,6 +80,20 @@ test("exactly 1000 legacy document symbols with 999 denied targets are complete"
       },
     },
   };
+  const service = loadService(vscode);
+  try {
+    const result = await service.documentSymbols({ uri: file.toString() });
+    assert.equal(result.symbols.length, 1);
+    assert.equal(result.symbols[0]?.name, "symbol-999");
+    assert.equal(result.omitted, 999);
+    assert.equal(result.truncated, false);
+    assert.equal(stats.filter((value) => value === file.toString()).length, 2);
+  } finally {
+    service.dispose();
+  }
+});
+
+function loadService(vscode: unknown): WorkspaceService {
   const exports = {} as { WorkspaceService: new () => WorkspaceService };
   const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
     loader: "ts",
@@ -97,15 +111,71 @@ test("exactly 1000 legacy document symbols with 999 denied targets are complete"
       throw new Error(`Unexpected import: ${id}`);
     },
   });
-  const service = new module.exports.WorkspaceService();
+  return new module.exports.WorkspaceService();
+}
+
+test("diff completion rechecks a removed comparison root", async () => {
+  const leftRoot = Uri.parse("vfs-test:/left");
+  const rightRoot = Uri.parse("vfs-test:/right");
+  const left = Uri.parse("vfs-test:/left/main.txt");
+  const right = Uri.parse("vfs-test:/right/main.txt");
+  const end = { line: 0, character: 6 };
+  let entered!: () => void;
+  let complete!: () => void;
+  const commandStarted = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const commandFinished = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  const vscode = {
+    Uri,
+    FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
+    workspace: {
+      workspaceFolders: [{ uri: leftRoot }, { uri: rightRoot }],
+      textDocuments: [left, right].map((uri) => ({
+        uri,
+        isClosed: false,
+        lineCount: 1,
+        lineAt: () => ({ range: { end } }),
+        offsetAt: (position: { character: number }) => position.character,
+        getText: () => "source",
+      })),
+      fs: {
+        stat: async (uri: Uri) => ({
+          type: uri.path.endsWith(".txt") ? 1 : 2,
+          size: 6,
+        }),
+      },
+    },
+    commands: {
+      executeCommand: async (command: string, first: Uri, second: Uri) => {
+        assert.equal(command, "vscode.diff");
+        assert.equal(first.toString(), left.toString());
+        assert.equal(second.toString(), right.toString());
+        entered();
+        await commandFinished;
+      },
+    },
+  };
+  const service = loadService(vscode);
+  const pending = service.diff({
+    uri: left.toString(),
+    otherUri: right.toString(),
+  });
   try {
-    const result = await service.documentSymbols({ uri: file.toString() });
-    assert.equal(result.symbols.length, 1);
-    assert.equal(result.symbols[0]?.name, "symbol-999");
-    assert.equal(result.omitted, 999);
-    assert.equal(result.truncated, false);
-    assert.equal(stats.filter((value) => value === file.toString()).length, 2);
+    await commandStarted;
+    // Only the comparison root disappears while the UI command is pending.
+    vscode.workspace.workspaceFolders = [{ uri: leftRoot }];
+    complete();
+    await assert.rejects(
+      pending,
+      (error: unknown) =>
+        error instanceof contracts.WorkspaceError &&
+        error.code === "OUTSIDE_WORKSPACE",
+    );
   } finally {
+    complete();
     service.dispose();
   }
 });

@@ -380,7 +380,9 @@ export class WorkspaceService implements WorkspaceApi {
       "Workspace MCP: Compare",
       { preserveFocus: input.preserveFocus ?? true, preview: true },
     );
+    signal?.throwIfAborted();
     this.currentRoot(document.uri);
+    if (input.otherUri !== undefined) this.currentRoot(right);
     return { shown: true };
   }
 
