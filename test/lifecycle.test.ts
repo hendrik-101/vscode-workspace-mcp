@@ -19,6 +19,7 @@ function fixture(initialPolicy: string = "ask") {
   const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
   const connections: {
     closed: boolean;
+    abortedRequests: number;
     token: string;
     url: string;
     close(): Promise<void>;
@@ -121,6 +122,10 @@ function fixture(initialPolicy: string = "ask") {
           ) => {
             const connection = {
               closed: false,
+              abortedRequests: 0,
+              abortRequests() {
+                this.abortedRequests++;
+              },
               token: options.token,
               url: `http://127.0.0.1:${options.port}/mcp`,
               async close() {
@@ -193,6 +198,7 @@ test("persistent deny cannot be bypassed and secret changes revoke immediately",
   assert.equal(f.services[0]!.canWrite(), false);
   f.values.set(preferences.TOKEN_KEY, "b".repeat(64));
   f.changed();
+  assert.equal(f.connections[0]!.abortedRequests, 1);
   assert.equal(f.services[0]!.canWrite(), false);
   await tick();
   assert.equal(f.connections[0]!.closed, true);
@@ -268,6 +274,7 @@ test("delayed own secret event suspends access then resumes without stopping", a
   const f = fixture("allow");
   await f.command("start");
   f.changed();
+  assert.equal(f.connections[0]!.abortedRequests, 1);
   assert.equal(f.services[0]!.canWrite(), false);
   await tick();
   assert.equal(f.connections[0]!.closed, false);
@@ -344,6 +351,7 @@ test("secret event read failure stops and reports a safe actionable warning", as
     throw new Error("Private provider details");
   };
   f.changed();
+  assert.equal(f.connections[0]!.abortedRequests, 1);
   assert.equal(f.services[0]!.canWrite(), false);
   await tick();
   assert.equal(f.connections[0]!.closed, true);

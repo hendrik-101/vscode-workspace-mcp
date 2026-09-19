@@ -1,6 +1,7 @@
 export interface Connection {
   url: string;
   token: string;
+  abortRequests(): void;
   close(): Promise<void>;
 }
 
@@ -17,11 +18,13 @@ export class BridgeSession {
   /** Removes write access without stopping read access. */
   disableWrites(): void {
     this.allowed = false;
+    this.connection.abortRequests();
   }
   /** Revokes write access before closing the underlying connection. */
   async stop(): Promise<void> {
     this.revoked = true;
     this.allowed = false;
+    this.connection.abortRequests();
     await this.connection.close();
   }
 }

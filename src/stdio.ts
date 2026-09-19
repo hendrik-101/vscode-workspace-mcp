@@ -10,7 +10,11 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Readable, Writable } from "node:stream";
-import { Agent } from "undici";
+import {
+  Agent,
+  fetch as fetchWithDispatcher,
+  type RequestInit as DispatcherRequestInit,
+} from "undici";
 
 export interface AdapterOptions {
   url: string;
@@ -55,20 +59,30 @@ export async function startAdapter(options: AdapterOptions) {
   const transport = new StreamableHTTPClientTransport(endpoint, {
     requestInit: { headers: { Authorization: `Bearer ${options.token}` } },
     fetch: async (input, init) => {
-      const requested = input instanceof Request ? input.url : String(input);
+      const requested = String(input);
       if (requested !== endpoint.href) {
         throw new Error("Workspace MCP destination rejected.");
       }
       const signal = requestSignal.getStore();
-      const request: RequestInit & { dispatcher: Agent } = {
+      // MCP sends JSON strings. Narrow the body rather than casting between
+      // browser and Node fetch request types (whose FormData types differ).
+      if (init?.body != null && typeof init.body !== "string") {
+        throw new Error("Workspace MCP request body rejected.");
+      }
+      const request: DispatcherRequestInit = {
         ...init,
+        body: init?.body,
+        headers: [...new Headers(init?.headers).entries()],
         dispatcher,
         redirect: "error",
         signal: signal
           ? AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])])
           : init?.signal,
       };
-      return fetch(input, request);
+      const response = await fetchWithDispatcher(input, request);
+      // Undici returns a standard Fetch Response; its Node stream declarations
+      // differ from the DOM declarations required by the SDK's FetchLike type.
+      return response as unknown as Response;
     },
   });
   const input = options.input ?? process.stdin;

@@ -119,6 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // Suspend requests and writes synchronously while checking a secret event.
       // A delayed event for our own initial store must not stop a healthy bridge.
       access.allowed = false;
+      session.connection.abortRequests();
       void Promise.all([
         context.secrets.get(TOKEN_KEY),
         context.secrets.get(TLS_KEY),

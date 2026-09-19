@@ -250,12 +250,21 @@ export async function startServer(
     authorized?: () => boolean;
     tls?: ServerIdentity;
   } = {},
-): Promise<{ url: string; token: string; close(): Promise<void> }> {
+): Promise<{
+  url: string;
+  token: string;
+  abortRequests(): void;
+  close(): Promise<void>;
+}> {
   const token = options.token ?? randomBytes(32).toString("hex");
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error("Invalid bearer token.");
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const connections = new Set<Socket>();
   const sessions = new Set<McpServer>();
+  const controllers = new Set<AbortController>();
+  const abortRequests = () => {
+    for (const controller of controllers) controller.abort();
+  };
   let host = "";
   let active = 0;
   let closed = false;
@@ -317,6 +326,7 @@ export async function startServer(
       return reject(response, 413, "Request body too large.");
     active++;
     const controller = new AbortController();
+    controllers.add(controller);
     let mcp: McpServer | undefined;
     let finished = false;
     let running = 0;
@@ -328,12 +338,15 @@ export async function startServer(
       }
     };
     const execute = async (operation: () => unknown) => {
-      if (finished) throw new RequestError(408, "Request ended.");
+      if (finished || controller.signal.aborted)
+        throw new RequestError(408, "Request ended.");
       if (options.authorized?.() === false)
         throw new RequestError(401, "Unauthorized.");
       running++;
       try {
         const result = await operation();
+        if (controller.signal.aborted)
+          throw new RequestError(408, "Request ended.");
         if (options.authorized?.() === false)
           throw new RequestError(401, "Unauthorized.");
         return result;
@@ -351,6 +364,7 @@ export async function startServer(
       if (finished) return;
       finished = true;
       controller.abort();
+      controllers.delete(controller);
       clearTimeout(timeout);
       // A disconnected client cannot release capacity while provider work runs.
       release();
@@ -408,9 +422,11 @@ export async function startServer(
   return {
     url: `${options.tls ? "https" : "http"}://${host}/mcp`,
     token,
+    abortRequests,
     async close() {
       if (closed) return;
       closed = true;
+      abortRequests();
       const closing = new Promise<void>((resolve) =>
         httpServer.close(() => resolve()),
       );

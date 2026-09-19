@@ -526,3 +526,79 @@ test("secret verification suspends HTTP acceptance before body parsing", async (
     await server.close();
   }
 });
+
+for (const toolName of ["edit_document", "save_document"]) {
+  test(`authorization suspension permanently aborts deferred ${toolName} even after access resumes`, async (t) => {
+    let release!: () => void;
+    let markEntered!: () => void;
+    let receivedSignal: AbortSignal | undefined;
+    let mutated = false;
+    let authorized = true;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const mutate = async (
+      { uri, version }: { uri: string; version: number },
+      signal?: AbortSignal,
+    ) => {
+      receivedSignal = signal;
+      markEntered();
+      await gate;
+      signal?.throwIfAborted();
+      mutated = true;
+      return { uri, version, dirty: false };
+    };
+    const server = await startServer(
+      { ...workspace, edit: mutate, save: mutate },
+      { authorized: () => authorized },
+    );
+    t.after(async () => {
+      release();
+      await server.close();
+    });
+    const client = new Client({ name: "suspension-test", version: "1.0.0" });
+    t.after(() => client.close());
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+      }),
+    );
+    const pending = client.callTool({
+      name: toolName,
+      arguments: {
+        uri: "memfs:/project/a",
+        version: 4,
+        ...(toolName === "edit_document"
+          ? {
+              edits: [
+                {
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 0 },
+                  },
+                  text: "x",
+                },
+              ],
+            }
+          : {}),
+      },
+    });
+    await entered;
+    authorized = false;
+    server.abortRequests();
+    assert.equal(receivedSignal?.aborted, true);
+    authorized = true;
+    release();
+    const result = await pending;
+    assert.equal(result.isError, true);
+    assert.equal(mutated, false);
+    const roots = await client.callTool({
+      name: "workspace_roots",
+      arguments: {},
+    });
+    assert.notEqual(roots.isError, true);
+  });
+}
