@@ -705,6 +705,10 @@ async function ideTools(
 ): Promise<void> {
   const file = vscode.Uri.joinPath(root, "ide-tools.txt");
   provider.seed(file, "messy");
+  // Keep authorization counting independent of the editor's asynchronous stat
+  // requests for its opened document (decorations, dirty checks, and diff UI).
+  const symbolTarget = vscode.Uri.joinPath(root, "symbol-target.txt");
+  provider.seed(symbolTarget, "target");
   let writes = false;
   const service = new WorkspaceService(() => writes);
   const document = await vscode.workspace.openTextDocument(file);
@@ -723,7 +727,7 @@ async function ideTools(
                   `repeat-${index}`,
                   vscode.SymbolKind.Method,
                   "",
-                  new vscode.Location(file, full),
+                  new vscode.Location(symbolTarget, full),
                 ),
             )
           : query === "mcp-test-symbol"
@@ -830,7 +834,7 @@ async function ideTools(
     const originalStat = provider.stat.bind(provider);
     let fileStats = 0;
     provider.stat = (uri) => {
-      if (uri.toString() === file.toString()) fileStats++;
+      if (uri.toString() === symbolTarget.toString()) fileStats++;
       return originalStat(uri);
     };
     try {
