@@ -43,20 +43,20 @@ function integer(value: number, name: string, min = 0): void {
   }
 }
 
-function pathKey(uri: vscode.Uri): string {
-  return uri.path.replace(/\/+$/, "") || "/";
+function childPrefix(path: string): string {
+  return path.endsWith("/") ? path : `${path}/`;
 }
 
 function contains(root: vscode.Uri, uri: vscode.Uri): boolean {
-  const base = pathKey(root);
-  const path = pathKey(uri);
+  const base = root.path;
+  const path = uri.path;
   return (
     root.scheme === uri.scheme &&
     root.authority === uri.authority &&
     root.query === uri.query &&
     !uri.fragment &&
     !root.fragment &&
-    (path === base || path.startsWith(base === "/" ? "/" : `${base}/`))
+    (path === base || path.startsWith(childPrefix(base)))
   );
 }
 
@@ -71,12 +71,7 @@ function parseUri(value: string): vscode.Uri {
   const rawPath = value
     .replace(/^[A-Za-z][A-Za-z0-9+.-]*:(?:\/\/[^/?#]*)?/, "")
     .split(/[?#]/, 1)[0]!;
-  // A canonical %25 can represent an ordinary percent sign. Reject it only
-  // when repeated decoding would reveal traversal, separators or controls.
-  if (
-    /%(?:25)*(?:2e|2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i.test(rawPath) ||
-    /%(?![0-9a-f]{2})/i.test(value)
-  ) {
+  if (/%(?![0-9a-f]{2})/i.test(value)) {
     fail(
       "INVALID_ARGUMENT",
       "Encoded traversal or ambiguous URI encoding is not allowed.",
@@ -87,6 +82,21 @@ function parseUri(value: string): vscode.Uri {
     // Uri.parse tolerates malformed UTF-8 escapes; providers may interpret them
     // differently, so require one well-defined decoding before accepting a path.
     decodeURIComponent(rawPath);
+    // Inspect every decoding layer: escaping individual hex digits can hide
+    // dangerous sequences from a raw-string matcher. Literal percent signs
+    // without hex digits remain ordinary filename characters after decoding.
+    let layer = rawPath;
+    for (let depth = 0; ; depth++) {
+      if (/%(?:2e|2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i.test(layer))
+        fail("INVALID_ARGUMENT", "Encoded traversal is not allowed.");
+      const decoded = layer.replace(/(?:%[0-9a-f]{2})+/gi, (escapes) =>
+        decodeURIComponent(escapes),
+      );
+      if (decoded === layer) break;
+      if (depth >= 7)
+        fail("INVALID_ARGUMENT", "URI encoding is nested too deeply.");
+      layer = decoded;
+    }
     uri = vscode.Uri.parse(value, true);
   } catch {
     return fail("INVALID_ARGUMENT", "Invalid URI.");
@@ -162,23 +172,25 @@ export class WorkspaceService implements WorkspaceApi {
 
   private async authorize(uri: vscode.Uri): Promise<vscode.FileStat> {
     const root = this.currentRoot(uri);
-    const base = pathKey(root);
-    const target = pathKey(uri);
+    const base = root.path;
+    const target = uri.path;
     const remainder =
       target === base
         ? []
-        : target.slice(base === "/" ? 1 : base.length + 1).split("/");
-    let current = root.with({ path: root.path === "" ? "" : base });
+        : target.slice(base.length).replace(/^\//, "").split("/");
+    let current = root;
     let stat = await vscode.workspace.fs.stat(current);
     this.stillAllowed(uri, root);
     if (isLink(stat)) fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
-    for (const segment of remainder) {
+    for (const [index, segment] of remainder.entries()) {
       if ((stat.type & vscode.FileType.Directory) === 0) {
         fail("NOT_A_DIRECTORY", "An ancestor is not a directory.");
       }
-      current = current.with({
-        path: `${pathKey(current) === "/" ? "" : pathKey(current)}/${segment}`,
-      });
+      // Stat the exact requested endpoint, including its trailing slash.
+      current =
+        index === remainder.length - 1
+          ? uri
+          : current.with({ path: `${childPrefix(current.path)}${segment}` });
       stat = await vscode.workspace.fs.stat(current);
       this.stillAllowed(uri, root);
       if (isLink(stat))
@@ -191,6 +203,14 @@ export class WorkspaceService implements WorkspaceApi {
     const stat = await this.authorize(uri);
     if ((stat.type & vscode.FileType.File) === 0)
       fail("NOT_A_FILE", "URI must identify a workspace file.");
+    const open = vscode.workspace.textDocuments.find(
+      (document) =>
+        !document.isClosed && document.uri.toString() === uri.toString(),
+    );
+    if (open) {
+      this.text(open);
+      return open;
+    }
     if (stat.size > MAX_FILE_BYTES)
       fail("LIMIT_EXCEEDED", "File exceeds the 1 MiB limit.");
     const document = await vscode.workspace.openTextDocument(uri);
@@ -362,7 +382,7 @@ export class WorkspaceService implements WorkspaceApi {
       fail("INVALID_ARGUMENT", "Provider returned an unsafe directory entry.");
     }
     const uri = parent.with({
-      path: `${pathKey(parent) === "/" ? "" : pathKey(parent)}/${name}`,
+      path: `${childPrefix(parent.path)}${name}`,
     });
     parseUri(uri.toString());
     this.currentRoot(uri);
