@@ -77,11 +77,22 @@ For a Claude Code CLI session, run this from the repository root:
 claude --plugin-dir ./plugins/vscode-workspace-mcp
 ```
 
-Then invoke `/vscode-workspace-mcp:workspace-mcp`. For persistent discovery without
-a marketplace, copy the whole plugin folder into `~/.claude/skills/` and start a
-new Claude Code session. Keep the same folder name. See the official
-[plugin reference](https://code.claude.com/docs/en/plugins-reference) for supported
-versions and loading behavior.
+Then invoke `/vscode-workspace-mcp:workspace-mcp`. See the official
+[plugin reference](https://code.claude.com/docs/en/plugins-reference) for loading
+behavior.
+
+For persistent use as a personal skill without a plugin marketplace, install the
+skill itself from the repository root:
+
+```sh
+mkdir -p ~/.claude/skills/workspace-mcp
+cp plugins/vscode-workspace-mcp/skills/workspace-mcp/SKILL.md ~/.claude/skills/workspace-mcp/SKILL.md
+```
+
+Start a new Claude Code session and invoke `/workspace-mcp`. The personal-skill
+layout is `~/.claude/skills/<skill-name>/SKILL.md`; do not copy the enclosing
+plugin directory there. See the official
+[skills documentation](https://code.claude.com/docs/en/skills#choose-where-skills-load).
 
 For Codex, the compatibility manifest is ready for a personal plugin catalog.
 This repository does not create that catalog or assume an undocumented local

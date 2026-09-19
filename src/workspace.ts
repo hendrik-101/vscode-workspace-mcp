@@ -71,7 +71,12 @@ function parseUri(value: string): vscode.Uri {
   const rawPath = value
     .replace(/^[A-Za-z][A-Za-z0-9+.-]*:(?:\/\/[^/?#]*)?/, "")
     .split(/[?#]/, 1)[0]!;
-  if (/%(?:2e|2f|5c|25)/i.test(rawPath) || /%(?![0-9a-f]{2})/i.test(value)) {
+  // A canonical %25 can represent an ordinary percent sign. Reject it only
+  // when repeated decoding would reveal traversal, separators or controls.
+  if (
+    /%(?:25)*(?:2e|2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i.test(rawPath) ||
+    /%(?![0-9a-f]{2})/i.test(value)
+  ) {
     fail(
       "INVALID_ARGUMENT",
       "Encoded traversal or ambiguous URI encoding is not allowed.",
