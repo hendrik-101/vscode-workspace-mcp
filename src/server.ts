@@ -426,10 +426,10 @@ export async function startServer(
     async close() {
       if (closed) return;
       closed = true;
-      abortRequests();
       const closing = new Promise<void>((resolve) =>
         httpServer.close(() => resolve()),
       );
+      abortRequests();
       for (const socket of connections) socket.destroy();
       await Promise.allSettled([...sessions].map((session) => session.close()));
       await closing;
