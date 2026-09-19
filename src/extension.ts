@@ -33,9 +33,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   status.command = "workspaceMcp.connection";
   const refresh = () => {
-    status.text = `$(plug) MCP: ${running?.canWrite() ? "read/write" : "read only"}`;
-    status.tooltip =
-      "Workspace MCP is listening on this host's loopback interface. Stop it from the command palette.";
+    const suspended = !!running && !runningAccess?.allowed;
+    status.text = `$(plug) MCP: ${suspended ? "suspended" : running?.canWrite() ? "read/write" : "read only"}`;
+    status.tooltip = suspended
+      ? "Workspace MCP access is suspended while stored credentials are verified."
+      : "Workspace MCP is listening on this host's loopback interface. Stop it from the command palette.";
     if (running) status.show();
     else status.hide();
   };
@@ -120,6 +122,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // A delayed event for our own initial store must not stop a healthy bridge.
       access.allowed = false;
       session.connection.abortRequests();
+      refresh();
       void Promise.all([
         context.secrets.get(TOKEN_KEY),
         context.secrets.get(TLS_KEY),
@@ -132,9 +135,10 @@ export function activate(context: vscode.ExtensionContext): void {
             token === session.connection.token &&
             current.cert === identity.cert &&
             current.key === identity.key
-          )
+          ) {
             access.allowed = true;
-          else {
+            refresh();
+          } else {
             void stop().catch(report);
             void vscode.window.showWarningMessage(
               "Workspace MCP stopped because its stored credentials changed. Restart and refresh client configuration.",

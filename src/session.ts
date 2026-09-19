@@ -17,6 +17,7 @@ export class BridgeSession {
   }
   /** Removes write access without stopping read access. */
   disableWrites(): void {
+    if (!this.allowed) return;
     this.allowed = false;
     this.connection.abortRequests();
   }

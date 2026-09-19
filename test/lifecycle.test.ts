@@ -39,6 +39,7 @@ function fixture(initialPolicy: string = "ask") {
       },
     },
   };
+  const status = { text: "", tooltip: "", show() {}, hide() {}, dispose() {} };
   const vscode = {
     StatusBarAlignment: { Right: 1 },
     ConfigurationTarget: { Global: 1 },
@@ -62,7 +63,7 @@ function fixture(initialPolicy: string = "ask") {
       }),
     },
     window: {
-      createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
+      createStatusBarItem: () => status,
       showWarningMessage: (message: string) => {
         warnings.push(message);
         return new Promise<string | undefined>((resolve) =>
@@ -145,6 +146,7 @@ function fixture(initialPolicy: string = "ask") {
   };
   return {
     command,
+    status,
     warnings,
     errors,
     deactivate: () => module.exports.deactivate!(),
@@ -187,6 +189,11 @@ for (const [choice, allow, policy] of [
     await tick();
     assert.equal(f.services[0]!.canWrite(), allow);
     assert.equal(f.settings.get("writePolicy"), policy);
+    assert.equal(
+      f.connections[0]!.abortedRequests,
+      0,
+      "A read-only startup choice must not cancel existing reads",
+    );
     await f.command("stop");
   });
 
@@ -410,4 +417,24 @@ test("explicit identity rotation leaves the bearer token intact and bridge stopp
   assert.equal(f.values.get(preferences.TOKEN_KEY), token);
   assert.notEqual(f.values.get(TLS_KEY), originalIdentity);
   assert.equal(f.connections[0]!.closed, true);
+});
+
+test("status immediately shows suspension until deferred credential verification completes", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  assert.match(f.status.text, /read\/write/);
+  const release: (() => void)[] = [];
+  f.context.secrets.get = (key: string) =>
+    new Promise((resolve) => {
+      release.push(() => resolve(f.values.get(key)));
+    });
+  f.changed();
+  assert.match(f.status.text, /suspended/);
+  assert.match(f.status.tooltip, /suspended/);
+  assert.equal(f.services[0]!.canWrite(), false);
+  release.forEach((finish) => finish());
+  await tick();
+  assert.match(f.status.text, /read\/write/);
+  assert.equal(f.services[0]!.canWrite(), true);
+  await f.command("stop");
 });
