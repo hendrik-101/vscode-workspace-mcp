@@ -1,5 +1,12 @@
 import * as vscode from "vscode";
 import {
+  TLS_KEY,
+  parseIdentity,
+  rotateIdentity,
+  storedIdentity,
+  type ServerIdentity,
+} from "./tls";
+import {
   portPreference,
   writePreference,
   WRITE_CHOICES,
@@ -14,6 +21,7 @@ import { BridgeSession } from "./session";
 import { WorkspaceService } from "./workspace";
 
 let running: BridgeSession | undefined;
+let runningIdentity: ServerIdentity | undefined;
 let runningAccess: { allowed: boolean } | undefined;
 let starting = Promise.resolve();
 let generation = 0;
@@ -92,7 +100,7 @@ export function activate(context: vscode.ExtensionContext): void {
       error instanceof Error && "code" in error && error.code === "EADDRINUSE"
         ? "Workspace MCP port is already in use. Stop the bridge in the other window or choose another user setting for workspaceMcp.port."
         : error instanceof Error &&
-            /^(Workspace MCP port|Stored Workspace MCP token)/.test(
+            /^(Workspace MCP port|Stored Workspace MCP token|Stored Workspace MCP server identity)/.test(
               error.message,
             )
           ? error.message
@@ -102,35 +110,44 @@ export function activate(context: vscode.ExtensionContext): void {
   let secretGeneration = 0;
   context.subscriptions.push(
     context.secrets.onDidChange((event) => {
-      if (event.key !== TOKEN_KEY) return;
+      if (event.key !== TOKEN_KEY && event.key !== TLS_KEY) return;
       const requestedSecret = ++secretGeneration;
       const session = running;
       const access = runningAccess;
-      if (!session || !access) return;
+      const identity = runningIdentity;
+      if (!session || !access || !identity) return;
       // Suspend requests and writes synchronously while checking a secret event.
       // A delayed event for our own initial store must not stop a healthy bridge.
       access.allowed = false;
-      void context.secrets.get(TOKEN_KEY).then(
-        (token) => {
+      void Promise.all([
+        context.secrets.get(TOKEN_KEY),
+        context.secrets.get(TLS_KEY),
+      ])
+        .then(([token, rawIdentity]) => {
           if (running !== session || requestedSecret !== secretGeneration)
             return;
-          if (token === session.connection.token) access.allowed = true;
+          const current = parseIdentity(rawIdentity ?? "");
+          if (
+            token === session.connection.token &&
+            current.cert === identity.cert &&
+            current.key === identity.key
+          )
+            access.allowed = true;
           else {
             void stop().catch(report);
             void vscode.window.showWarningMessage(
-              "Workspace MCP stopped because its stored token changed. Restart and refresh client configuration.",
+              "Workspace MCP stopped because its stored credentials changed. Restart and refresh client configuration.",
             );
           }
-        },
-        () => {
+        })
+        .catch(() => {
           if (running === session && requestedSecret === secretGeneration) {
             void stop().catch(report);
             void vscode.window.showWarningMessage(
               "Workspace MCP stopped because secure token storage could not be read. Check VS Code secret storage and restart the bridge.",
             );
           }
-        },
-      );
+        });
     }),
   );
   const register = (id: string, action: () => Promise<void>) =>
@@ -162,11 +179,13 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         const configuredPort = port();
         const token = await storedToken(context.secrets);
+        const identity = await storedIdentity(context.secrets);
         if (requestedGeneration !== generation) return;
         session = new BridgeSession(
           await startServer(workspace, {
             port: configuredPort,
             token,
+            tls: identity,
             authorized: () => access.allowed,
           }),
         );
@@ -175,9 +194,16 @@ export function activate(context: vscode.ExtensionContext): void {
           let stable = false;
           for (let attempt = 0; attempt < 3; attempt++) {
             const requestedSecret = secretGeneration;
-            const current = await context.secrets.get(TOKEN_KEY);
+            const [current, rawIdentity] = await Promise.all([
+              context.secrets.get(TOKEN_KEY),
+              context.secrets.get(TLS_KEY),
+            ]);
             if (requestedSecret !== secretGeneration) continue;
-            stable = current === token;
+            const currentIdentity = parseIdentity(rawIdentity ?? "");
+            stable =
+              current === token &&
+              currentIdentity.cert === identity.cert &&
+              currentIdentity.key === identity.key;
             break;
           }
           if (!stable)
@@ -194,6 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         running = session;
         runningAccess = access;
+        runningIdentity = identity;
         access.allowed = true;
         if (policy() === "allow") session.enableWrites();
         if (policy() === "ask") void askWrites(session).catch(report);
@@ -213,7 +240,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("workspaceMcp.stop", async () => {
     await stop();
-    await starting;
+    await starting.catch(() => {});
   });
   register("workspaceMcp.enableWrites", async () => {
     const session = running;
@@ -242,6 +269,25 @@ export function activate(context: vscode.ExtensionContext): void {
       "Token rotated. Start Workspace MCP and update your private client configuration.",
     );
   });
+  register("workspaceMcp.rotateIdentity", async () => {
+    await stop();
+    await starting.catch(() => {});
+    const requestedGeneration = generation;
+    const choice = await vscode.window.showWarningMessage(
+      "Replace the Workspace MCP server identity? Existing client configurations must be updated. The bearer token is unchanged and the bridge remains stopped.",
+      { modal: true },
+      "Replace server identity",
+    );
+    if (
+      choice !== "Replace server identity" ||
+      requestedGeneration !== generation
+    )
+      return;
+    await rotateIdentity(context.secrets);
+    void vscode.window.showInformationMessage(
+      "Server identity replaced. Start Workspace MCP and update your private client configuration.",
+    );
+  });
   register("workspaceMcp.connection", async () => {
     const session = running;
     if (!session) {
@@ -257,7 +303,7 @@ export function activate(context: vscode.ExtensionContext): void {
           value: "codex" as const,
         },
         {
-          label: "Claude Code / compatible HTTP MCP client",
+          label: "Claude Code / compatible stdio MCP client",
           value: "claude" as const,
         },
       ],
@@ -268,10 +314,18 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     );
     if (!client || running !== session) return;
+    const identity = runningIdentity;
+    if (!identity) return;
     const { url, token } = session.connection;
     const document = await vscode.workspace.openTextDocument({
       language: client.value === "claude" ? "json" : "toml",
-      content: clientConfiguration(client.value, url, token),
+      content: clientConfiguration(
+        client.value,
+        context.asAbsolutePath("dist/stdio.cjs"),
+        url,
+        token,
+        identity.cert,
+      ),
     });
     await vscode.window.showTextDocument(document, { preview: false });
     void vscode.window.showInformationMessage(
@@ -280,7 +334,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(status, {
     dispose: () => {
-      void deactivate();
+      void deactivate().catch(report);
     },
   });
 }
@@ -293,5 +347,5 @@ export async function deactivate(): Promise<void> {
   if (runningAccess) runningAccess.allowed = false;
   runningAccess = undefined;
   await session?.stop();
-  await starting;
+  await starting.catch(() => {});
 }

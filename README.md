@@ -20,20 +20,31 @@ nor stores SAP credentials.
 
 1. Download the `workspace-mcp-vsix` artifact from a successful GitHub Actions run,
    or build it below. In VS Code, run **Extensions: Install from VSIX**.
-2. Open your workspace and run **Workspace MCP: Start**. Nothing starts implicitly.
+2. Open and trust your workspace, then run **Workspace MCP: Start**. Nothing
+   starts implicitly.
 3. Run **Workspace MCP: Show Connection Details** and select your client.
-4. Copy the displayed configuration into your client's **user** settings. It
-   contains a private token: never commit or share it. Restart/reconnect the client.
+4. Copy the displayed **stdio** configuration into your client's **user** settings.
+   It launches the bundled adapter with Node.js 22 or later and contains a private
+   token: never commit or share it. Restart/reconnect the client. No certificate
+   installation or HTTP-client setup is needed.
 5. Ask the agent to list workspace roots and inspect the active editor.
-6. At startup, choose session-only or persistent write access. Closing the prompt
-   leaves the bridge read-only.
+6. With the default `ask` write policy, startup offers session-only or persistent
+   write access; closing the prompt leaves the bridge read-only. The `allow` policy
+   enables writes without a prompt; `deny` keeps the bridge read-only.
 
 Turn **Auto Save off** for documents edited through MCP. Edits are refused while
 Auto Save is enabled so that editing cannot implicitly persist a change.
 
-The fixed loopback port defaults to **39117** (`workspaceMcp.port` in User settings).
+The adapter connects internally over authenticated TLS. It verifies the generated
+server certificate before transmitting credentials, so another local user cannot
+steal the token by occupying the stopped server's port.
+
+The fixed internal loopback port defaults to **39117** (`workspaceMcp.port` in User settings).
 The token stays in VS Code SecretStorage across restarts; **Rotate Token** is the
-only command that replaces it. **Stop** closes the session, retaining the token.
+only command that replaces it. The server certificate/private key also remain in
+SecretStorage; **Rotate Server Identity** replaces those separately. Either
+rotation requires updated client configuration. **Stop** closes the session,
+retaining credentials.
 `workspaceMcp.writePolicy` is `ask` by default, with `allow` and `deny` alternatives.
 Port collisions fail explicitly; use a different user port for another window.
 Loopback belongs to the extension host,

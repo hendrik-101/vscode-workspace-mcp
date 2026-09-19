@@ -1,5 +1,6 @@
 **/*
 !dist/extension.cjs
+!dist/stdio.cjs
 !dist/THIRD_PARTY_NOTICES.txt
 !docs/*.md
 !package.json

@@ -7,7 +7,9 @@ Use the separately configured `workspace_mcp` connection for this workspace.
 This skill does not start the bridge or configure credentials. If its tools are
 unavailable, ask the user to run **Workspace MCP: Start** and **Workspace MCP:
 Show Connection Details** in the intended VS Code window, update their private
-client configuration, and reconnect. Never request the token in chat.
+stdio client configuration, and reconnect. The client needs Node.js 22 or newer
+and the generated adapter path. Never request the token in chat or use a direct
+HTTP connection as a fallback.
 
 1. Inspect the server's tools, workspace roots, and editor context. Use its returned
    URIs unchanged, including scheme and authority. Do not map virtual URIs to local

@@ -19,7 +19,8 @@ Never paste private sources, system URLs or tokens into public feedback.
 2. Start Workspace MCP with no SAP system configured: no crash; absent workspace
    roots are an empty list. This checks coexistence only.
 3. Connect ADT on your own device, open a virtual ABAP source and select a method.
-4. Connect one client. Verify roots retain the actual scheme/authority and that
+4. Connect one client through the generated stdio configuration (Node.js 22+).
+   No OS certificate installation is needed. Verify roots retain the actual scheme/authority and that
    editor_context returns the selected text.
 5. Type an unsaved marker manually. read_document must return that marker.
 6. Use the default `ask` policy and deny this session; verify a write fails.
@@ -34,6 +35,8 @@ Never paste private sources, system URLs or tokens into public feedback.
     Stop the first server and verify the connection closes. Restart and verify the
     saved client settings still work; explicit token rotation must reject the old
     token and require new client settings. Test all four write-prompt choices.
+11. Rotate server identity independently and verify old client trust fails without
+    changing the bearer token. Refresh client configuration and reconnect.
 
 Report VS Code/ADT/client versions, operation names and redacted error codes.
 Record observed behavior separately for Claude Code, Codex IDE and local desktop.

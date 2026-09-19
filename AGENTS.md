@@ -1,7 +1,9 @@
 # Agent entry point
 
 Keep this MIT project small, readable and free of telemetry. Preserve full VS Code
-URIs and live buffers. No shell tools, arbitrary commands or outbound requests.
+URIs and live buffers. No shell tools, arbitrary commands or external outbound requests.
+The stdio adapter may connect only to the configured loopback TLS endpoint, with
+its pinned certificate; never disable certificate verification or follow redirects.
 Use feature branches and PRs. **Never push development commits to `main`, merge
 without the owner's explicit instruction, or publish a release without approval.**
 

@@ -1,3 +1,5 @@
+import { createServer as createHttpsServer } from "node:https";
+import type { ServerIdentity } from "./tls";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   createServer,
@@ -242,7 +244,12 @@ function readBody(request: IncomingMessage): Promise<unknown> {
  */
 export async function startServer(
   workspace: WorkspaceApi,
-  options: { port?: number; token?: string; authorized?: () => boolean } = {},
+  options: {
+    port?: number;
+    token?: string;
+    authorized?: () => boolean;
+    tls?: ServerIdentity;
+  } = {},
 ): Promise<{ url: string; token: string; close(): Promise<void> }> {
   const token = options.token ?? randomBytes(32).toString("hex");
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error("Invalid bearer token.");
@@ -252,14 +259,23 @@ export async function startServer(
   let host = "";
   let active = 0;
   let closed = false;
-  const httpServer = createServer(
-    { maxHeaderSize: 8192 },
-    (request, response) => {
-      void handle(request, response).catch(() =>
-        reject(response, 500, "Request failed."),
-      );
-    },
-  );
+  const listener = (request: IncomingMessage, response: ServerResponse) => {
+    void handle(request, response).catch(() =>
+      reject(response, 500, "Request failed."),
+    );
+  };
+  // Plain HTTP is used only by isolated transport tests; the extension supplies TLS.
+  const httpServer = options.tls
+    ? createHttpsServer(
+        {
+          ...options.tls,
+          minVersion: "TLSv1.2",
+          maxHeaderSize: 8192,
+          handshakeTimeout: REQUEST_TIMEOUT,
+        },
+        listener,
+      )
+    : createServer({ maxHeaderSize: 8192 }, listener);
   httpServer.maxConnections = 64;
   httpServer.headersTimeout = 10_000;
   httpServer.requestTimeout = 15_000;
@@ -390,7 +406,7 @@ export async function startServer(
     });
   });
   return {
-    url: `http://${host}/mcp`,
+    url: `${options.tls ? "https" : "http"}://${host}/mcp`,
     token,
     async close() {
       if (closed) return;

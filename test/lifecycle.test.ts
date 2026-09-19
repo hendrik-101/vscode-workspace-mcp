@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { transformSync } from "esbuild";
 import * as preferences from "../src/preferences";
+import { TLS_KEY } from "../src/tls";
 import { BridgeSession } from "../src/session";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -12,7 +13,9 @@ function fixture(initialPolicy: string = "ask") {
   const commands = new Map<string, () => Promise<void>>();
   const prompts: { resolve(value?: string): void }[] = [];
   const warnings: string[] = [];
-  const values = new Map<string, string>();
+  const errors: string[] = [];
+  const identity = { cert: "test certificate", key: "test private key" };
+  const values = new Map<string, string>([[TLS_KEY, JSON.stringify(identity)]]);
   const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
   const connections: {
     closed: boolean;
@@ -23,7 +26,7 @@ function fixture(initialPolicy: string = "ask") {
   const services: { canWrite: () => boolean }[] = [];
   let secretChanged: ((event: { key: string }) => void) | undefined;
   const context = {
-    subscriptions: [],
+    subscriptions: [] as { dispose(): void }[],
     secrets: {
       get: async (key: string) => values.get(key),
       store: async (key: string, value: string) => {
@@ -66,10 +69,16 @@ function fixture(initialPolicy: string = "ask") {
         );
       },
       showInformationMessage: async () => undefined,
-      showErrorMessage: async () => undefined,
+      showErrorMessage: async (message: string) => {
+        errors.push(message);
+        return undefined;
+      },
     },
   };
-  const exports: { activate?: (context: unknown) => void } = {};
+  const exports: {
+    activate?: (context: unknown) => void;
+    deactivate?: () => Promise<void>;
+  } = {};
   const code = transformSync(readFileSync("src/extension.ts", "utf8"), {
     loader: "ts",
     format: "cjs",
@@ -82,6 +91,18 @@ function fixture(initialPolicy: string = "ask") {
     require: (id: string) => {
       if (id === "vscode") return vscode;
       if (id === "./preferences") return preferences;
+      if (id === "./tls")
+        return {
+          TLS_KEY,
+          storedIdentity: async () => identity,
+          parseIdentity: (raw: string) => JSON.parse(raw),
+          rotateIdentity: async () => {
+            values.set(
+              TLS_KEY,
+              JSON.stringify({ cert: "new certificate", key: "new key" }),
+            );
+          },
+        };
       if (id === "./session") return { BridgeSession };
       if (id === "./configuration") return {};
       if (id === "./workspace")
@@ -120,13 +141,15 @@ function fixture(initialPolicy: string = "ask") {
   return {
     command,
     warnings,
+    errors,
+    deactivate: () => module.exports.deactivate!(),
     prompts,
     values,
     settings,
     connections,
     services,
     context,
-    changed: () => secretChanged!({ key: preferences.TOKEN_KEY }),
+    changed: (key = preferences.TOKEN_KEY) => secretChanged!({ key }),
   };
 }
 
@@ -262,9 +285,11 @@ test("older secret read cannot resume access after a newer token change", async 
   f.changed();
   f.changed();
   reads[0]!(token);
+  reads[1]!(f.values.get(TLS_KEY)!);
   await tick();
   assert.equal(f.services[0]!.canWrite(), false);
-  reads[1]!("b".repeat(64));
+  reads[2]!("b".repeat(64));
+  reads[3]!(f.values.get(TLS_KEY)!);
   await tick();
   assert.equal(f.connections[0]!.closed, true);
   await f.command("stop");
@@ -333,4 +358,48 @@ test("secret event read failure stops and reports a safe actionable warning", as
     ),
   );
   await f.command("stop");
+});
+
+test("failed startup is reported once; Stop and deactivation settle cleanly", async () => {
+  const f = fixture();
+  f.context.secrets.get = async () => {
+    throw new Error("Storage unavailable");
+  };
+  await f.command("start");
+  assert.equal(f.errors.length, 1);
+  await f.command("stop");
+  assert.equal(f.errors.length, 1);
+  await assert.doesNotReject(f.deactivate());
+  for (const disposable of f.context.subscriptions) disposable.dispose();
+  await tick();
+  assert.equal(f.errors.length, 1);
+});
+
+test("a changed stored server identity suspends and stops the current session", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.values.set(
+    TLS_KEY,
+    JSON.stringify({ cert: "different certificate", key: "different key" }),
+  );
+  f.changed(TLS_KEY);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  await f.command("stop");
+});
+
+test("explicit identity rotation leaves the bearer token intact and bridge stopped", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const token = f.values.get(preferences.TOKEN_KEY);
+  const originalIdentity = f.values.get(TLS_KEY);
+  const rotating = f.command("rotateIdentity");
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  f.prompts[0]!.resolve("Replace server identity");
+  await rotating;
+  assert.equal(f.values.get(preferences.TOKEN_KEY), token);
+  assert.notEqual(f.values.get(TLS_KEY), originalIdentity);
+  assert.equal(f.connections[0]!.closed, true);
 });

@@ -12,8 +12,9 @@ const common = {
 };
 const result = await build({
   ...common,
-  entryPoints: ["src/extension.ts"],
-  outfile: "dist/extension.cjs",
+  entryPoints: { extension: "src/extension.ts", stdio: "src/stdio-main.ts" },
+  outdir: "dist",
+  outExtension: { ".js": ".cjs" },
   metafile: true,
 });
 await writeFile("artifacts/bundle-meta.json", JSON.stringify(result.metafile));

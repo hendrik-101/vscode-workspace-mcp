@@ -49,6 +49,10 @@
       {
         "command": "workspaceMcp.rotateToken",
         "title": "Workspace MCP: Rotate Token"
+      },
+      {
+        "command": "workspaceMcp.rotateIdentity",
+        "title": "Workspace MCP: Rotate Server Identity"
       }
     ],
     "configuration": {
@@ -87,6 +91,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "selfsigned": "5.5.0",
+    "undici": "7.29.1",
     "zod": "4.6.5"
   },
   "devDependencies": {
