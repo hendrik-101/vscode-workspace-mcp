@@ -15,6 +15,8 @@ function fixture(initialPolicy: string = "ask") {
   const warnings: string[] = [];
   const errors: string[] = [];
   const identity = { cert: "test certificate", key: "test private key" };
+  const delays: { bind?: Promise<void>; identityGeneration?: Promise<void> } =
+    {};
   const values = new Map<string, string>([[TLS_KEY, JSON.stringify(identity)]]);
   const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
   const connections: {
@@ -98,8 +100,9 @@ function fixture(initialPolicy: string = "ask") {
           TLS_KEY,
           storedIdentity: async () => identity,
           parseIdentity: (raw: string) => JSON.parse(raw),
-          rotateIdentity: async () => {
-            values.set(
+          rotateIdentity: async (secrets: preferences.SecretStore) => {
+            await delays.identityGeneration;
+            await secrets.store(
               TLS_KEY,
               JSON.stringify({ cert: "new certificate", key: "new key" }),
             );
@@ -134,6 +137,7 @@ function fixture(initialPolicy: string = "ask") {
               },
             };
             connections.push(connection);
+            await delays.bind;
             return connection;
           },
         };
@@ -146,6 +150,7 @@ function fixture(initialPolicy: string = "ask") {
   };
   return {
     command,
+    delays,
     status,
     warnings,
     errors,
@@ -436,5 +441,199 @@ test("status immediately shows suspension until deferred credential verification
   await tick();
   assert.match(f.status.text, /read\/write/);
   assert.equal(f.services[0]!.canWrite(), true);
+  await f.command("stop");
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+for (const operation of ["stop", "deactivate"] as const) {
+  for (const stage of ["initial read", "verification"] as const) {
+    test(`${operation} cancels hung ${stage}; late replies cannot activate and restart recovers`, async () => {
+      const f = fixture("allow");
+      const read = deferred<string | undefined>();
+      const originalGet = f.context.secrets.get;
+      f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+      f.context.secrets.get = async (key) => {
+        if (
+          key === preferences.TOKEN_KEY &&
+          (stage === "initial read" || f.connections.length > 0)
+        )
+          return read.promise;
+        return originalGet(key);
+      };
+      let startDone = false;
+      const starting = f.command("start").then(() => {
+        startDone = true;
+      });
+      await tick();
+      assert.equal(f.connections.length, stage === "verification" ? 1 : 0);
+      let stopDone = false;
+      const stopping = (
+        operation === "stop" ? f.command("stop") : f.deactivate()
+      ).then(() => {
+        stopDone = true;
+      });
+      await tick();
+      assert.equal(stopDone, true, "shutdown must not wait for secret storage");
+      assert.equal(startDone, true, "cancelled Start must settle too");
+      assert.ok(f.connections.every((connection) => connection.closed));
+      f.context.secrets.get = originalGet;
+      await f.command("start");
+      assert.equal(f.services.at(-1)!.canWrite(), true);
+      read.resolve(undefined);
+      await tick();
+      assert.equal(f.services[0]!.canWrite(), false);
+      assert.equal(f.services.at(-1)!.canWrite(), true);
+      assert.equal(f.errors.length, 0);
+      await Promise.all([starting, stopping]);
+      await f.command("stop");
+    });
+  }
+}
+
+test("Stop during binding settles and closes the late listener without starting verification", async () => {
+  const f = fixture("allow");
+  const bind = deferred<void>();
+  f.delays.bind = bind.promise;
+  const starting = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  await f.command("stop");
+  await starting;
+  f.context.secrets.get = async () => {
+    throw new Error("unexpected verification");
+  };
+  bind.resolve();
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[0]!.canWrite(), false);
+  assert.equal(f.errors.length, 0);
+});
+
+test("superseding Start waits for the cancelled pending listener to close", async () => {
+  const f = fixture("allow");
+  const originalGet = f.context.secrets.get;
+  const read = deferred<string | undefined>();
+  f.context.secrets.get = async (key) =>
+    f.connections.length > 0 ? read.promise : originalGet(key);
+  const first = f.command("start");
+  await tick();
+  const close = deferred<void>();
+  f.connections[0]!.close = async () => {
+    await close.promise;
+    f.connections[0]!.closed = true;
+  };
+  f.context.secrets.get = originalGet;
+  const second = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1, "new bind must wait for old close");
+  close.resolve();
+  await Promise.all([first, second]);
+  assert.equal(f.connections.length, 2);
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+for (const [rotation, confirmation] of [
+  ["rotateToken", "Rotate token"],
+  ["rotateIdentity", "Replace server identity"],
+] as const) {
+  test(`${rotation} cannot rotate if Start arrives during listener shutdown`, async () => {
+    const f = fixture("allow");
+    await f.command("start");
+    const originalValues = [...f.values.entries()];
+    const close = deferred<void>();
+    f.connections[0]!.close = async () => {
+      await close.promise;
+      f.connections[0]!.closed = true;
+    };
+    const rotating = f.command(rotation);
+    const restarting = f.command("start");
+    await tick();
+    assert.equal(f.connections.length, 1);
+    close.resolve();
+    await tick();
+    for (const prompt of f.prompts) prompt.resolve(confirmation);
+    await Promise.all([rotating, restarting]);
+    assert.deepEqual([...f.values.entries()], originalValues);
+    assert.equal(f.prompts.length, 0, "stale rotation must not prompt");
+    assert.equal(f.services[1]!.canWrite(), true);
+    await f.command("stop");
+  });
+}
+
+test("identity rotation checks ownership again after key generation before storage", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const originalIdentity = f.values.get(TLS_KEY);
+  const generated = deferred<void>();
+  f.delays.identityGeneration = generated.promise;
+  const rotating = f.command("rotateIdentity");
+  await tick();
+  f.prompts[0]!.resolve("Replace server identity");
+  await tick();
+  await f.command("start");
+  generated.resolve();
+  await rotating;
+  assert.equal(f.values.get(TLS_KEY), originalIdentity);
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("invalid identity from a successful secret read gives explicit rotation remediation", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.values.set(TLS_KEY, "invalid identity, private provider details");
+  f.changed(TLS_KEY);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  assert.ok(
+    f.warnings.some((message) => /Rotate Server Identity/.test(message)),
+  );
+  assert.ok(
+    f.warnings.every(
+      (message) =>
+        !/storage could not be read|private provider details/.test(message),
+    ),
+  );
+  await f.command("stop");
+});
+
+test("restart waits for cancelled binding and its delayed cleanup", async () => {
+  const f = fixture("allow");
+  const bind = deferred<void>();
+  const close = deferred<void>();
+  f.delays.bind = bind.promise;
+  const first = f.command("start");
+  await tick();
+  f.connections[0]!.close = async () => {
+    await close.promise;
+    f.connections[0]!.closed = true;
+  };
+  await f.command("stop");
+  await first;
+  f.delays.bind = undefined;
+  const second = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  bind.resolve();
+  await tick();
+  assert.equal(
+    f.connections.length,
+    1,
+    "new bind waits for late listener cleanup",
+  );
+  close.resolve();
+  await second;
+  assert.equal(f.connections.length, 2);
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[1]!.canWrite(), true);
   await f.command("stop");
 });

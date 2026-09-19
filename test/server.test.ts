@@ -7,6 +7,17 @@ import { startServer } from "../src/server.js";
 import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 
 const workspace: WorkspaceApi = {
+  show: async ({ uri }) => ({ uri, version: 1, dirty: false }),
+  workspaceSymbols: async () => ({ symbols: [], truncated: false, omitted: 0 }),
+  documentSymbols: async () => ({ symbols: [], truncated: false, omitted: 0 }),
+  diff: async () => ({ shown: true }),
+  format: async ({ uri, version }) => ({
+    uri,
+    version,
+    dirty: false,
+    edits: [],
+    applied: false,
+  }),
   roots: async () => [{ uri: "memfs:/project", name: "project", index: 0 }],
   context: async () => ({ roots: [], tabs: [], truncated: false }),
   list: async ({ uri }) => ({
@@ -104,16 +115,62 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     }),
   );
   const { tools } = await client.listTools();
+  for (const name of ["show_document", "show_diff"]) {
+    const annotations = tools.find((tool) => tool.name === name)?.annotations;
+    assert.equal(annotations?.readOnlyHint, false);
+    assert.equal(annotations?.destructiveHint, false);
+  }
+  assert.equal(
+    tools.find((tool) => tool.name === "edit_document")?.annotations
+      ?.destructiveHint,
+    true,
+  );
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+    "document_symbols",
     "edit_document",
     "editor_context",
+    "format_document",
     "get_diagnostics",
     "list_directory",
     "read_document",
     "save_document",
     "search_workspace",
+    "show_diff",
+    "show_document",
     "workspace_roots",
+    "workspace_symbols",
   ]);
+  for (const [name, args] of [
+    ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
+    ["document_symbols", { uri: "memfs:/project/a.abap" }],
+    ["workspace_symbols", { query: "class" }],
+    [
+      "show_diff",
+      { uri: "memfs:/project/a.abap", proposedText: "", version: 4 },
+    ],
+    [
+      "format_document",
+      { uri: "memfs:/project/a.abap", version: 4, apply: false },
+    ],
+  ] as const) {
+    assert.equal(
+      (await client.callTool({ name, arguments: args })).isError,
+      undefined,
+    );
+  }
+  for (const [name, args] of [
+    ["show_document", { uri: "memfs:/project/a.abap", command: "unsafe" }],
+    [
+      "format_document",
+      { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
+    ],
+    ["workspace_symbols", { query: "" }],
+  ] as const) {
+    assert.equal(
+      (await client.callTool({ name, arguments: args })).isError,
+      true,
+    );
+  }
   const read = await client.callTool({
     name: "read_document",
     arguments: { uri: "memfs:/project/a.abap" },

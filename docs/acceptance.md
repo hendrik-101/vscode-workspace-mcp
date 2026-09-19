@@ -3,7 +3,7 @@
 ## Automated coexistence check
 
 `xvfb-run -a npm run test:vscode -- --adt` installs SAPSE.adt-vscode 1.1.2
-in an isolated VS Code 1.105.1 profile with no destinations or credentials.
+in an isolated VS Code 1.137.0 profile with no destinations or credentials.
 It checks ADT activation and registration of the `abap` filesystem provider,
 then runs the bridge's synthetic VFS suite with ADT loaded. CI runs this check.
 This does not establish that real ABAP objects can be listed, read or saved.
@@ -19,7 +19,7 @@ Never paste private sources, system URLs or tokens into public feedback.
 2. Start Workspace MCP with no SAP system configured: no crash; absent workspace
    roots are an empty list. This checks coexistence only.
 3. Connect ADT on your own device, open a virtual ABAP source and select a method.
-4. Connect one client through the generated stdio configuration (Node.js 22+).
+4. Connect one client through the generated stdio configuration (Node.js 24+).
    No OS certificate installation is needed. Verify roots retain the actual scheme/authority and that
    editor_context returns the selected text.
 5. Type an unsaved marker manually. read_document must return that marker.
@@ -41,3 +41,15 @@ Never paste private sources, system URLs or tokens into public feedback.
 Report VS Code/ADT/client versions, operation names and redacted error codes.
 Record observed behavior separately for Claude Code, Codex IDE and local desktop.
 Native client diff/rewind features are not guaranteed for provider-backed edits.
+
+## IDE provider acceptance
+
+On the work device, verify `show_document` reveals an ADT URI and selection,
+without moving focus unless requested. Check `document_symbols` and
+`workspace_symbols` against a known class/method; an empty result alone cannot
+distinguish unsupported providers from no matches. Preview a proposed change
+with `show_diff` and confirm the backend and live buffer remain unchanged.
+Preview formatting for an entire source and a selected range, then explicitly
+apply with write permission and Auto Save disabled. Check stale versions are
+rejected and saving remains a separate action. Synthetic registered providers
+exercise these paths in CI but do not establish SAP ADT provider support.

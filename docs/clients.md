@@ -3,7 +3,7 @@
 Install the VSIX, open the intended workspace, then run **Workspace MCP: Start**
 and **Workspace MCP: Show Connection Details** from the VS Code Command Palette.
 The details contain ready-to-copy **stdio** client configuration for `workspace_mcp`.
-Install Node.js 22 or newer on the client host. The client launches the bundled
+Install Node.js 24 or newer on the client host. The client launches the bundled
 `dist/stdio.cjs` adapter with `node`; keep the generated absolute path. The adapter
 connects only to the local extension over authenticated TLS, using its public
 certificate as the sole trust anchor. It never discovers other endpoints or follows

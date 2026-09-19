@@ -20,6 +20,8 @@ const uri = z.string().min(1).max(8192);
 const index = z.number().int().min(0).max(2_147_483_647);
 const position = z.strictObject({ line: index, character: index });
 const errors: Record<string, string> = {
+  SESSION_STOPPED:
+    "The workspace bridge has stopped. Reconnect to a running bridge.",
   INVALID_ARGUMENT: "Invalid workspace operation arguments.",
   OUTSIDE_WORKSPACE: "Resource is outside the admitted workspace roots.",
   SYMLINK_DENIED: "Symbolic links are not admitted.",
@@ -51,6 +53,7 @@ function createMcpServer(
     schema: z.ZodObject<S>,
     operation: (args: z.output<typeof schema>) => unknown,
     readOnly = true,
+    destructive = !readOnly,
   ) {
     server.registerTool<z.ZodRawShape, z.ZodObject<S>>(
       name,
@@ -59,7 +62,7 @@ function createMcpServer(
         inputSchema: schema,
         annotations: {
           readOnlyHint: readOnly,
-          destructiveHint: !readOnly,
+          destructiveHint: destructive,
           openWorldHint: false,
         },
       },
@@ -176,6 +179,58 @@ function createMcpServer(
     "Get editor diagnostics for a workspace document.",
     z.strictObject({ uri }),
     (args) => workspace.diagnostics(args),
+  );
+  tool(
+    "show_document",
+    "Reveal a workspace document without saving. Positions are zero-based UTF-16; preserveFocus defaults to true.",
+    z.strictObject({
+      uri,
+      selection: z.strictObject({ start: position, end: position }).optional(),
+      preserveFocus: z.boolean().optional(),
+    }),
+    (args) => workspace.show(args, signal),
+    false,
+    false,
+  );
+  tool(
+    "workspace_symbols",
+    "Search registered workspace symbol providers. Results are bounded and restricted to admitted workspace URIs. Empty results do not establish provider availability.",
+    z.strictObject({ query: z.string().min(1).max(4096) }),
+    (args) => workspace.workspaceSymbols(args, signal),
+  );
+  tool(
+    "document_symbols",
+    "Get symbols from the document's registered language provider.",
+    z.strictObject({ uri }),
+    (args) => workspace.documentSymbols(args, signal),
+  );
+  tool(
+    "show_diff",
+    "Show a visual comparison without applying or saving. Provide exactly one of otherUri or proposedText; proposals require the current document version.",
+    z.strictObject({
+      uri,
+      otherUri: uri.optional(),
+      proposedText: z.string().max(MAX_BODY).optional(),
+      version: index.optional(),
+      preserveFocus: z.boolean().optional(),
+    }),
+    (args) => workspace.diff(args, signal),
+    false,
+    false,
+  );
+  tool(
+    "format_document",
+    "Compute formatting edits through the installed language provider. Optional apply uses guarded buffer edits without saving. Empty edits may mean no provider or no changes.",
+    z.strictObject({
+      uri,
+      version: index,
+      range: z.strictObject({ start: position, end: position }).optional(),
+      tabSize: z.number().int().min(1).max(32).optional(),
+      insertSpaces: z.boolean().optional(),
+      apply: z.boolean().optional(),
+    }),
+    (args) => workspace.format(args, signal),
+    false,
   );
   return server;
 }
@@ -426,6 +481,7 @@ export async function startServer(
     async close() {
       if (closed) return;
       closed = true;
+      workspace.dispose?.();
       const closing = new Promise<void>((resolve) =>
         httpServer.close(() => resolve()),
       );
