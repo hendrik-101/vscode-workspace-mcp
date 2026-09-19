@@ -48,7 +48,14 @@ export function activate(context: vscode.ExtensionContext): void {
         const workspace = new WorkspaceService(
           () => !!session?.canWrite() && vscode.workspace.isTrusted,
         );
-        session = new BridgeSession(await startServer(workspace));
+        const connection = await startServer(workspace);
+        session = new BridgeSession({
+          ...connection,
+          async close() {
+            workspace.dispose();
+            await connection.close();
+          },
+        });
         if (requestedGeneration !== generation) {
           await session.stop();
           return;

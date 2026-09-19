@@ -216,6 +216,7 @@ export async function run(): Promise<void> {
       provider.readDirectory = originalReadDirectory;
     }
 
+    await ideTools(provider, first, outside, linkedFile);
     const initial = await service.read({ uri: file.toString() });
     await rejectsCode(
       service.edit({
@@ -660,10 +661,219 @@ export async function run(): Promise<void> {
         initialRootCount;
       if (count > 0) await updateRoots(initialRootCount, count);
     }
+    service.dispose();
     diagnostics.dispose();
     readonlyRegistration.dispose();
     registration.dispose();
     readonlyProvider.dispose();
     provider.dispose();
+  }
+}
+
+/** Exercise real language-provider dispatch against non-file documents. */
+async function ideTools(
+  provider: MemoryProvider,
+  root: vscode.Uri,
+  outside: vscode.Uri,
+  link: vscode.Uri,
+): Promise<void> {
+  const file = vscode.Uri.joinPath(root, "ide-tools.txt");
+  provider.seed(file, "messy");
+  let writes = false;
+  const service = new WorkspaceService(() => writes);
+  const document = await vscode.workspace.openTextDocument(file);
+  const selector = { scheme: file.scheme, pattern: "**/ide-tools.txt" };
+  const full = new vscode.Range(0, 0, 0, 5);
+  let formatMode: "normal" | "overlap" | "change" = "normal";
+  const disposables = [
+    vscode.languages.registerWorkspaceSymbolProvider({
+      provideWorkspaceSymbols: (query) =>
+        query === "mcp-test-symbol"
+          ? [
+              new vscode.SymbolInformation(
+                "visible",
+                vscode.SymbolKind.Class,
+                "",
+                new vscode.Location(file, full),
+              ),
+              new vscode.SymbolInformation(
+                "private",
+                vscode.SymbolKind.Class,
+                "",
+                new vscode.Location(outside, full),
+              ),
+              new vscode.SymbolInformation(
+                "linked",
+                vscode.SymbolKind.Class,
+                "",
+                new vscode.Location(link, full),
+              ),
+            ]
+          : [],
+    }),
+    vscode.languages.registerDocumentSymbolProvider(selector, {
+      provideDocumentSymbols: () => {
+        const parent = new vscode.DocumentSymbol(
+          "parent",
+          "",
+          vscode.SymbolKind.Class,
+          full,
+          full,
+        );
+        parent.children = [
+          new vscode.DocumentSymbol(
+            "child",
+            "",
+            vscode.SymbolKind.Method,
+            full,
+            full,
+          ),
+        ];
+        return [parent];
+      },
+    }),
+    vscode.languages.registerDocumentFormattingEditProvider(selector, {
+      provideDocumentFormattingEdits: async (doc) => {
+        if (formatMode === "change") {
+          const edit = new vscode.WorkspaceEdit();
+          edit.insert(doc.uri, new vscode.Position(0, 0), "x");
+          await vscode.workspace.applyEdit(edit);
+        }
+        const edit = vscode.TextEdit.replace(full, "tidy!");
+        return formatMode === "overlap" ? [edit, edit] : [edit];
+      },
+    }),
+    vscode.languages.registerDocumentRangeFormattingEditProvider(selector, {
+      provideDocumentRangeFormattingEdits: (_doc, target) => [
+        vscode.TextEdit.replace(target, "T"),
+      ],
+    }),
+  ];
+  try {
+    const shown = await service.show({
+      uri: file.toString(),
+      selection: range(1, 3),
+      preserveFocus: false,
+    });
+    assert.equal(shown.uri, file.toString());
+    assert.equal(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      file.toString(),
+    );
+    assert.equal(vscode.window.activeTextEditor?.selection.start.character, 1);
+    await rejectsCode(
+      service.show({ uri: outside.toString() }),
+      "OUTSIDE_WORKSPACE",
+    );
+    await rejectsCode(
+      service.show({ uri: file.toString(), selection: range(0, 99) }),
+      "INVALID_ARGUMENT",
+    );
+    const symbols = await service.workspaceSymbols({
+      query: "mcp-test-symbol",
+    });
+    assert.deepEqual(
+      symbols.symbols.map((item) => item.name),
+      ["visible"],
+    );
+    assert.equal(symbols.omitted, 2);
+    assert.deepEqual(
+      (await service.documentSymbols({ uri: file.toString() })).symbols.map(
+        (item) => item.name,
+      ),
+      ["parent", "child"],
+    );
+    assert.equal(
+      (await service.documentSymbols({ uri: file.toString() })).symbols[1]
+        ?.containerName,
+      "parent",
+    );
+    const version = document.version;
+    const preview = await service.format({ uri: file.toString(), version });
+    assert.equal(preview.applied, false);
+    assert.equal(preview.edits[0]?.text, "tidy!");
+    assert.equal(document.getText(), "messy");
+    await rejectsCode(
+      service.format({ uri: file.toString(), version, apply: true }),
+      "WRITES_DISABLED",
+    );
+    formatMode = "overlap";
+    await rejectsCode(
+      service.format({ uri: file.toString(), version }),
+      "INVALID_ARGUMENT",
+    );
+    formatMode = "normal";
+    const ranged = await service.format({
+      uri: file.toString(),
+      version,
+      range: range(0, 1),
+    });
+    assert.equal(ranged.edits[0]?.text, "T");
+    const writesBefore = provider.writes;
+    assert.deepEqual(
+      await service.diff({
+        uri: file.toString(),
+        proposedText: "proposal",
+        version,
+      }),
+      { shown: true },
+    );
+    const diffTabs = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .filter((tab) => tab.input instanceof vscode.TabInputTextDiff);
+    assert.ok(diffTabs.length > 0);
+    const diffInput = diffTabs.at(-1)!.input as vscode.TabInputTextDiff;
+    assert.ok(diffInput.modified.scheme.startsWith("workspace-mcp-diff-"));
+    assert.equal(
+      (await vscode.workspace.openTextDocument(diffInput.modified)).getText(),
+      "proposal",
+    );
+    assert.equal(document.getText(), "messy");
+    assert.equal(provider.writes, writesBefore);
+    await rejectsCode(
+      service.diff({
+        uri: file.toString(),
+        proposedText: "x",
+        version: version + 1,
+      }),
+      "VERSION_CONFLICT",
+    );
+    await rejectsCode(
+      service.diff({ uri: file.toString(), otherUri: outside.toString() }),
+      "OUTSIDE_WORKSPACE",
+    );
+    const aborted = AbortSignal.abort();
+    await assert.rejects(service.show({ uri: file.toString() }, aborted), {
+      name: "AbortError",
+    });
+    await assert.rejects(
+      service.diff(
+        { uri: file.toString(), proposedText: "x", version },
+        aborted,
+      ),
+      { name: "AbortError" },
+    );
+    writes = true;
+    const applied = await service.format({
+      uri: file.toString(),
+      version,
+      apply: true,
+    });
+    assert.equal(applied.applied, true);
+    assert.equal(document.getText(), "tidy!");
+    assert.equal(document.isDirty, true);
+    assert.equal(provider.writes, writesBefore);
+    formatMode = "change";
+    await rejectsCode(
+      service.format({ uri: file.toString(), version: document.version }),
+      "VERSION_CONFLICT",
+    );
+  } finally {
+    disposables.forEach((item) => item.dispose());
+    service.dispose();
+    await vscode.window.showTextDocument(document);
+    await vscode.commands.executeCommand(
+      "workbench.action.revertAndCloseActiveEditor",
+    );
   }
 }

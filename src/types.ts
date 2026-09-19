@@ -36,6 +36,42 @@ export interface SaveInput extends UriInput {
   version: number;
 }
 
+export interface ShowInput extends UriInput {
+  selection?: TextRange;
+  preserveFocus?: boolean;
+}
+export interface SymbolsInput {
+  query: string;
+}
+export interface SymbolResult {
+  symbols: Array<{
+    name: string;
+    kind: number;
+    uri: string;
+    range: TextRange;
+    containerName?: string;
+  }>;
+  truncated: boolean;
+  omitted: number;
+}
+export interface DiffInput extends UriInput {
+  otherUri?: string;
+  proposedText?: string;
+  version?: number;
+  preserveFocus?: boolean;
+}
+export interface FormatInput extends UriInput {
+  version: number;
+  range?: TextRange;
+  tabSize?: number;
+  insertSpaces?: boolean;
+  apply?: boolean;
+}
+export interface FormatResult extends DocumentState {
+  edits: EditInput["edits"];
+  applied: boolean;
+}
+
 export interface DocumentState {
   uri: string;
   version: number;
@@ -97,6 +133,14 @@ export interface DiagnosticsResult {
 }
 
 export interface WorkspaceApi {
+  show(input: ShowInput, signal?: AbortSignal): Promise<DocumentState>;
+  workspaceSymbols(
+    input: SymbolsInput,
+    signal?: AbortSignal,
+  ): Promise<SymbolResult>;
+  documentSymbols(input: UriInput, signal?: AbortSignal): Promise<SymbolResult>;
+  diff(input: DiffInput, signal?: AbortSignal): Promise<{ shown: boolean }>;
+  format(input: FormatInput, signal?: AbortSignal): Promise<FormatResult>;
   roots(): Promise<RootInfo[]>;
   context(): Promise<ContextResult>;
   list(input: UriInput): Promise<ListResult>;
