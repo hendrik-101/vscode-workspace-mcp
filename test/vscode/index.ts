@@ -193,18 +193,22 @@ export async function run(): Promise<void> {
             ["bad/name", vscode.FileType.File],
             ["report%2e2024.txt", vscode.FileType.File],
             ["..", vscode.FileType.Directory],
+            ["bad\ud800name", vscode.FileType.File],
+            ["bad\udc00name", vscode.FileType.File],
             ["50% complete.txt", vscode.FileType.File],
+            ["valid-\ud83d\ude00.txt", vscode.FileType.File],
             ...originalReadDirectory(directory),
           ]
         : originalReadDirectory(directory);
     try {
       const partial = await service.list({ uri: first.toString() });
-      assert.equal(partial.blockedEntries, 4);
+      assert.equal(partial.blockedEntries, 6);
       assert.equal(partial.truncated, false);
       assert.deepEqual(
         partial.entries.map((entry) => entry.uri),
         [
           vscode.Uri.joinPath(first, "50% complete.txt").toString(),
+          vscode.Uri.joinPath(first, "valid-\ud83d\ude00.txt").toString(),
           file.toString(),
         ],
       );

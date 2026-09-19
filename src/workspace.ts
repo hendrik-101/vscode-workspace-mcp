@@ -400,7 +400,8 @@ export class WorkspaceService implements WorkspaceApi {
       !name ||
       name === "." ||
       name === ".." ||
-      /[/\\\u0000-\u001f\u007f]/.test(name)
+      // Unicode mode matches lone surrogates but preserves valid surrogate pairs.
+      /[/\\\u0000-\u001f\u007f\ud800-\udfff]/u.test(name)
     ) {
       fail("INVALID_ARGUMENT", "Provider returned an unsafe directory entry.");
     }
