@@ -185,6 +185,33 @@ export async function run(): Promise<void> {
     assert.equal(listing.blockedEntries, 1);
     assert.equal(listing.truncated, false);
 
+    // One unsafe provider name must not hide safe entries that follow it.
+    const originalReadDirectory = provider.readDirectory.bind(provider);
+    provider.readDirectory = (directory) =>
+      directory.toString() === first.toString()
+        ? [
+            ["bad/name", vscode.FileType.File],
+            ["report%2e2024.txt", vscode.FileType.File],
+            ["..", vscode.FileType.Directory],
+            ["50% complete.txt", vscode.FileType.File],
+            ...originalReadDirectory(directory),
+          ]
+        : originalReadDirectory(directory);
+    try {
+      const partial = await service.list({ uri: first.toString() });
+      assert.equal(partial.blockedEntries, 4);
+      assert.equal(partial.truncated, false);
+      assert.deepEqual(
+        partial.entries.map((entry) => entry.uri),
+        [
+          vscode.Uri.joinPath(first, "50% complete.txt").toString(),
+          file.toString(),
+        ],
+      );
+    } finally {
+      provider.readDirectory = originalReadDirectory;
+    }
+
     const initial = await service.read({ uri: file.toString() });
     await rejectsCode(
       service.edit({

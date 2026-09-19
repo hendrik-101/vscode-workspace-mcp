@@ -56,7 +56,7 @@ export interface ListResult {
     kind: "file" | "directory" | "unknown";
   }>;
   truncated: boolean;
-  /** Symbolic links are omitted and never followed. */
+  /** Count of omitted symbolic links and unsafe provider entry names. */
   blockedEntries: number;
 }
 export interface SearchResult {

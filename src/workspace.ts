@@ -349,7 +349,7 @@ export class WorkspaceService implements WorkspaceApi {
 
   /**
    * Lists a workspace directory without following symbolic links.
-   * The result reports omitted links and whether the entry limit was reached.
+   * The result counts blocked entries and reports whether the entry limit was reached.
    */
   async list({ uri: value }: UriInput): Promise<ListResult> {
     const uri = parseUri(value);
@@ -369,7 +369,18 @@ export class WorkspaceService implements WorkspaceApi {
         result.blockedEntries++;
         continue;
       }
-      const child = this.child(uri, name);
+      let child: vscode.Uri;
+      try {
+        child = this.child(uri, name);
+      } catch (error) {
+        if (
+          !(error instanceof WorkspaceError) ||
+          error.code !== "INVALID_ARGUMENT"
+        )
+          throw error;
+        result.blockedEntries++;
+        continue;
+      }
       result.entries.push({
         name,
         uri: child.toString(),
