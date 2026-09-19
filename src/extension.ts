@@ -1,10 +1,20 @@
 import * as vscode from "vscode";
+import {
+  portPreference,
+  writePreference,
+  WRITE_CHOICES,
+  writeDecision,
+  storedToken,
+  rotateToken,
+  TOKEN_KEY,
+} from "./preferences";
 import { clientConfiguration } from "./configuration";
 import { startServer } from "./server";
 import { BridgeSession } from "./session";
 import { WorkspaceService } from "./workspace";
 
 let running: BridgeSession | undefined;
+let runningAccess: { allowed: boolean } | undefined;
 let starting = Promise.resolve();
 let generation = 0;
 
@@ -21,18 +31,106 @@ export function activate(context: vscode.ExtensionContext): void {
     if (running) status.show();
     else status.hide();
   };
+  const settings = () => vscode.workspace.getConfiguration("workspaceMcp");
+  // Only explicit user settings may grant authority; ignore workspace overrides.
+  const policy = () =>
+    writePreference(settings().inspect("writePolicy")?.globalValue);
+  const port = () => portPreference(settings().inspect("port")?.globalValue);
+  const stop = async () => {
+    generation++;
+    const session = running;
+    running = undefined;
+    if (runningAccess) runningAccess.allowed = false;
+    runningAccess = undefined;
+    const closing = session?.stop();
+    refresh();
+    await closing;
+  };
+  let promptGeneration = 0;
+  const askWrites = async (session: BridgeSession) => {
+    const requestedPrompt = ++promptGeneration;
+    const choice = await vscode.window.showWarningMessage(
+      "Allow MCP clients to edit and save workspace documents? Saving may invoke backend operations. Agent edits require Auto Save off.",
+      { modal: true },
+      ...WRITE_CHOICES,
+    );
+    if (
+      running !== session ||
+      requestedPrompt !== promptGeneration ||
+      !vscode.workspace.isTrusted
+    )
+      return;
+    const decision = writeDecision(choice);
+    if (decision.persist) {
+      await settings().update(
+        "writePolicy",
+        decision.persist,
+        vscode.ConfigurationTarget.Global,
+      );
+    }
+    if (running === session && requestedPrompt === promptGeneration) {
+      if (vscode.workspace.isTrusted && decision.allow && policy() !== "deny")
+        session.enableWrites();
+      else session.disableWrites();
+    }
+    refresh();
+  };
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("workspaceMcp.writePolicy")) return;
+      if (policy() === "deny") running?.disableWrites();
+      refresh();
+    }),
+  );
+  const report = (error: unknown) => {
+    const message =
+      error instanceof Error && "code" in error && error.code === "EADDRINUSE"
+        ? "Workspace MCP port is already in use. Stop the bridge in the other window or choose another user setting for workspaceMcp.port."
+        : error instanceof Error &&
+            /^(Workspace MCP port|Stored Workspace MCP token)/.test(
+              error.message,
+            )
+          ? error.message
+          : "Workspace MCP could not complete the operation. Check workspace trust and restart the bridge.";
+    void vscode.window.showErrorMessage(message);
+  };
+  let secretGeneration = 0;
+  context.subscriptions.push(
+    context.secrets.onDidChange((event) => {
+      if (event.key !== TOKEN_KEY) return;
+      const requestedSecret = ++secretGeneration;
+      const session = running;
+      const access = runningAccess;
+      if (!session || !access) return;
+      // Suspend requests and writes synchronously while checking a secret event.
+      // A delayed event for our own initial store must not stop a healthy bridge.
+      access.allowed = false;
+      void context.secrets.get(TOKEN_KEY).then(
+        (token) => {
+          if (running !== session || requestedSecret !== secretGeneration)
+            return;
+          if (token === session.connection.token) access.allowed = true;
+          else {
+            void stop().catch(report);
+            void vscode.window.showWarningMessage(
+              "Workspace MCP stopped because its stored token changed. Restart and refresh client configuration.",
+            );
+          }
+        },
+        () => {
+          if (running === session && requestedSecret === secretGeneration)
+            void stop().catch(report);
+        },
+      );
+    }),
+  );
   const register = (id: string, action: () => Promise<void>) =>
     context.subscriptions.push(
-      vscode.commands.registerCommand(id, () =>
-        action().catch(() => {
-          void vscode.window.showErrorMessage(
-            "Workspace MCP could not complete the operation. Check workspace trust and restart the bridge.",
-          );
-        }),
-      ),
+      vscode.commands.registerCommand(id, () => action().catch(report)),
     );
   register("workspaceMcp.start", () => {
-    const requestedGeneration = generation;
+    if (running) return Promise.resolve();
+    const requestedGeneration = ++generation;
     starting = starting
       .catch(() => {})
       .then(async () => {
@@ -45,20 +143,56 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         // Each service captures its own session, never the mutable global session.
         let session: BridgeSession | undefined;
+        const access = { allowed: false };
         const workspace = new WorkspaceService(
-          () => !!session?.canWrite() && vscode.workspace.isTrusted,
+          () =>
+            access.allowed &&
+            !!session?.canWrite() &&
+            vscode.workspace.isTrusted &&
+            policy() !== "deny",
         );
-        session = new BridgeSession(await startServer(workspace));
+        const configuredPort = port();
+        const token = await storedToken(context.secrets);
+        if (requestedGeneration !== generation) return;
+        session = new BridgeSession(
+          await startServer(workspace, {
+            port: configuredPort,
+            token,
+            authorized: () => access.allowed,
+          }),
+        );
+        // Another window may have initialized or rotated this endpoint's secret.
+        try {
+          let stable = false;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const requestedSecret = secretGeneration;
+            const current = await context.secrets.get(TOKEN_KEY);
+            if (requestedSecret !== secretGeneration) continue;
+            stable = current === token;
+            break;
+          }
+          if (!stable)
+            throw new Error(
+              "Stored Workspace MCP token changed during startup. Restart the bridge.",
+            );
+        } catch (error) {
+          await session.stop();
+          throw error;
+        }
         if (requestedGeneration !== generation) {
           await session.stop();
           return;
         }
         running = session;
+        runningAccess = access;
+        access.allowed = true;
+        if (policy() === "allow") session.enableWrites();
+        if (policy() === "ask") void askWrites(session).catch(report);
         refresh();
         // An informational toast must never hold the lifecycle or Stop command open.
         void vscode.window
           .showInformationMessage(
-            "Workspace MCP started with read-only access.",
+            "Workspace MCP started. The status bar shows current write access.",
             "Connection details",
           )
           .then((choice) => {
@@ -69,34 +203,35 @@ export function activate(context: vscode.ExtensionContext): void {
     return starting;
   });
   register("workspaceMcp.stop", async () => {
-    generation++;
-    const session = running;
-    running = undefined;
-    const closing = session?.stop(); // Revoke synchronously before any await.
-    refresh();
-    await closing;
+    await stop();
     await starting;
   });
   register("workspaceMcp.enableWrites", async () => {
     const session = running;
-    if (!session || !vscode.workspace.isTrusted) {
+    if (!session || !vscode.workspace.isTrusted) return;
+    if (policy() === "deny") {
       void vscode.window.showWarningMessage(
-        "Start Workspace MCP in a trusted workspace first.",
+        "Writes are forbidden by workspaceMcp.writePolicy. Change the user setting to ask or allow and restart.",
       );
       return;
     }
+    await askWrites(session);
+  });
+  register("workspaceMcp.rotateToken", async () => {
+    // Revoke before prompting or accessing storage, even if rotation is cancelled.
+    await stop();
+    await starting.catch(() => {});
+    const requestedGeneration = generation;
     const choice = await vscode.window.showWarningMessage(
-      "Allow connected MCP clients to edit and save documents in this window's workspace roots until the bridge stops? Saving may trigger your filesystem provider's backend operations. Agent edits require Auto Save to be off.",
+      "Rotate the Workspace MCP token for this VS Code profile? Existing client configurations must be updated. The bridge remains stopped.",
       { modal: true },
-      "Enable writes",
+      "Rotate token",
     );
-    if (
-      choice === "Enable writes" &&
-      running === session &&
-      vscode.workspace.isTrusted
-    )
-      session.enableWrites();
-    refresh();
+    if (choice !== "Rotate token" || requestedGeneration !== generation) return;
+    await rotateToken(context.secrets);
+    void vscode.window.showInformationMessage(
+      "Token rotated. Start Workspace MCP and update your private client configuration.",
+    );
   });
   register("workspaceMcp.connection", async () => {
     const session = running;
@@ -131,7 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     await vscode.window.showTextDocument(document, { preview: false });
     void vscode.window.showInformationMessage(
-      "This private token expires when the bridge stops. Copy these settings to your client's user configuration. The client must run on the same host.",
+      "This private token remains valid across restarts until you explicitly rotate it. Copy these settings to your client's user configuration. The client must run on the same host.",
     );
   });
   context.subscriptions.push(status, {
@@ -146,6 +281,8 @@ export async function deactivate(): Promise<void> {
   generation++;
   const session = running;
   running = undefined;
+  if (runningAccess) runningAccess.allowed = false;
+  runningAccess = undefined;
   await session?.stop();
   await starting;
 }

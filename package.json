@@ -45,8 +45,36 @@
       {
         "command": "workspaceMcp.enableWrites",
         "title": "Workspace MCP: Enable Writes for This Session"
+      },
+      {
+        "command": "workspaceMcp.rotateToken",
+        "title": "Workspace MCP: Rotate Token"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Workspace MCP",
+      "properties": {
+        "workspaceMcp.port": {
+          "type": "integer",
+          "default": 39117,
+          "minimum": 1024,
+          "maximum": 65535,
+          "scope": "application",
+          "description": "Fixed loopback port. Restart the bridge after changing. Another window needs a different port; no fallback port is selected."
+        },
+        "workspaceMcp.writePolicy": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "allow",
+            "deny"
+          ],
+          "default": "ask",
+          "scope": "application",
+          "description": "Write access at each explicit bridge start. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node scripts/build.mjs",

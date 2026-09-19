@@ -22,7 +22,7 @@ Never paste private sources, system URLs or tokens into public feedback.
 4. Connect one client. Verify roots retain the actual scheme/authority and that
    editor_context returns the selected text.
 5. Type an unsaved marker manually. read_document must return that marker.
-6. Verify a write fails before the VS Code write-approval command.
+6. Use the default `ask` policy and deny this session; verify a write fails.
 7. Enable writes; read version, edit a harmless range, inspect the unsaved buffer.
 8. Change the document manually, then submit an edit using the old version. It
    must fail and require a new read.
@@ -30,7 +30,10 @@ Never paste private sources, system URLs or tokens into public feedback.
    activation/checks using the separately configured SAP ADT MCP server only after
    the buffer is saved and system/object identity is verified.
 10. Open another VS Code window/system. Verify the client cannot silently cross
-    into it. Stop the first server and verify the token no longer works.
+    into it. The same port must fail explicitly, never silently choose another.
+    Stop the first server and verify the connection closes. Restart and verify the
+    saved client settings still work; explicit token rotation must reject the old
+    token and require new client settings. Test all four write-prompt choices.
 
 Report VS Code/ADT/client versions, operation names and redacted error codes.
 Record observed behavior separately for Claude Code, Codex IDE and local desktop.

@@ -25,13 +25,18 @@ nor stores SAP credentials.
 4. Copy the displayed configuration into your client's **user** settings. It
    contains a private token: never commit or share it. Restart/reconnect the client.
 5. Ask the agent to list workspace roots and inspect the active editor.
-6. When ready, run **Workspace MCP: Enable Writes for This Session** in VS Code.
+6. At startup, choose session-only or persistent write access. Closing the prompt
+   leaves the bridge read-only.
 
 Turn **Auto Save off** for documents edited through MCP. Edits are refused while
 Auto Save is enabled so that editing cannot implicitly persist a change.
 
-Each running window gets its own random port/token. **Stop** invalidates the token;
-after restarting, refresh client settings. Loopback belongs to the extension host,
+The fixed loopback port defaults to **39117** (`workspaceMcp.port` in User settings).
+The token stays in VS Code SecretStorage across restarts; **Rotate Token** is the
+only command that replaces it. **Stop** closes the session, retaining the token.
+`workspaceMcp.writePolicy` is `ask` by default, with `allow` and `deny` alternatives.
+Port collisions fail explicitly; use a different user port for another window.
+Loopback belongs to the extension host,
 which may differ from your desktop when using SSH, WSL or containers.
 
 [Client setup and optional Claude/Codex plugin](docs/clients.md).

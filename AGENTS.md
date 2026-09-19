@@ -27,7 +27,7 @@ Read unsaved buffers; require document versions for edits; never implicitly save
 
 Every resource and editor context must be within admitted current workspace roots.
 Reject traversal, symlink escapes, hostile Host/Origin and missing/invalid tokens.
-Writes need explicit session opt-in and Workspace Trust. No network binding beyond
+Writes need the user write policy or session approval and Workspace Trust. No network binding beyond
 loopback, no outgoing product requests, no secrets in logs or checked-in files.
 
 ### Honest results

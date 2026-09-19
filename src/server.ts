@@ -237,14 +237,15 @@ function readBody(request: IncomingMessage): Promise<unknown> {
 
 /**
  * Starts a bearer-authenticated MCP endpoint on the IPv4 loopback interface.
- * An omitted port requests an ephemeral port. The returned token authorizes the
- * endpoint until `close` shuts down its listener and active connections.
+ * Tests may omit port/token for isolated ephemeral listeners. The extension passes
+ * its fixed user port and SecretStorage token; close revokes this listener only.
  */
 export async function startServer(
   workspace: WorkspaceApi,
-  options: { port?: number } = {},
+  options: { port?: number; token?: string; authorized?: () => boolean } = {},
 ): Promise<{ url: string; token: string; close(): Promise<void> }> {
-  const token = randomBytes(32).toString("hex");
+  const token = options.token ?? randomBytes(32).toString("hex");
+  if (!/^[a-f0-9]{64}$/.test(token)) throw new Error("Invalid bearer token.");
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const connections = new Set<Socket>();
   const sessions = new Set<McpServer>();
@@ -285,6 +286,7 @@ export async function startServer(
       (value, i) => i % 2 === 0 && value.toLowerCase() === "authorization",
     ).length;
     if (
+      options.authorized?.() === false ||
       authCount !== 1 ||
       authorization.length !== expectedAuthorization.length ||
       !timingSafeEqual(authorization, expectedAuthorization)
@@ -311,9 +313,14 @@ export async function startServer(
     };
     const execute = async (operation: () => unknown) => {
       if (finished) throw new RequestError(408, "Request ended.");
+      if (options.authorized?.() === false)
+        throw new RequestError(401, "Unauthorized.");
       running++;
       try {
-        return await operation();
+        const result = await operation();
+        if (options.authorized?.() === false)
+          throw new RequestError(401, "Unauthorized.");
+        return result;
       } finally {
         running--;
         release();

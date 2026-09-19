@@ -483,3 +483,46 @@ for (const toolName of ["edit_document", "save_document"]) {
     assert.equal(mutated, false);
   });
 }
+
+test("configured endpoint reuses credentials and rejects port collisions without fallback", async () => {
+  const token = "a".repeat(64);
+  const first = await startServer(workspace, { token });
+  const port = Number(new URL(first.url).port);
+  try {
+    await assert.rejects(startServer(workspace, { port, token }), {
+      code: "EADDRINUSE",
+    });
+  } finally {
+    await first.close();
+  }
+  const restarted = await startServer(workspace, { port, token });
+  try {
+    assert.equal(restarted.url, first.url);
+    assert.equal(restarted.token, token);
+    assert.notEqual(
+      (await http(restarted.url, { Authorization: `Bearer ${token}` })).status,
+      401,
+    );
+    assert.equal(
+      (await http(restarted.url, { Authorization: `Bearer ${"b".repeat(64)}` }))
+        .status,
+      401,
+    );
+  } finally {
+    await restarted.close();
+  }
+});
+
+test("secret verification suspends HTTP acceptance before body parsing", async () => {
+  let authorized = true;
+  const server = await startServer(workspace, { authorized: () => authorized });
+  try {
+    const headers = { Authorization: `Bearer ${server.token}` };
+    authorized = false;
+    assert.equal((await http(server.url, headers, "not JSON")).status, 401);
+    authorized = true;
+    assert.notEqual((await http(server.url, headers)).status, 401);
+  } finally {
+    await server.close();
+  }
+});

@@ -14,7 +14,7 @@ in this repository. This is an independent community project, not an SAP product
 - `server.ts`: the official MCP TypeScript SDK, input schemas, bounded requests,
   loopback HTTP, mandatory random bearer token and rejection of browser Origins.
 - `extension.ts`: explicit start/stop, per-window lifecycle and connection details.
-  Writes require explicit session approval; no autostart or persistent write opt-in.
+  Writes follow a user-only deny/allow/ask policy (default ask); no autostart.
 - Client packages: common workflows with thin Claude Code and Codex manifests;
   direct MCP settings for Codex IDE and ChatGPT desktop on the same host.
 
@@ -24,8 +24,8 @@ VS Code commands, file deletion, backend activation or remote listener in v0.1.
 
 ## Security contract
 
-Bind only to 127.0.0.1. Use an ephemeral port and at least 256 bits of random token
-per running server. Authorize every request before MCP parsing, validate Host,
+Bind only to 127.0.0.1 on the configured fixed port (default 39117). Store a
+256-bit random bearer token in VS Code SecretStorage, reused until explicit rotation. Authorize every request before MCP parsing, validate Host,
 reject Origin, cap request size/concurrency and close transports on completion.
 The token grants access to this window's admitted workspace roots only. Recheck
 roots and Workspace Trust for operations. Reject traversal and symlinks. A hostile

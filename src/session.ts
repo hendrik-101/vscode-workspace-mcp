@@ -14,6 +14,10 @@ export class BridgeSession {
   enableWrites(): void {
     if (!this.revoked) this.allowed = true;
   }
+  /** Removes write access without stopping read access. */
+  disableWrites(): void {
+    this.allowed = false;
+  }
   /** Revokes write access before closing the underlying connection. */
   async stop(): Promise<void> {
     this.revoked = true;

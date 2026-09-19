@@ -12,7 +12,7 @@ Stack: TypeScript, VS Code API, official MCP SDK, Node HTTP, Node test runner.
 3. Implement authenticated loopback transport and schemas. Exercise unauthenticated
    requests, bad tokens, hostile Host/Origin, invalid payloads and an actual MCP
    initialization/tools-call round trip before declaring transport complete.
-4. Connect explicit extension commands and session-only write approval. Add thin
+4. Connect explicit extension commands and user-controlled write approval. Add thin
    client bundles and document local-host versus hosted ChatGPT deployment.
 5. Build a VSIX, run strict checks and tests, review code and dependency audit.
    Request a separate Codex Security scan; record blockers honestly if unavailable.

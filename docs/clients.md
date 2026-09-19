@@ -3,9 +3,14 @@
 Install the VSIX, open the intended workspace, then run **Workspace MCP: Start**
 and **Workspace MCP: Show Connection Details** from the VS Code Command Palette.
 The details contain ready-to-copy client configuration for `workspace_mcp`.
-The server selects a new loopback port and bearer token each time it starts.
-Update the client configuration and reconnect after every restart. Each window
-has its own connection; inspect the returned workspace roots before working.
+The loopback port is fixed: `workspaceMcp.port` defaults to **39117** (1024–65535).
+The bearer token is generated once in VS Code SecretStorage and reused across
+restarts and port changes. Set these options in **User** settings; workspace
+overrides are ignored. Update client configuration only after changing the port
+or explicitly rotating the token. A port already in use fails visibly, without
+fallback; stop the other window or choose another user port before starting.
+Windows sharing this extension SecretStorage share the credential; inspect the
+returned workspace roots before working.
 
 Before enabling agent edits, turn **Files: Auto Save** off for the workspace.
 Otherwise VS Code may save an edited buffer automatically even though the bridge
@@ -14,9 +19,20 @@ the separate save operation.
 
 Keep connection details in private machine configuration, outside version control.
 Do not paste tokens into chats, issues, or the optional plugin. Stopping the bridge
-revokes its running connection. It starts read-only; editing requires **Workspace
-MCP: Enable Writes for This Session** and Workspace Trust. Editing and saving are
-separate operations.
+revokes its running connection, but does not delete the token.
+
+`workspaceMcp.writePolicy` is `ask` by default: each bridge start offers **Allow for
+this session**, **Deny for this session**, **Always allow**, and **Always deny**.
+Closing the prompt denies writes. Only the Always choices update the user setting
+to `allow` or `deny`; session choices leave it unchanged. Workspace Trust remains
+mandatory. **Enable Writes for This Session** reopens the choices unless policy
+is `deny`; change that user setting explicitly before allowing writes again.
+Editing and saving are separate operations.
+
+**Workspace MCP: Rotate Token** immediately stops the bridge and asks confirmation
+before replacing the credential. Afterwards start it and update client settings.
+Other active windows sharing the secret stop when notified of the change. Cancelling
+rotation leaves the credential unchanged and the local bridge stopped.
 
 ## Codex CLI and the native Codex VS Code extension
 
@@ -41,7 +57,7 @@ export does not necessarily reach an already running desktop or VS Code process.
 Use the generated Claude JSON: a `mcpServers.workspace_mcp` entry with
 `type: "http"`, the current `url`, and `headers.Authorization`. Configure it in
 Claude Code's private user/local MCP settings. A project `.mcp.json` can also hold
-the entry, but must not be committed with the session token. Reload Claude Code
+the entry, but must not be committed with the token. Reload Claude Code
 and inspect `/mcp` before asking it to access the workspace.
 
 For an environment-based credential, Claude accepts
