@@ -1,7 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
   WorkspaceError,
+  type ShowInput,
+  type SymbolsInput,
+  type SymbolResult,
+  type DiffInput,
+  type FormatInput,
+  type FormatResult,
   type ContextResult,
   type DiagnosticsResult,
   type DocumentState,
@@ -145,7 +152,323 @@ export class WorkspaceService implements WorkspaceApi {
    */
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
+  private disposed = false;
+  private readonly snapshots = new Map<string, string>();
+  private readonly pendingSnapshots = new Set<string>();
+  private snapshotProvider: vscode.Disposable | undefined;
+  private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
+
+  /** Releases in-memory diff snapshots and their content provider. */
+  dispose(): void {
+    this.disposed = true;
+    this.snapshotProvider?.dispose();
+    this.snapshotProvider = undefined;
+    this.snapshots.clear();
+    this.pendingSnapshots.clear();
+  }
+
+  private active(): void {
+    if (this.disposed)
+      fail("SESSION_STOPPED", "The workspace bridge has stopped.");
+  }
+
+  private exactRange(
+    document: vscode.TextDocument,
+    value: TextRange,
+  ): vscode.Range {
+    const start = this.exactPosition(document, value.start);
+    const end = this.exactPosition(document, value.end);
+    if (start.isAfter(end))
+      fail("INVALID_ARGUMENT", "Range must run from start to end.");
+    return new vscode.Range(start, end);
+  }
+
+  /** Reveals an admitted live document without editing or saving it. */
+  async show(input: ShowInput, signal?: AbortSignal): Promise<DocumentState> {
+    signal?.throwIfAborted();
+    const document = await this.document(parseUri(input.uri));
+    this.text(document);
+    const selection = input.selection
+      ? this.exactRange(document, input.selection)
+      : undefined;
+    signal?.throwIfAborted();
+    this.active();
+    await vscode.window.showTextDocument(document, {
+      preserveFocus: input.preserveFocus ?? true,
+      preview: false,
+      ...(selection ? { selection } : {}),
+    });
+    this.currentRoot(document.uri);
+    return state(document);
+  }
+
+  private async symbols(
+    items: readonly vscode.SymbolInformation[],
+    signal?: AbortSignal,
+  ): Promise<SymbolResult> {
+    const result: SymbolResult = {
+      symbols: [],
+      truncated: items.length > MAX_LIST_ENTRIES,
+      omitted: 0,
+    };
+    // Cache only within this result, including failures. Many symbols share a file.
+    const authorized = new Map<string, Promise<vscode.FileStat>>();
+    for (const item of items.slice(0, MAX_LIST_ENTRIES)) {
+      signal?.throwIfAborted();
+      this.active();
+      if (result.symbols.length >= MAX_RESULTS) {
+        result.truncated = true;
+        break;
+      }
+      try {
+        const uri = parseUri(item.location.uri.toString());
+        const key = uri.toString();
+        let check = authorized.get(key);
+        if (!check) {
+          check = this.authorize(uri);
+          authorized.set(key, check);
+        }
+        await check;
+        this.currentRoot(uri);
+        result.symbols.push({
+          name: item.name.slice(0, MAX_PREVIEW),
+          kind: item.kind,
+          uri: uri.toString(),
+          range: range(item.location.range),
+          ...(item.containerName
+            ? { containerName: item.containerName.slice(0, MAX_PREVIEW) }
+            : {}),
+        });
+      } catch {
+        result.omitted++;
+      }
+    }
+    signal?.throwIfAborted();
+    this.active();
+    // Roots can change while other symbol targets are being authorized.
+    result.symbols = result.symbols.filter((item) => {
+      try {
+        this.currentRoot(parseUri(item.uri));
+        return true;
+      } catch {
+        result.omitted++;
+        return false;
+      }
+    });
+    return result;
+  }
+
+  /** Queries registered language providers; empty results do not prove provider availability. */
+  async workspaceSymbols(
+    { query }: SymbolsInput,
+    signal?: AbortSignal,
+  ): Promise<SymbolResult> {
+    signal?.throwIfAborted();
+    this.active();
+    if (!query || query.length > MAX_SELECTION)
+      fail("INVALID_ARGUMENT", "Provide a query of 1 to 4096 characters.");
+    const items = await vscode.commands.executeCommand<
+      vscode.SymbolInformation[]
+    >("vscode.executeWorkspaceSymbolProvider", query);
+    signal?.throwIfAborted();
+    return this.symbols(items ?? [], signal);
+  }
+
+  /** Returns bounded symbol locations from a document's registered provider. */
+  async documentSymbols(
+    { uri: value }: UriInput,
+    signal?: AbortSignal,
+  ): Promise<SymbolResult> {
+    signal?.throwIfAborted();
+    const uri = parseUri(value);
+    const document = await this.document(uri);
+    this.text(document);
+    signal?.throwIfAborted();
+    this.active();
+    const items = await vscode.commands.executeCommand<
+      Array<vscode.DocumentSymbol | vscode.SymbolInformation>
+    >("vscode.executeDocumentSymbolProvider", uri);
+    signal?.throwIfAborted();
+    this.currentRoot(uri);
+    const flat: vscode.SymbolInformation[] = [];
+    let omittedChildren = false;
+    // An iterative depth-first traversal bounds both work and nesting depth.
+    const stack = (items ?? [])
+      .slice(0, MAX_LIST_ENTRIES)
+      .map((item) => ({ item, container: "" }))
+      .reverse();
+    while (stack.length && flat.length < MAX_LIST_ENTRIES) {
+      const { item, container } = stack.pop()!;
+      if (!("children" in item)) flat.push(item);
+      else {
+        flat.push(
+          new vscode.SymbolInformation(
+            item.name,
+            item.kind,
+            container,
+            new vscode.Location(uri, item.selectionRange),
+          ),
+        );
+        const room = MAX_LIST_ENTRIES - flat.length - stack.length;
+        omittedChildren ||= item.children.length > Math.max(0, room);
+        stack.push(
+          ...item.children
+            .slice(0, Math.max(0, room))
+            .map((child) => ({
+              item: child,
+              container: item.name.slice(0, MAX_PREVIEW),
+            }))
+            .reverse(),
+        );
+      }
+    }
+    const result = await this.symbols(flat, signal);
+    result.truncated ||=
+      omittedChildren ||
+      !!stack.length ||
+      (items?.length ?? 0) > MAX_LIST_ENTRIES;
+    return result;
+  }
+
+  /** Opens a visual diff, optionally against a bounded read-only proposal in memory. */
+  async diff(
+    input: DiffInput,
+    signal?: AbortSignal,
+  ): Promise<{ shown: boolean }> {
+    signal?.throwIfAborted();
+    if ((input.otherUri === undefined) === (input.proposedText === undefined))
+      fail(
+        "INVALID_ARGUMENT",
+        "Provide exactly one of otherUri or proposedText.",
+      );
+    const document = await this.document(parseUri(input.uri));
+    this.text(document);
+    signal?.throwIfAborted();
+    this.active();
+    let right: vscode.Uri;
+    let snapshot: string | undefined;
+    if (input.otherUri !== undefined) {
+      const other = await this.document(parseUri(input.otherUri));
+      this.text(other);
+      right = other.uri;
+    } else {
+      this.expected(document, input.version ?? 0);
+      if (Buffer.byteLength(input.proposedText!) > MAX_FILE_BYTES)
+        fail("LIMIT_EXCEEDED", "Proposal exceeds 1 MiB.");
+      if (!this.snapshotProvider)
+        this.snapshotProvider =
+          vscode.workspace.registerTextDocumentContentProvider(
+            this.snapshotScheme,
+            {
+              provideTextDocumentContent: (uri) => {
+                const text = this.snapshots.get(uri.toString());
+                if (text === undefined)
+                  throw vscode.FileSystemError.FileNotFound(uri);
+                return text;
+              },
+            },
+          );
+      if (this.snapshots.size >= 8) {
+        const expired = [...this.snapshots.keys()].find(
+          (key) => !this.pendingSnapshots.has(key),
+        );
+        if (expired === undefined)
+          fail(
+            "LIMIT_EXCEEDED",
+            "All eight diff snapshots are still opening. Retry after a diff completes.",
+          );
+        this.snapshots.delete(expired);
+      }
+      right = vscode.Uri.from({
+        scheme: this.snapshotScheme,
+        path: `/${randomUUID()}/proposal`,
+      });
+      snapshot = right.toString();
+      this.snapshots.set(snapshot, input.proposedText!);
+      this.pendingSnapshots.add(snapshot);
+    }
+    try {
+      this.currentRoot(document.uri);
+      if (input.otherUri !== undefined) this.currentRoot(right);
+      signal?.throwIfAborted();
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        document.uri,
+        right,
+        "Workspace MCP: Compare",
+        { preserveFocus: input.preserveFocus ?? true, preview: true },
+      );
+      signal?.throwIfAborted();
+      this.currentRoot(document.uri);
+      if (input.otherUri !== undefined) this.currentRoot(right);
+      return { shown: true };
+    } catch (error) {
+      if (snapshot !== undefined) this.snapshots.delete(snapshot);
+      throw error;
+    } finally {
+      if (snapshot !== undefined) this.pendingSnapshots.delete(snapshot);
+    }
+  }
+
+  /** Computes formatting edits; applying them uses the ordinary guarded edit path. */
+  async format(
+    input: FormatInput,
+    signal?: AbortSignal,
+  ): Promise<FormatResult> {
+    signal?.throwIfAborted();
+    if (input.apply) this.writable();
+    const document = await this.document(parseUri(input.uri));
+    this.text(document);
+    this.expected(document, input.version);
+    const settings = vscode.workspace.getConfiguration("editor", document);
+    const options = {
+      tabSize: input.tabSize ?? settings.get<number>("tabSize", 4),
+      insertSpaces:
+        input.insertSpaces ?? settings.get<boolean>("insertSpaces", true),
+    };
+    integer(options.tabSize, "tabSize", 1);
+    if (options.tabSize > 32)
+      fail("INVALID_ARGUMENT", "tabSize must not exceed 32.");
+    signal?.throwIfAborted();
+    this.active();
+    const supplied = input.range
+      ? await vscode.commands.executeCommand<vscode.TextEdit[]>(
+          "vscode.executeFormatRangeProvider",
+          document.uri,
+          this.exactRange(document, input.range),
+          options,
+        )
+      : await vscode.commands.executeCommand<vscode.TextEdit[]>(
+          "vscode.executeFormatDocumentProvider",
+          document.uri,
+          options,
+        );
+    signal?.throwIfAborted();
+    this.currentRoot(document.uri);
+    this.expected(document, input.version);
+    if ((supplied?.length ?? 0) > MAX_EDITS)
+      fail("LIMIT_EXCEEDED", "Formatter returned more than 100 edits.");
+    let bytes = 0;
+    const edits = (supplied ?? []).map((item) => {
+      this.exactRange(document, range(item.range));
+      bytes += Buffer.byteLength(item.newText);
+      if (bytes > MAX_FILE_BYTES)
+        fail("LIMIT_EXCEEDED", "Formatting edits exceed 1 MiB.");
+      return { range: range(item.range), text: item.newText };
+    });
+    this.checkedEdits(document, edits);
+    const applied = !!input.apply && edits.length > 0;
+    const final = applied
+      ? await this.edit(
+          { uri: input.uri, version: input.version, edits },
+          signal,
+        )
+      : state(document);
+    return { ...final, edits, applied };
+  }
+
   private currentRoot(uri: vscode.Uri): vscode.Uri {
+    this.active();
     const roots = vscode.workspace.workspaceFolders ?? [];
     // Prefer the outer root so that a nested workspace cannot hide a symlink ancestor.
     const candidates = roots
@@ -162,6 +485,7 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   private stillAllowed(uri: vscode.Uri, root: vscode.Uri): void {
+    this.active();
     const active = (vscode.workspace.workspaceFolders ?? []).some(
       (folder) => folder.uri.toString() === root.toString(),
     );
@@ -239,6 +563,7 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   private writable(): void {
+    this.active();
     if (!this.allowWrites())
       fail("WRITES_DISABLED", "Workspace writes are disabled.");
     if (!vscode.workspace.isTrusted)
@@ -256,6 +581,7 @@ export class WorkspaceService implements WorkspaceApi {
 
   /** Lists the currently admitted workspace folders as complete URIs. */
   async roots(): Promise<RootInfo[]> {
+    this.active();
     return (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
       uri: folder.uri.toString(),
       name: folder.name,
@@ -602,27 +928,10 @@ export class WorkspaceService implements WorkspaceApi {
     return new vscode.Position(value.line, value.character);
   }
 
-  /**
-   * Applies version-checked edits to a live buffer without saving it.
-   * Write approval, Workspace Trust, disabled Auto Save, and a non-aborted signal
-   * are rechecked before the edit is handed to VS Code.
-   */
-  async edit(
-    { uri: value, version, edits }: EditInput,
-    signal?: AbortSignal,
-  ): Promise<DocumentState> {
-    signal?.throwIfAborted();
-    this.writable();
-    if (
-      !Array.isArray(edits) ||
-      edits.length === 0 ||
-      edits.length > MAX_EDITS
-    ) {
-      fail("INVALID_ARGUMENT", "Provide between 1 and 100 edits.");
-    }
-    const uri = parseUri(value);
-    const document = await this.document(uri);
-    this.expected(document, version);
+  private checkedEdits(
+    document: vscode.TextDocument,
+    edits: EditInput["edits"],
+  ) {
     const original = this.text(document);
     const checked = edits
       .map((edit) => {
@@ -667,6 +976,31 @@ export class WorkspaceService implements WorkspaceApi {
     if (Buffer.byteLength(parts.join("")) > MAX_FILE_BYTES) {
       fail("LIMIT_EXCEEDED", "Edited document would exceed the 1 MiB limit.");
     }
+    return checked;
+  }
+
+  /**
+   * Applies version-checked edits to a live buffer without saving it.
+   * Write approval, Workspace Trust, disabled Auto Save, and a non-aborted signal
+   * are rechecked before the edit is handed to VS Code.
+   */
+  async edit(
+    { uri: value, version, edits }: EditInput,
+    signal?: AbortSignal,
+  ): Promise<DocumentState> {
+    signal?.throwIfAborted();
+    this.writable();
+    if (
+      !Array.isArray(edits) ||
+      edits.length === 0 ||
+      edits.length > MAX_EDITS
+    ) {
+      fail("INVALID_ARGUMENT", "Provide between 1 and 100 edits.");
+    }
+    const uri = parseUri(value);
+    const document = await this.document(uri);
+    this.expected(document, version);
+    const checked = this.checkedEdits(document, edits);
     await this.authorize(uri);
     this.writable();
     this.expected(document, version);

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
-import { WorkspaceError, type WorkspaceErrorCode } from "../../src/types";
+import {
+  WorkspaceError,
+  type WorkspaceErrorCode,
+  type EditInput,
+} from "../../src/types";
 import { MemoryProvider } from "./memory-provider";
 
 const uri = (value: string): vscode.Uri => vscode.Uri.parse(value);
@@ -216,6 +220,7 @@ export async function run(): Promise<void> {
       provider.readDirectory = originalReadDirectory;
     }
 
+    await ideTools(provider, first, outside, linkedFile);
     const initial = await service.read({ uri: file.toString() });
     await rejectsCode(
       service.edit({
@@ -660,10 +665,362 @@ export async function run(): Promise<void> {
         initialRootCount;
       if (count > 0) await updateRoots(initialRootCount, count);
     }
+    service.dispose();
     diagnostics.dispose();
     readonlyRegistration.dispose();
     registration.dispose();
     readonlyProvider.dispose();
     provider.dispose();
+  }
+}
+
+/** VS Code may minimize provider edits; assert their effect rather than their shape. */
+function formattedText(
+  document: vscode.TextDocument,
+  edits: EditInput["edits"],
+): string {
+  let text = document.getText();
+  const offsets = edits
+    .map((edit) => ({
+      start: document.offsetAt(
+        new vscode.Position(edit.range.start.line, edit.range.start.character),
+      ),
+      end: document.offsetAt(
+        new vscode.Position(edit.range.end.line, edit.range.end.character),
+      ),
+      text: edit.text,
+    }))
+    .sort((left, right) => right.start - left.start);
+  for (const edit of offsets)
+    text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
+  return text;
+}
+
+/** Exercise real language-provider dispatch against non-file documents. */
+async function ideTools(
+  provider: MemoryProvider,
+  root: vscode.Uri,
+  outside: vscode.Uri,
+  link: vscode.Uri,
+): Promise<void> {
+  const file = vscode.Uri.joinPath(root, "ide-tools.txt");
+  provider.seed(file, "messy");
+  // Keep authorization counting independent of the editor's asynchronous stat
+  // requests for its opened document (decorations, dirty checks, and diff UI).
+  const symbolTarget = vscode.Uri.joinPath(root, "symbol-target.txt");
+  provider.seed(symbolTarget, "target");
+  let writes = false;
+  const service = new WorkspaceService(() => writes);
+  const document = await vscode.workspace.openTextDocument(file);
+  const selector = { scheme: file.scheme, pattern: "**/ide-tools.txt" };
+  const full = new vscode.Range(0, 0, 0, 5);
+  let formatMode: "normal" | "overlap" | "change" = "normal";
+  const disposables = [
+    vscode.languages.registerWorkspaceSymbolProvider({
+      provideWorkspaceSymbols: (query) =>
+        query === "mcp-repeated-symbol"
+          ? Array.from(
+              { length: 100 },
+              (_, index) =>
+                new vscode.SymbolInformation(
+                  `repeat-${index}`,
+                  vscode.SymbolKind.Method,
+                  "",
+                  new vscode.Location(symbolTarget, full),
+                ),
+            )
+          : query === "mcp-test-symbol"
+            ? [
+                new vscode.SymbolInformation(
+                  "visible",
+                  vscode.SymbolKind.Class,
+                  "",
+                  new vscode.Location(file, full),
+                ),
+                new vscode.SymbolInformation(
+                  "private",
+                  vscode.SymbolKind.Class,
+                  "",
+                  new vscode.Location(outside, full),
+                ),
+                new vscode.SymbolInformation(
+                  "linked",
+                  vscode.SymbolKind.Class,
+                  "",
+                  new vscode.Location(link, full),
+                ),
+              ]
+            : [],
+    }),
+    vscode.languages.registerDocumentSymbolProvider(selector, {
+      provideDocumentSymbols: () => {
+        const parent = new vscode.DocumentSymbol(
+          "parent",
+          "",
+          vscode.SymbolKind.Class,
+          full,
+          full,
+        );
+        parent.children = [
+          new vscode.DocumentSymbol(
+            "child",
+            "",
+            vscode.SymbolKind.Method,
+            full,
+            full,
+          ),
+        ];
+        return [parent];
+      },
+    }),
+    // A separate document/provider avoids VS Code's version-keyed outline cache.
+    vscode.languages.registerDocumentSymbolProvider(
+      { scheme: file.scheme, pattern: "**/symbol-target.txt" },
+      {
+        provideDocumentSymbols: () =>
+          Array.from(
+            { length: 1000 },
+            (_, index) =>
+              new vscode.DocumentSymbol(
+                `symbol-${index}`,
+                "",
+                vscode.SymbolKind.Method,
+                full,
+                full,
+              ),
+          ),
+      },
+    ),
+    vscode.languages.registerDocumentFormattingEditProvider(selector, {
+      provideDocumentFormattingEdits: async (doc) => {
+        if (formatMode === "change") {
+          const edit = new vscode.WorkspaceEdit();
+          edit.insert(doc.uri, new vscode.Position(0, 0), "x");
+          await vscode.workspace.applyEdit(edit);
+        }
+        const edit = vscode.TextEdit.replace(full, "tidy!");
+        return formatMode === "overlap" ? [edit, edit] : [edit];
+      },
+    }),
+    vscode.languages.registerDocumentRangeFormattingEditProvider(selector, {
+      provideDocumentRangeFormattingEdits: (_doc, target) => [
+        vscode.TextEdit.replace(target, "T"),
+      ],
+    }),
+  ];
+  try {
+    const shown = await service.show({
+      uri: file.toString(),
+      selection: range(1, 3),
+      preserveFocus: false,
+    });
+    assert.equal(shown.uri, file.toString());
+    assert.equal(
+      vscode.window.activeTextEditor?.document.uri.toString(),
+      file.toString(),
+    );
+    assert.equal(vscode.window.activeTextEditor?.selection.start.character, 1);
+    await rejectsCode(
+      service.show({ uri: outside.toString() }),
+      "OUTSIDE_WORKSPACE",
+    );
+    await rejectsCode(
+      service.show({ uri: file.toString(), selection: range(0, 99) }),
+      "INVALID_ARGUMENT",
+    );
+    const symbols = await service.workspaceSymbols({
+      query: "mcp-test-symbol",
+    });
+    assert.deepEqual(
+      symbols.symbols.map((item) => item.name),
+      ["visible"],
+    );
+    assert.equal(symbols.omitted, 2);
+    const originalStat = provider.stat.bind(provider);
+    let fileStats = 0;
+    provider.stat = (uri) => {
+      if (uri.toString() === symbolTarget.toString()) fileStats++;
+      return originalStat(uri);
+    };
+    try {
+      const repeated = await service.workspaceSymbols({
+        query: "mcp-repeated-symbol",
+      });
+      assert.equal(repeated.symbols.length, 100);
+      assert.equal(repeated.truncated, false);
+      assert.equal(
+        fileStats,
+        1,
+        "Authorize repeated symbol targets only once per request",
+      );
+    } finally {
+      provider.stat = originalStat;
+    }
+
+    assert.deepEqual(
+      (await service.documentSymbols({ uri: file.toString() })).symbols.map(
+        (item) => item.name,
+      ),
+      ["parent", "child"],
+    );
+    assert.equal(
+      (await service.documentSymbols({ uri: file.toString() })).symbols[1]
+        ?.containerName,
+      "parent",
+    );
+    const bounded = await service.documentSymbols({
+      uri: symbolTarget.toString(),
+    });
+    assert.equal(bounded.symbols.length, 100);
+    assert.equal(bounded.omitted, 0);
+    assert.equal(bounded.truncated, true);
+    await disposedUiOperations(provider, file, document.version);
+    const version = document.version;
+    const preview = await service.format({ uri: file.toString(), version });
+    assert.equal(preview.applied, false);
+    assert.equal(formattedText(document, preview.edits), "tidy!");
+    assert.equal(document.getText(), "messy");
+    await rejectsCode(
+      service.format({ uri: file.toString(), version, apply: true }),
+      "WRITES_DISABLED",
+    );
+    formatMode = "overlap";
+    await rejectsCode(
+      service.format({ uri: file.toString(), version }),
+      "INVALID_ARGUMENT",
+    );
+    formatMode = "normal";
+    const ranged = await service.format({
+      uri: file.toString(),
+      version,
+      range: range(0, 1),
+    });
+    assert.equal(formattedText(document, ranged.edits), "Tessy");
+    const writesBefore = provider.writes;
+    assert.deepEqual(
+      await service.diff({
+        uri: file.toString(),
+        proposedText: "proposal",
+        version,
+      }),
+      { shown: true },
+    );
+    const diffTabs = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .filter((tab) => tab.input instanceof vscode.TabInputTextDiff);
+    assert.ok(diffTabs.length > 0);
+    const diffInput = diffTabs.at(-1)!.input as vscode.TabInputTextDiff;
+    assert.ok(diffInput.modified.scheme.startsWith("workspace-mcp-diff-"));
+    assert.equal(
+      (await vscode.workspace.openTextDocument(diffInput.modified)).getText(),
+      "proposal",
+    );
+    assert.equal(document.getText(), "messy");
+    assert.equal(provider.writes, writesBefore);
+    await rejectsCode(
+      service.diff({
+        uri: file.toString(),
+        proposedText: "x",
+        version: version + 1,
+      }),
+      "VERSION_CONFLICT",
+    );
+    await rejectsCode(
+      service.diff({ uri: file.toString(), otherUri: outside.toString() }),
+      "OUTSIDE_WORKSPACE",
+    );
+    const aborted = AbortSignal.abort();
+    await assert.rejects(service.show({ uri: file.toString() }, aborted), {
+      name: "AbortError",
+    });
+    await assert.rejects(
+      service.diff(
+        { uri: file.toString(), proposedText: "x", version },
+        aborted,
+      ),
+      { name: "AbortError" },
+    );
+    writes = true;
+    const applied = await service.format({
+      uri: file.toString(),
+      version,
+      apply: true,
+    });
+    assert.equal(applied.applied, true);
+    assert.equal(document.getText(), "tidy!");
+    assert.equal(document.isDirty, true);
+    assert.equal(provider.writes, writesBefore);
+    formatMode = "change";
+    await rejectsCode(
+      service.format({ uri: file.toString(), version: document.version }),
+      "VERSION_CONFLICT",
+    );
+  } finally {
+    disposables.forEach((item) => item.dispose());
+    service.dispose();
+    await vscode.window.showTextDocument(document);
+    await vscode.commands.executeCommand(
+      "workbench.action.revertAndCloseActiveEditor",
+    );
+  }
+}
+
+/** Stop remains final even while a provider operation resumes without an abort signal. */
+async function disposedUiOperations(
+  provider: MemoryProvider,
+  file: vscode.Uri,
+  version: number,
+): Promise<void> {
+  const filesystem: vscode.FileSystemProvider = provider;
+  const originalStat = provider.stat.bind(provider);
+  for (const operation of ["show", "diff"] as const) {
+    const stopped = new WorkspaceService();
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    filesystem.stat = async (uri) => {
+      if (uri.toString() === file.toString()) {
+        reached();
+        await gate;
+      }
+      return originalStat(uri);
+    };
+    const tabsBefore = vscode.window.tabGroups.all.flatMap(
+      (group) => group.tabs,
+    );
+    const editorBefore = vscode.window.activeTextEditor;
+    const pending =
+      operation === "show"
+        ? stopped.show({ uri: file.toString(), preserveFocus: false })
+        : stopped.diff({
+            uri: file.toString(),
+            proposedText: "stopped proposal",
+            version,
+          });
+    try {
+      await waiting;
+      stopped.dispose();
+      release();
+      await rejectsCode(pending, "SESSION_STOPPED");
+      assert.equal(
+        Reflect.get(stopped, "snapshotProvider"),
+        undefined,
+        "Stop must prevent provider re-registration",
+      );
+      assert.equal(vscode.window.activeTextEditor, editorBefore);
+      assert.deepEqual(
+        vscode.window.tabGroups.all.flatMap((group) => group.tabs),
+        tabsBefore,
+      );
+    } finally {
+      release();
+      filesystem.stat = originalStat;
+      stopped.dispose();
+    }
   }
 }

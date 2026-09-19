@@ -35,3 +35,15 @@ Never paste private sources, system URLs or tokens into public feedback.
 Report VS Code/ADT/client versions, operation names and redacted error codes.
 Record observed behavior separately for Claude Code, Codex IDE and local desktop.
 Native client diff/rewind features are not guaranteed for provider-backed edits.
+
+## IDE provider acceptance
+
+On the work device, verify `show_document` reveals an ADT URI and selection,
+without moving focus unless requested. Check `document_symbols` and
+`workspace_symbols` against a known class/method; an empty result alone cannot
+distinguish unsupported providers from no matches. Preview a proposed change
+with `show_diff` and confirm the backend and live buffer remain unchanged.
+Preview formatting for an entire source and a selected range, then explicitly
+apply with write permission and Auto Save disabled. Check stale versions are
+rejected and saving remains a separate action. Synthetic registered providers
+exercise these paths in CI but do not establish SAP ADT provider support.

@@ -48,3 +48,16 @@ The first delivery is an unmerged PR and installable VSIX. Marketplace publicati
 and a production-ready claim are explicitly out of scope. GitHub-hosted CI builds,
 tests and packages without publishing. Cloud Codex reviews and Codex Security
 scans are separate checks, never represented as passed without an actual result.
+
+## Generic IDE tools
+
+The workspace service exposes `show_document`, workspace/document symbol lookup,
+visual diffs and formatting through fixed VS Code APIs. These tools retain full
+URIs and dispatch to registered providers, with no direct LSP connection or
+ABAP-specific protocol. There is no generic command-execution escape hatch.
+Formatting reuses the ordinary edit validator and mutation path. Symbol output
+is bounded and independently authorized before returning locations. Proposal
+diffs use a bounded read-only in-memory content provider owned by the running
+bridge; stopping the connection disposes it. UI operations check request
+cancellation before being handed to VS Code. Already dispatched UI operations,
+like already dispatched edits, cannot be rolled back on disconnect.
