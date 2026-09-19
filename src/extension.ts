@@ -26,6 +26,7 @@ let runningAccess: { allowed: boolean } | undefined;
 let starting = Promise.resolve();
 let stopping = Promise.resolve();
 let binding = Promise.resolve();
+let credentialWrites = Promise.resolve();
 let pending: BridgeSession | undefined;
 let cancelStartup: (() => void) | undefined;
 const cancelledStartup = Symbol("cancelled startup");
@@ -73,6 +74,16 @@ export function activate(context: vscode.ExtensionContext): void {
     const closing = stopSessions();
     refresh();
     return closing;
+  };
+  // Once SecretStorage.store begins it cannot be cancelled. Serialize writes and
+  // keep their completion separate from cancellable Start/Stop command promises.
+  const storeCredential = (key: string, value: string, owner: number) => {
+    const writing = credentialWrites.then(() => {
+      if (owner !== generation) return;
+      return context.secrets.store(key, value);
+    });
+    credentialWrites = writing.catch(() => {});
+    return writing;
   };
   let promptGeneration = 0;
   const askWrites = async (session: BridgeSession) => {
@@ -208,7 +219,7 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       store: (key: string, value: string) => {
         checkCurrent();
-        return wait(context.secrets.store(key, value));
+        return wait(storeCredential(key, value, requestedGeneration));
       },
     };
     starting = wait(
@@ -218,6 +229,7 @@ export function activate(context: vscode.ExtensionContext): void {
           checkCurrent();
           await wait(stopping);
           await wait(binding);
+          await wait(credentialWrites);
           checkCurrent();
           if (running) return;
           if (!vscode.workspace.isTrusted) {
@@ -347,10 +359,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (choice !== "Rotate token" || requestedGeneration !== generation) return;
     await rotateToken({
       get: (key) => context.secrets.get(key),
-      store: (key, value) =>
-        requestedGeneration === generation
-          ? context.secrets.store(key, value)
-          : Promise.resolve(),
+      store: (key, value) => storeCredential(key, value, requestedGeneration),
     });
     if (requestedGeneration !== generation) return;
     void vscode.window.showInformationMessage(
@@ -374,10 +383,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     await rotateIdentity({
       get: (key) => context.secrets.get(key),
-      store: (key, value) =>
-        requestedGeneration === generation
-          ? context.secrets.store(key, value)
-          : Promise.resolve(),
+      store: (key, value) => storeCredential(key, value, requestedGeneration),
     });
     if (requestedGeneration !== generation) return;
     void vscode.window.showInformationMessage(

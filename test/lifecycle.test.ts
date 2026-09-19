@@ -23,6 +23,7 @@ function fixture(initialPolicy: string = "ask") {
     closed: boolean;
     abortedRequests: number;
     token: string;
+    tls: { cert: string; key: string };
     url: string;
     close(): Promise<void>;
   }[] = [];
@@ -98,7 +99,11 @@ function fixture(initialPolicy: string = "ask") {
       if (id === "./tls")
         return {
           TLS_KEY,
-          storedIdentity: async () => identity,
+          storedIdentity: async (secrets: preferences.SecretStore) => {
+            if (!values.has(TLS_KEY))
+              await secrets.store(TLS_KEY, JSON.stringify(identity));
+            return JSON.parse(values.get(TLS_KEY)!);
+          },
           parseIdentity: (raw: string) => JSON.parse(raw),
           rotateIdentity: async (secrets: preferences.SecretStore) => {
             await delays.identityGeneration;
@@ -122,7 +127,7 @@ function fixture(initialPolicy: string = "ask") {
         return {
           startServer: async (
             _service: unknown,
-            options: { port: number; token: string },
+            options: { port: number; token: string; tls: typeof identity },
           ) => {
             const connection = {
               closed: false,
@@ -131,6 +136,7 @@ function fixture(initialPolicy: string = "ask") {
                 this.abortedRequests++;
               },
               token: options.token,
+              tls: options.tls,
               url: `http://127.0.0.1:${options.port}/mcp`,
               async close() {
                 this.closed = true;
@@ -635,5 +641,158 @@ test("restart waits for cancelled binding and its delayed cleanup", async () => 
   assert.equal(f.connections.length, 2);
   assert.equal(f.connections[0]!.closed, true);
   assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+for (const [rotation, confirmation, key] of [
+  ["rotateToken", "Rotate token", preferences.TOKEN_KEY],
+  ["rotateIdentity", "Replace server identity", TLS_KEY],
+] as const) {
+  test(`${rotation}: restart waits for an already-started credential write`, async () => {
+    const f = fixture("allow");
+    await f.command("start");
+    const original = f.values.get(key);
+    const write = deferred<void>();
+    let writing = false;
+    f.context.secrets.store = async (storedKey, value) => {
+      writing = true;
+      await write.promise;
+      f.values.set(storedKey, value);
+    };
+    const rotating = f.command(rotation);
+    await tick();
+    f.prompts[0]!.resolve(confirmation);
+    await tick();
+    assert.equal(writing, true);
+    const restarting = f.command("start");
+    await tick();
+    assert.equal(
+      f.connections.length,
+      1,
+      "no listener may use the old credential",
+    );
+    assert.equal(f.values.get(key), original);
+    await f.command("stop");
+    await restarting;
+    const finalStart = f.command("start");
+    await tick();
+    assert.equal(
+      f.connections.length,
+      1,
+      "Stop must not discard the write barrier",
+    );
+    write.resolve();
+    await Promise.all([rotating, finalStart]);
+    assert.notEqual(f.values.get(key), original);
+    assert.equal(f.connections.length, 2);
+    assert.equal(f.connections[1]!.token, f.values.get(preferences.TOKEN_KEY));
+    assert.deepEqual(f.connections[1]!.tls, JSON.parse(f.values.get(TLS_KEY)!));
+    assert.equal(f.services.at(-1)!.canWrite(), true);
+    await f.command("stop");
+  });
+}
+
+for (const key of [preferences.TOKEN_KEY, TLS_KEY]) {
+  test(`cancelled initialization keeps the in-flight ${key} write barrier`, async () => {
+    const f = fixture("allow");
+    f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+    f.values.delete(key);
+    const write = deferred<void>();
+    let writes = 0;
+    f.context.secrets.store = async (storedKey, value) => {
+      writes++;
+      await write.promise;
+      f.values.set(storedKey, value);
+    };
+    const first = f.command("start");
+    await tick();
+    assert.equal(writes, 1);
+    await f.command("stop");
+    await first;
+    const second = f.command("start");
+    await tick();
+    assert.equal(
+      writes,
+      1,
+      "replacement startup must not race initialization writes",
+    );
+    assert.equal(f.connections.length, 0);
+    await f.deactivate();
+    await second;
+    const third = f.command("start");
+    await tick();
+    assert.equal(f.connections.length, 0);
+    write.resolve();
+    await third;
+    assert.equal(writes, 1);
+    assert.equal(f.connections.length, 1);
+    assert.equal(f.connections[0]!.token, f.values.get(preferences.TOKEN_KEY));
+    assert.deepEqual(f.connections[0]!.tls, JSON.parse(f.values.get(TLS_KEY)!));
+    await f.command("stop");
+  });
+}
+
+test("failed credential writes release restart without hiding the rotation error", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const original = f.values.get(preferences.TOKEN_KEY);
+  const write = deferred<void>();
+  f.context.secrets.store = async () => {
+    await write.promise;
+    throw new Error("private secret-provider failure");
+  };
+  const rotating = f.command("rotateToken");
+  await tick();
+  f.prompts[0]!.resolve("Rotate token");
+  await tick();
+  const restarting = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  write.resolve();
+  await Promise.all([rotating, restarting]);
+  assert.equal(f.errors.length, 1);
+  assert.ok(
+    f.errors.every((error) => !error.includes("private secret-provider")),
+  );
+  assert.equal(f.connections[1]!.token, original);
+  assert.equal(f.services.at(-1)!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("overlapping credential rotations serialize their actual writes", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const firstWrite = deferred<void>();
+  const secondWrite = deferred<void>();
+  const writes: { key: string; value: string }[] = [];
+  f.context.secrets.store = async (key, value) => {
+    writes.push({ key, value });
+    await (writes.length === 1 ? firstWrite.promise : secondWrite.promise);
+    f.values.set(key, value);
+  };
+  const tokenRotation = f.command("rotateToken");
+  await tick();
+  f.prompts[0]!.resolve("Rotate token");
+  await tick();
+  const identityRotation = f.command("rotateIdentity");
+  await tick();
+  f.prompts[1]!.resolve("Replace server identity");
+  await tick();
+  assert.equal(
+    writes.length,
+    1,
+    "new rotation must wait for irreversible old write",
+  );
+  firstWrite.resolve();
+  await tick();
+  assert.equal(writes.length, 2);
+  const restarting = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  secondWrite.resolve();
+  await Promise.all([tokenRotation, identityRotation, restarting]);
+  assert.equal(f.connections[1]!.token, writes[0]!.value);
+  assert.deepEqual(f.connections[1]!.tls, JSON.parse(writes[1]!.value));
+  assert.equal(f.services.at(-1)!.canWrite(), true);
   await f.command("stop");
 });
