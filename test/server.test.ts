@@ -115,6 +115,16 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     }),
   );
   const { tools } = await client.listTools();
+  for (const name of ["show_document", "show_diff"]) {
+    const annotations = tools.find((tool) => tool.name === name)?.annotations;
+    assert.equal(annotations?.readOnlyHint, false);
+    assert.equal(annotations?.destructiveHint, false);
+  }
+  assert.equal(
+    tools.find((tool) => tool.name === "edit_document")?.annotations
+      ?.destructiveHint,
+    true,
+  );
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "document_symbols",
     "edit_document",

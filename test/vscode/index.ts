@@ -715,28 +715,39 @@ async function ideTools(
   const disposables = [
     vscode.languages.registerWorkspaceSymbolProvider({
       provideWorkspaceSymbols: (query) =>
-        query === "mcp-test-symbol"
-          ? [
-              new vscode.SymbolInformation(
-                "visible",
-                vscode.SymbolKind.Class,
-                "",
-                new vscode.Location(file, full),
-              ),
-              new vscode.SymbolInformation(
-                "private",
-                vscode.SymbolKind.Class,
-                "",
-                new vscode.Location(outside, full),
-              ),
-              new vscode.SymbolInformation(
-                "linked",
-                vscode.SymbolKind.Class,
-                "",
-                new vscode.Location(link, full),
-              ),
-            ]
-          : [],
+        query === "mcp-repeated-symbol"
+          ? Array.from(
+              { length: 100 },
+              (_, index) =>
+                new vscode.SymbolInformation(
+                  `repeat-${index}`,
+                  vscode.SymbolKind.Method,
+                  "",
+                  new vscode.Location(file, full),
+                ),
+            )
+          : query === "mcp-test-symbol"
+            ? [
+                new vscode.SymbolInformation(
+                  "visible",
+                  vscode.SymbolKind.Class,
+                  "",
+                  new vscode.Location(file, full),
+                ),
+                new vscode.SymbolInformation(
+                  "private",
+                  vscode.SymbolKind.Class,
+                  "",
+                  new vscode.Location(outside, full),
+                ),
+                new vscode.SymbolInformation(
+                  "linked",
+                  vscode.SymbolKind.Class,
+                  "",
+                  new vscode.Location(link, full),
+                ),
+              ]
+            : [],
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       provideDocumentSymbols: () => {
@@ -816,6 +827,27 @@ async function ideTools(
       ["visible"],
     );
     assert.equal(symbols.omitted, 2);
+    const originalStat = provider.stat.bind(provider);
+    let fileStats = 0;
+    provider.stat = (uri) => {
+      if (uri.toString() === file.toString()) fileStats++;
+      return originalStat(uri);
+    };
+    try {
+      const repeated = await service.workspaceSymbols({
+        query: "mcp-repeated-symbol",
+      });
+      assert.equal(repeated.symbols.length, 100);
+      assert.equal(repeated.truncated, false);
+      assert.equal(
+        fileStats,
+        1,
+        "Authorize repeated symbol targets only once per request",
+      );
+    } finally {
+      provider.stat = originalStat;
+    }
+
     assert.deepEqual(
       (await service.documentSymbols({ uri: file.toString() })).symbols.map(
         (item) => item.name,

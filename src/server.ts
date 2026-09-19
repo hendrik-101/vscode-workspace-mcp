@@ -51,6 +51,7 @@ function createMcpServer(
     schema: z.ZodObject<S>,
     operation: (args: z.output<typeof schema>) => unknown,
     readOnly = true,
+    destructive = !readOnly,
   ) {
     server.registerTool<z.ZodRawShape, z.ZodObject<S>>(
       name,
@@ -59,7 +60,7 @@ function createMcpServer(
         inputSchema: schema,
         annotations: {
           readOnlyHint: readOnly,
-          destructiveHint: !readOnly,
+          destructiveHint: destructive,
           openWorldHint: false,
         },
       },
@@ -187,6 +188,7 @@ function createMcpServer(
     }),
     (args) => workspace.show(args, signal),
     false,
+    false,
   );
   tool(
     "workspace_symbols",
@@ -211,6 +213,7 @@ function createMcpServer(
       preserveFocus: z.boolean().optional(),
     }),
     (args) => workspace.diff(args, signal),
+    false,
     false,
   );
   tool(

@@ -209,15 +209,25 @@ export class WorkspaceService implements WorkspaceApi {
       truncated: items.length > MAX_LIST_ENTRIES,
       omitted: 0,
     };
+    // Cache only within this result, including failures. Many symbols share a file.
+    const authorized = new Map<string, Promise<vscode.FileStat>>();
     for (const item of items.slice(0, MAX_LIST_ENTRIES)) {
       signal?.throwIfAborted();
+      this.active();
       if (result.symbols.length >= MAX_RESULTS) {
         result.truncated = true;
         break;
       }
       try {
         const uri = parseUri(item.location.uri.toString());
-        await this.authorize(uri);
+        const key = uri.toString();
+        let check = authorized.get(key);
+        if (!check) {
+          check = this.authorize(uri);
+          authorized.set(key, check);
+        }
+        await check;
+        this.currentRoot(uri);
         result.symbols.push({
           name: item.name.slice(0, MAX_PREVIEW),
           kind: item.kind,
@@ -231,6 +241,8 @@ export class WorkspaceService implements WorkspaceApi {
         result.omitted++;
       }
     }
+    signal?.throwIfAborted();
+    this.active();
     // Roots can change while other symbol targets are being authorized.
     result.symbols = result.symbols.filter((item) => {
       try {
