@@ -37,6 +37,7 @@ const errors: Record<string, string> = {
 function createMcpServer(
   workspace: WorkspaceApi,
   execute: (operation: () => unknown) => Promise<unknown>,
+  signal: AbortSignal,
 ) {
   const server = new McpServer({
     name: "vscode-workspace-mcp",
@@ -158,14 +159,14 @@ function createMcpServer(
         .min(1)
         .max(100),
     }),
-    (args) => workspace.edit(args),
+    (args) => workspace.edit(args, signal),
     false,
   );
   tool(
     "save_document",
     "Explicitly save a version-checked document. May invoke provider save hooks. Requires approved writes and Workspace Trust.",
     z.strictObject({ uri, version: index }),
-    (args) => workspace.save(args),
+    (args) => workspace.save(args, signal),
     false,
   );
   tool(
@@ -292,6 +293,7 @@ export async function startServer(
     if (Number(request.headers["content-length"] ?? 0) > MAX_BODY)
       return reject(response, 413, "Request body too large.");
     active++;
+    const controller = new AbortController();
     let mcp: McpServer | undefined;
     let finished = false;
     let running = 0;
@@ -313,12 +315,14 @@ export async function startServer(
       }
     };
     const timeout = setTimeout(() => {
+      controller.abort();
       reject(response, 408, "Request timed out.");
       request.destroy();
     }, REQUEST_TIMEOUT);
     const cleanup = () => {
       if (finished) return;
       finished = true;
+      controller.abort();
       clearTimeout(timeout);
       // A disconnected client cannot release capacity while provider work runs.
       release();
@@ -338,7 +342,7 @@ export async function startServer(
       if (response.destroyed || closed) return;
       if (Array.isArray(body))
         return reject(response, 400, "Batch requests are not supported.");
-      mcp = createMcpServer(workspace, execute);
+      mcp = createMcpServer(workspace, execute, controller.signal);
       sessions.add(mcp);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

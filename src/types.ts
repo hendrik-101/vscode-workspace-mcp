@@ -102,8 +102,8 @@ export interface WorkspaceApi {
   list(input: UriInput): Promise<ListResult>;
   read(input: ReadInput): Promise<ReadResult>;
   search(input: SearchInput): Promise<SearchResult>;
-  edit(input: EditInput): Promise<DocumentState>;
-  save(input: SaveInput): Promise<DocumentState>;
+  edit(input: EditInput, signal?: AbortSignal): Promise<DocumentState>;
+  save(input: SaveInput, signal?: AbortSignal): Promise<DocumentState>;
   diagnostics(input: UriInput): Promise<DiagnosticsResult>;
 }
 

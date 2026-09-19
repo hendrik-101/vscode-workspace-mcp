@@ -545,11 +545,11 @@ export class WorkspaceService implements WorkspaceApi {
     return new vscode.Position(value.line, value.character);
   }
 
-  async edit({
-    uri: value,
-    version,
-    edits,
-  }: EditInput): Promise<DocumentState> {
+  async edit(
+    { uri: value, version, edits }: EditInput,
+    signal?: AbortSignal,
+  ): Promise<DocumentState> {
+    signal?.throwIfAborted();
     this.writable();
     if (
       !Array.isArray(edits) ||
@@ -623,13 +623,18 @@ export class WorkspaceService implements WorkspaceApi {
       workspaceEdit.replace(uri, edit.range, edit.text);
     // No await between the version check and applying the edit. VS Code also snapshots
     // open document versions when serializing WorkspaceEdit to the main thread.
+    signal?.throwIfAborted();
     const applied = await vscode.workspace.applyEdit(workspaceEdit);
     if (!applied) fail("EDIT_FAILED", "VS Code rejected the workspace edit.");
     this.currentRoot(uri);
     return state(document);
   }
 
-  async save({ uri: value, version }: SaveInput): Promise<DocumentState> {
+  async save(
+    { uri: value, version }: SaveInput,
+    signal?: AbortSignal,
+  ): Promise<DocumentState> {
+    signal?.throwIfAborted();
     this.writable();
     const uri = parseUri(value);
     const document = await this.document(uri);
@@ -637,6 +642,7 @@ export class WorkspaceService implements WorkspaceApi {
     await this.authorize(uri);
     this.writable();
     this.expected(document, version);
+    signal?.throwIfAborted();
     if (!(await document.save()))
       fail("SAVE_FAILED", "The document could not be saved.");
     this.currentRoot(uri);

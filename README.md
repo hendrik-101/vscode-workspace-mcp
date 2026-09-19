@@ -27,6 +27,9 @@ nor stores SAP credentials.
 5. Ask the agent to list workspace roots and inspect the active editor.
 6. When ready, run **Workspace MCP: Enable Writes for This Session** in VS Code.
 
+Turn **Auto Save off** for documents edited through MCP. Edits are refused while
+Auto Save is enabled so that editing cannot implicitly persist a change.
+
 Each running window gets its own random port/token. **Stop** invalidates the token;
 after restarting, refresh client settings. Loopback belongs to the extension host,
 which may differ from your desktop when using SSH, WSL or containers.
@@ -69,7 +72,7 @@ The VSIX is written to `artifacts/workspace-mcp.vsix`. CI builds that artifact o
 every PR; it does **not** publish a Marketplace release.
 
 Use short-lived `feat/`, `fix/`, `docs/` or `chore/` branches and PRs into `main`.
-Main requires PRs and resolved review conversations; administrators cannot bypass
+Main requires PRs, passing `verify` CI and resolved review conversations; administrators cannot bypass
 the rule. Codex cloud reviews are configured separately from workflow YAML.
 Review and merge deliberately; no auto-merge. See [design](docs/design.md),
 [security](SECURITY.md) and [manual acceptance](docs/acceptance.md).

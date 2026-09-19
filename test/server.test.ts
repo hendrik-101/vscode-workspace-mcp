@@ -396,3 +396,90 @@ test("returns a safe actionable auto-save refusal", async (t) => {
   assert.match(JSON.stringify(result.content), /auto.?save/i);
   assert.doesNotMatch(JSON.stringify(result), /private provider/);
 });
+
+for (const toolName of ["edit_document", "save_document"]) {
+  test(`disconnect aborts deferred ${toolName} before its mutation begins`, async (t) => {
+    let release!: () => void;
+    let markEntered!: () => void;
+    let markSettled!: () => void;
+    let mutated = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    const mutate = async (
+      { uri, version }: { uri: string; version: number },
+      signal?: AbortSignal,
+    ) => {
+      markEntered();
+      try {
+        await gate;
+        signal?.throwIfAborted();
+        mutated = true;
+        return { uri, version, dirty: false };
+      } finally {
+        markSettled();
+      }
+    };
+    const server = await startServer({
+      ...workspace,
+      edit: mutate,
+      save: mutate,
+    });
+    t.after(async () => {
+      release();
+      await server.close();
+    });
+    const req = request(server.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+    });
+    req.on("error", () => {});
+    t.after(() => req.destroy());
+    req.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: toolName,
+          arguments: {
+            uri: "memfs:/project/a",
+            version: 4,
+            ...(toolName === "edit_document"
+              ? {
+                  edits: [
+                    {
+                      range: {
+                        start: { line: 0, character: 0 },
+                        end: { line: 0, character: 0 },
+                      },
+                      text: "x",
+                    },
+                  ],
+                }
+              : {}),
+          },
+        },
+      }),
+    );
+    await entered;
+    await new Promise<void>((resolve) => {
+      req.once("close", resolve);
+      req.destroy();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    await settled;
+    assert.equal(mutated, false);
+  });
+}

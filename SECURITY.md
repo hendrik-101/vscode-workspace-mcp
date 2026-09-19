@@ -11,6 +11,7 @@ owner privately before disclosing an exploitable issue.
 - Read-only until the user enables writes for the current running session.
 - Only current workspace roots; no arbitrary URI, terminal or command execution.
 - Live document versions required for writes. Saving is separate from editing.
+- Edits require Auto Save off. Stop permanently revokes the running session.
 - Host/Origin checks, request limits and bounded filesystem traversal.
 - No product telemetry, analytics, update checks or outbound network requests.
 
@@ -26,6 +27,10 @@ Local processes running as your user, malicious installed extensions and a
 dishonest FileSystemProvider are outside this security boundary. Provider stat
 metadata is used to reject symbolic links; provider-level path races cannot be
 made atomic through the public VS Code filesystem API.
+
+Disconnected or timed-out requests are checked again before applying edits or
+saving. An operation already handed to VS Code or the provider cannot be rolled
+back by cancellation. Stopping the bridge does not undo existing buffer edits.
 
 The initial version has no remote access or tunnel. For SSH/containers, loopback
 is on the extension host; do not expose the listener to a network to work around

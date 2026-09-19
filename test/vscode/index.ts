@@ -20,6 +20,28 @@ async function rejectsCode(
   );
 }
 
+async function commandWithinDeadline(id: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      vscode.commands.executeCommand(id),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `${id} did not complete without dismissing its notification`,
+              ),
+            ),
+          5_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function updateRoots(
   start: number,
   remove: number,
@@ -107,6 +129,19 @@ export async function run(): Promise<void> {
       true,
       "Write tests require the runner's --disable-workspace-trust flag",
     );
+    console.log(
+      "VS Code integration: Start and Stop complete without toast dismissal",
+    );
+    const extension = vscode.extensions.getExtension(
+      "hendrik-101.vscode-workspace-mcp",
+    );
+    assert.ok(extension, "Development extension must be installed in the host");
+    await extension.activate();
+    try {
+      await commandWithinDeadline("workspaceMcp.start");
+    } finally {
+      await commandWithinDeadline("workspaceMcp.stop");
+    }
 
     const roots = await service.roots();
     assert.deepEqual(
@@ -204,6 +239,31 @@ export async function run(): Promise<void> {
 
     allowWrites = true;
     console.log("VS Code integration: validating edits and explicit save");
+    const aborted = AbortSignal.abort();
+    await assert.rejects(
+      service.edit(
+        {
+          uri: file.toString(),
+          version: live.version,
+          edits: [{ range: range(0, 7), text: "canceled" }],
+        },
+        aborted,
+      ),
+      { name: "AbortError" },
+    );
+    await assert.rejects(
+      service.save({ uri: file.toString(), version: live.version }, aborted),
+      { name: "AbortError" },
+    );
+    assert.equal(document.getText(), live.text);
+    assert.equal(document.version, live.version);
+    assert.equal(document.isDirty, true);
+    assert.equal(provider.stored(file), initial.text);
+    assert.equal(
+      provider.writes,
+      0,
+      "Aborted operations must not write to the provider",
+    );
     await rejectsCode(
       service.edit({
         uri: file.toString(),
