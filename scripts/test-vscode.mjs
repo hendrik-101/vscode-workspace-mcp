@@ -107,5 +107,10 @@ try {
   );
   process.exitCode = 1;
 } finally {
-  await rm(temporary, { recursive: true, force: true });
+  await rm(temporary, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 }

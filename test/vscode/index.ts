@@ -73,6 +73,15 @@ export async function run(): Promise<void> {
     assert.equal(adt.packageJSON.version, adtVersion);
     await adt.activate();
     assert.equal(adt.isActive, true);
+    // VS Code propagates provider capabilities through the main process. The
+    // extension activation promise can settle before that update reaches us.
+    const deadline = Date.now() + 10_000;
+    while (
+      vscode.workspace.fs.isWritableFileSystem("abap") === undefined &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     assert.notEqual(
       vscode.workspace.fs.isWritableFileSystem("abap"),
       undefined,
