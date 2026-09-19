@@ -3,7 +3,7 @@
 ## Automated coexistence check
 
 `xvfb-run -a npm run test:vscode -- --adt` installs SAPSE.adt-vscode 1.1.2
-in an isolated VS Code 1.105.1 profile with no destinations or credentials.
+in an isolated VS Code 1.137.0 profile with no destinations or credentials.
 It checks ADT activation and registration of the `abap` filesystem provider,
 then runs the bridge's synthetic VFS suite with ADT loaded. CI runs this check.
 This does not establish that real ABAP objects can be listed, read or saved.

@@ -24,7 +24,7 @@ try {
     },
   );
   const vscodeExecutablePath = await downloadAndUnzipVSCode({
-    version: process.env.VSCODE_VERSION || (withAdt ? "1.105.1" : "1.102.3"),
+    version: process.env.VSCODE_VERSION || "1.137.0",
     cachePath: join(project, ".vscode-test"),
     timeout: 30_000,
   });
