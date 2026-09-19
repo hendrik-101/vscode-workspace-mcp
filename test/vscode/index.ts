@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
-import { WorkspaceError, type WorkspaceErrorCode } from "../../src/types";
+import {
+  WorkspaceError,
+  type WorkspaceErrorCode,
+  type EditInput,
+} from "../../src/types";
 import { MemoryProvider } from "./memory-provider";
 
 const uri = (value: string): vscode.Uri => vscode.Uri.parse(value);
@@ -670,6 +674,28 @@ export async function run(): Promise<void> {
   }
 }
 
+/** VS Code may minimize provider edits; assert their effect rather than their shape. */
+function formattedText(
+  document: vscode.TextDocument,
+  edits: EditInput["edits"],
+): string {
+  let text = document.getText();
+  const offsets = edits
+    .map((edit) => ({
+      start: document.offsetAt(
+        new vscode.Position(edit.range.start.line, edit.range.start.character),
+      ),
+      end: document.offsetAt(
+        new vscode.Position(edit.range.end.line, edit.range.end.character),
+      ),
+      text: edit.text,
+    }))
+    .sort((left, right) => right.start - left.start);
+  for (const edit of offsets)
+    text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
+  return text;
+}
+
 /** Exercise real language-provider dispatch against non-file documents. */
 async function ideTools(
   provider: MemoryProvider,
@@ -791,7 +817,7 @@ async function ideTools(
     const version = document.version;
     const preview = await service.format({ uri: file.toString(), version });
     assert.equal(preview.applied, false);
-    assert.equal(preview.edits[0]?.text, "tidy!");
+    assert.equal(formattedText(document, preview.edits), "tidy!");
     assert.equal(document.getText(), "messy");
     await rejectsCode(
       service.format({ uri: file.toString(), version, apply: true }),
@@ -808,7 +834,7 @@ async function ideTools(
       version,
       range: range(0, 1),
     });
-    assert.equal(ranged.edits[0]?.text, "T");
+    assert.equal(formattedText(document, ranged.edits), "Tessy");
     const writesBefore = provider.writes;
     assert.deepEqual(
       await service.diff({

@@ -438,6 +438,7 @@ export async function startServer(
     async close() {
       if (closed) return;
       closed = true;
+      workspace.dispose?.();
       const closing = new Promise<void>((resolve) =>
         httpServer.close(() => resolve()),
       );

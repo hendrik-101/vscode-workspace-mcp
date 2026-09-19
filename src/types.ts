@@ -133,6 +133,8 @@ export interface DiagnosticsResult {
 }
 
 export interface WorkspaceApi {
+  /** Release resources owned by this bridge when its server stops. */
+  dispose?(): void;
   show(input: ShowInput, signal?: AbortSignal): Promise<DocumentState>;
   workspaceSymbols(
     input: SymbolsInput,
