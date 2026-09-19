@@ -154,6 +154,7 @@ export interface WorkspaceApi {
 }
 
 export type WorkspaceErrorCode =
+  | "SESSION_STOPPED"
   | "INVALID_ARGUMENT"
   | "OUTSIDE_WORKSPACE"
   | "SYMLINK_DENIED"

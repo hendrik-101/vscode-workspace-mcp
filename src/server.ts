@@ -18,6 +18,8 @@ const uri = z.string().min(1).max(8192);
 const index = z.number().int().min(0).max(2_147_483_647);
 const position = z.strictObject({ line: index, character: index });
 const errors: Record<string, string> = {
+  SESSION_STOPPED:
+    "The workspace bridge has stopped. Reconnect to a running bridge.",
   INVALID_ARGUMENT: "Invalid workspace operation arguments.",
   OUTSIDE_WORKSPACE: "Resource is outside the admitted workspace roots.",
   SYMLINK_DENIED: "Symbolic links are not admitted.",

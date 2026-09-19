@@ -710,6 +710,7 @@ async function ideTools(
   const document = await vscode.workspace.openTextDocument(file);
   const selector = { scheme: file.scheme, pattern: "**/ide-tools.txt" };
   const full = new vscode.Range(0, 0, 0, 5);
+  let boundedSymbols = false;
   let formatMode: "normal" | "overlap" | "change" = "normal";
   const disposables = [
     vscode.languages.registerWorkspaceSymbolProvider({
@@ -739,6 +740,18 @@ async function ideTools(
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       provideDocumentSymbols: () => {
+        if (boundedSymbols)
+          return Array.from(
+            { length: 1000 },
+            (_, index) =>
+              new vscode.SymbolInformation(
+                `symbol-${index}`,
+                vscode.SymbolKind.Class,
+                "",
+                new vscode.Location(index === 999 ? file : outside, full),
+              ),
+          );
+
         const parent = new vscode.DocumentSymbol(
           "parent",
           "",
@@ -814,6 +827,15 @@ async function ideTools(
         ?.containerName,
       "parent",
     );
+    boundedSymbols = true;
+    const completeSymbols = await service.documentSymbols({
+      uri: file.toString(),
+    });
+    assert.equal(completeSymbols.symbols.length, 1);
+    assert.equal(completeSymbols.omitted, 999);
+    assert.equal(completeSymbols.truncated, false);
+    boundedSymbols = false;
+    await disposedUiOperations(provider, file, document.version);
     const version = document.version;
     const preview = await service.format({ uri: file.toString(), version });
     assert.equal(preview.applied, false);
@@ -901,5 +923,65 @@ async function ideTools(
     await vscode.commands.executeCommand(
       "workbench.action.revertAndCloseActiveEditor",
     );
+  }
+}
+
+/** Stop remains final even while a provider operation resumes without an abort signal. */
+async function disposedUiOperations(
+  provider: MemoryProvider,
+  file: vscode.Uri,
+  version: number,
+): Promise<void> {
+  const filesystem: vscode.FileSystemProvider = provider;
+  const originalStat = provider.stat.bind(provider);
+  for (const operation of ["show", "diff"] as const) {
+    const stopped = new WorkspaceService();
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    filesystem.stat = async (uri) => {
+      if (uri.toString() === file.toString()) {
+        reached();
+        await gate;
+      }
+      return originalStat(uri);
+    };
+    const tabsBefore = vscode.window.tabGroups.all.flatMap(
+      (group) => group.tabs,
+    );
+    const editorBefore = vscode.window.activeTextEditor;
+    const pending =
+      operation === "show"
+        ? stopped.show({ uri: file.toString(), preserveFocus: false })
+        : stopped.diff({
+            uri: file.toString(),
+            proposedText: "stopped proposal",
+            version,
+          });
+    try {
+      await waiting;
+      stopped.dispose();
+      release();
+      await rejectsCode(pending, "SESSION_STOPPED");
+      assert.equal(
+        Reflect.get(stopped, "snapshotProvider"),
+        undefined,
+        "Stop must prevent provider re-registration",
+      );
+      assert.equal(vscode.window.activeTextEditor, editorBefore);
+      assert.deepEqual(
+        vscode.window.tabGroups.all.flatMap((group) => group.tabs),
+        tabsBefore,
+      );
+    } finally {
+      release();
+      filesystem.stat = originalStat;
+      stopped.dispose();
+    }
   }
 }

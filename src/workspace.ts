@@ -152,15 +152,22 @@ export class WorkspaceService implements WorkspaceApi {
    */
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
+  private disposed = false;
   private readonly snapshots = new Map<string, string>();
   private snapshotProvider: vscode.Disposable | undefined;
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
 
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
+    this.disposed = true;
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
+  }
+
+  private active(): void {
+    if (this.disposed)
+      fail("SESSION_STOPPED", "The workspace bridge has stopped.");
   }
 
   private exactRange(
@@ -183,6 +190,7 @@ export class WorkspaceService implements WorkspaceApi {
       ? this.exactRange(document, input.selection)
       : undefined;
     signal?.throwIfAborted();
+    this.active();
     await vscode.window.showTextDocument(document, {
       preserveFocus: input.preserveFocus ?? true,
       preview: false,
@@ -301,8 +309,7 @@ export class WorkspaceService implements WorkspaceApi {
     result.truncated ||=
       omittedChildren ||
       !!stack.length ||
-      (items?.length ?? 0) > MAX_LIST_ENTRIES ||
-      flat.length >= MAX_LIST_ENTRIES;
+      (items?.length ?? 0) > MAX_LIST_ENTRIES;
     return result;
   }
 
@@ -320,6 +327,7 @@ export class WorkspaceService implements WorkspaceApi {
     const document = await this.document(parseUri(input.uri));
     this.text(document);
     signal?.throwIfAborted();
+    this.active();
     let right: vscode.Uri;
     if (input.otherUri !== undefined) {
       const other = await this.document(parseUri(input.otherUri));
@@ -420,6 +428,7 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   private currentRoot(uri: vscode.Uri): vscode.Uri {
+    this.active();
     const roots = vscode.workspace.workspaceFolders ?? [];
     // Prefer the outer root so that a nested workspace cannot hide a symlink ancestor.
     const candidates = roots
@@ -436,6 +445,7 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   private stillAllowed(uri: vscode.Uri, root: vscode.Uri): void {
+    this.active();
     const active = (vscode.workspace.workspaceFolders ?? []).some(
       (folder) => folder.uri.toString() === root.toString(),
     );
