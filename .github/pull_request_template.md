@@ -7,7 +7,9 @@ Describe the problem and resulting behavior.
 - [ ] Typecheck, formatting and MCP tests pass.
 - [ ] Virtual-workspace extension-host tests pass.
 - [ ] VSIX packages successfully.
-- [ ] Codex cloud review has completed; findings are addressed.
+- [ ] GitHub CI passes for the current head.
+- [ ] Codex cloud review covers the current head; findings are addressed.
+- [ ] CodeRabbit review covers the current head; findings are addressed.
 - [ ] Security-sensitive changes received a Codex Security scan/review.
 - [ ] SAP backend checks are described accurately (tested or still pending).
 

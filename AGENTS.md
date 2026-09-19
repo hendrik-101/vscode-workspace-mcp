@@ -8,7 +8,7 @@ without the owner's explicit instruction, or publish a release without approval.
 Read the relevant documents before working:
 
 - [Development rules](docs/development.md): **required for every change**; branching,
-  validation, Codex reviews, merge authority and release policy.
+  validation, Codex and CodeRabbit reviews, merge authority and release policy.
 - [Design](docs/design.md): architecture, scope and security boundary.
 - [Security](SECURITY.md): threat model, token handling and reporting.
 - [Client integration](docs/clients.md): supported clients and plugin packaging.

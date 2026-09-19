@@ -23,7 +23,7 @@
   services, including their telemetry. The project's own runtime must not emit
   telemetry. Keep third-party tools and test profiles isolated from the product.
 
-## Pull requests and Codex
+## Pull requests and reviews
 
 - All development reaches main through a PR. Use draft PRs while checks are
   incomplete. Describe the problem, changed behavior and validation evidence.
@@ -32,6 +32,15 @@
   explicitly and verify that a review actually completed.
 - Address consequential findings and resolve review conversations. A request,
   emoji acknowledgement or missing report is not proof of completed review.
+- Every PR also requires CodeRabbit review. Request a new review with
+  `@coderabbitai review` after pushing the changes to be reviewed; this command
+  is authorized by the owner. Verify completion, including after a run was
+  interrupted by a changed base or head.
+- Before declaring a PR complete or ready to merge, all three gates must pass
+  for its current head: GitHub CI, Codex review and CodeRabbit review. Both
+  reviewers must have no unresolved consequential findings. Record the reviewed
+  revision and result; an old clean review does not cover later commits. Findings
+  may be fixed or dismissed with documented technical evidence.
 - Before declaring the initial delivery complete and before releases, run an
   actual Codex Security repository scan and record the scanned revision/result.
   Security-sensitive PRs also need Security Review. `npm audit`, CodeQL and a
@@ -43,7 +52,8 @@
 
 - The owner decides when to merge. Agents must not merge without an explicit
   instruction for that PR. No auto-merge.
-- Require passing CI, resolved review conversations and completed Codex review.
+- Require passing CI, resolved review conversations and clean completed Codex
+  and CodeRabbit reviews for the current head.
 - Squash merge is preferred to keep main's history linear; preserve the PR's
   rationale and validation summary in the resulting commit description.
 - Branch protection applies to administrators too. Do not bypass or temporarily
