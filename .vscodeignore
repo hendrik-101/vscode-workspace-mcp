@@ -1,0 +1,9 @@
+**/*
+!dist/extension.cjs
+!dist/THIRD_PARTY_NOTICES.txt
+!docs/*.md
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+!SECURITY.md

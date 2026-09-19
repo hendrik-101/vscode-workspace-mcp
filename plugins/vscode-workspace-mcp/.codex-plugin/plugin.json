@@ -1,0 +1,19 @@
+{
+  "name": "vscode-workspace-mcp",
+  "version": "0.1.0",
+  "description": "Work with VS Code virtual workspaces through a separately paired MCP server.",
+  "author": { "name": "hendrik-101" },
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "VS Code Workspace MCP",
+    "shortDescription": "Work with live VS Code workspace documents.",
+    "longDescription": "A shared workflow for reading and editing virtual workspace documents through a separately configured workspace_mcp connection.",
+    "developerName": "hendrik-101",
+    "category": "Developer Tools",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Inspect the active VS Code workspace using workspace_mcp."
+    ]
+  }
+}
