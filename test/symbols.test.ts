@@ -60,7 +60,6 @@ test("exactly 1000 legacy document symbols with 999 denied targets are complete"
       fs: {
         stat: async (uri: Uri) => {
           stats.push(uri.toString());
-          assert.notEqual(uri.toString(), outside.toString());
           return { type: uri.toString() === root.toString() ? 2 : 1, size: 6 };
         },
       },
@@ -88,6 +87,7 @@ test("exactly 1000 legacy document symbols with 999 denied targets are complete"
     assert.equal(result.omitted, 999);
     assert.equal(result.truncated, false);
     assert.equal(stats.filter((value) => value === file.toString()).length, 2);
+    assert.ok(!stats.includes(outside.toString()));
   } finally {
     service.dispose();
   }
