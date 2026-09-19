@@ -429,6 +429,12 @@ export async function run(): Promise<void> {
       "folder%252fprivate.txt",
       "folder%25255cprivate.txt",
       "bad%2500name.txt",
+      "%25%32%65%25%32%65/private.txt",
+      "folder%25%32%66private.txt",
+      "folder%25%35%63private.txt",
+      "bad%25%30%30name.txt",
+      "100%25-folder/%25%32%65%25%32%65/private.txt",
+      "%2525%2532%2565%2525%2532%2565/private.txt",
       "folder%2f..%2fprivate.txt",
       "folder%5cprivate.txt",
     ]) {
@@ -480,6 +486,83 @@ export async function run(): Promise<void> {
     assert.equal(readonlyProvider.stored(readonlyFile), "locked content\n");
 
     // Root admission is rechecked on every call, even for an already-open document.
+    console.log("VS Code integration: live buffer size overrides backing size");
+    const large = vscode.Uri.joinPath(first, "large.txt");
+    provider.seed(large, "x".repeat(1024 * 1024 + 1));
+    await rejectsCode(
+      service.read({ uri: large.toString() }),
+      "LIMIT_EXCEEDED",
+    );
+    const largeDocument = await vscode.workspace.openTextDocument(large);
+    const shrink = new vscode.WorkspaceEdit();
+    shrink.replace(
+      large,
+      new vscode.Range(
+        largeDocument.positionAt(0),
+        largeDocument.positionAt(largeDocument.getText().length),
+      ),
+      "small live needle\n",
+    );
+    assert.equal(await vscode.workspace.applyEdit(shrink), true);
+    assert.equal(
+      (await service.read({ uri: large.toString() })).text,
+      "small live needle\n",
+    );
+    const shrunkenSearch = await service.search({
+      uri: large.toString(),
+      query: "needle",
+    });
+    assert.equal(shrunkenSearch.incomplete, false);
+    assert.equal(shrunkenSearch.matches.length, 1);
+    const liveEdit = await service.edit({
+      uri: large.toString(),
+      version: largeDocument.version,
+      edits: [{ range: range(0, 5), text: "short" }],
+    });
+    assert.equal(liveEdit.dirty, true);
+    assert.equal(provider.stored(large).length, 1024 * 1024 + 1);
+    const grow = new vscode.WorkspaceEdit();
+    grow.insert(large, new vscode.Position(0, 0), "x".repeat(1024 * 1024));
+    assert.equal(await vscode.workspace.applyEdit(grow), true);
+    await rejectsCode(
+      service.read({ uri: large.toString() }),
+      "LIMIT_EXCEEDED",
+    );
+
+    console.log("VS Code integration: trailing slash identity is preserved");
+    const slashRoot = uri("vfs-test://slash/project/");
+    const slashFile = slashRoot.with({ path: slashRoot.path + "source.txt" });
+    provider.seed(slashRoot, "", vscode.FileType.Directory);
+    provider.seed(slashFile, "slash content\n");
+    await updateRoots(vscode.workspace.workspaceFolders!.length, 0, [
+      { uri: slashRoot, name: "Exact slash root" },
+    ]);
+    assert.equal(
+      (await service.list({ uri: slashRoot.toString() })).entries[0]?.uri,
+      slashFile.toString(),
+    );
+    assert.equal(
+      (await service.read({ uri: slashFile.toString() })).text,
+      "slash content\n",
+    );
+    await rejectsCode(
+      service.list({ uri: slashRoot.with({ path: "/project" }).toString() }),
+      "OUTSIDE_WORKSPACE",
+    );
+    // A distinct slash-appended target must be statted, rather than its alias.
+    const plainDir = vscode.Uri.joinPath(first, "alias");
+    const slashAlias = plainDir.with({ path: plainDir.path + "/" });
+    provider.seed(plainDir, "", vscode.FileType.Directory);
+    provider.seed(
+      slashAlias,
+      "",
+      vscode.FileType.Directory | vscode.FileType.SymbolicLink,
+    );
+    await rejectsCode(
+      service.list({ uri: slashAlias.toString() }),
+      "SYMLINK_DENIED",
+    );
+
     await updateRoots(initialRootCount + 1, 1);
     await rejectsCode(
       service.read({ uri: sibling.toString() }),
