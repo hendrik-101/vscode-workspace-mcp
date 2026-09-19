@@ -485,7 +485,6 @@ export async function run(): Promise<void> {
     assert.equal(readonlyProvider.writes, 0);
     assert.equal(readonlyProvider.stored(readonlyFile), "locked content\n");
 
-    // Root admission is rechecked on every call, even for an already-open document.
     console.log("VS Code integration: live buffer size overrides backing size");
     const large = vscode.Uri.joinPath(first, "large.txt");
     provider.seed(large, "x".repeat(1024 * 1024 + 1));
@@ -531,7 +530,11 @@ export async function run(): Promise<void> {
 
     console.log("VS Code integration: trailing slash identity is preserved");
     const slashRoot = uri("vfs-test://slash/project/");
+    const plainRoot = slashRoot.with({ path: "/project" });
     const slashFile = slashRoot.with({ path: slashRoot.path + "source.txt" });
+    // VS Code strips the trailing slash when registering a workspace folder.
+    // Seed its actual root separately; requested resource URIs remain distinct.
+    provider.seed(plainRoot, "", vscode.FileType.Directory);
     provider.seed(slashRoot, "", vscode.FileType.Directory);
     provider.seed(slashFile, "slash content\n");
     await updateRoots(vscode.workspace.workspaceFolders!.length, 0, [
@@ -545,9 +548,9 @@ export async function run(): Promise<void> {
       (await service.read({ uri: slashFile.toString() })).text,
       "slash content\n",
     );
-    await rejectsCode(
-      service.list({ uri: slashRoot.with({ path: "/project" }).toString() }),
-      "OUTSIDE_WORKSPACE",
+    assert.equal(
+      vscode.workspace.workspaceFolders!.at(-1)!.uri.toString(),
+      plainRoot.toString(),
     );
     // A distinct slash-appended target must be statted, rather than its alias.
     const plainDir = vscode.Uri.joinPath(first, "alias");
@@ -563,6 +566,7 @@ export async function run(): Promise<void> {
       "SYMLINK_DENIED",
     );
 
+    // Root admission is rechecked even for an already-open document.
     await updateRoots(initialRootCount + 1, 1);
     await rejectsCode(
       service.read({ uri: sibling.toString() }),
