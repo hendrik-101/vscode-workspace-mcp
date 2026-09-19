@@ -11,6 +11,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 function fixture(initialPolicy: string = "ask") {
   const commands = new Map<string, () => Promise<void>>();
   const prompts: { resolve(value?: string): void }[] = [];
+  const warnings: string[] = [];
   const values = new Map<string, string>();
   const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
   const connections: {
@@ -58,8 +59,12 @@ function fixture(initialPolicy: string = "ask") {
     },
     window: {
       createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
-      showWarningMessage: () =>
-        new Promise<string | undefined>((resolve) => prompts.push({ resolve })),
+      showWarningMessage: (message: string) => {
+        warnings.push(message);
+        return new Promise<string | undefined>((resolve) =>
+          prompts.push({ resolve }),
+        );
+      },
       showInformationMessage: async () => undefined,
       showErrorMessage: async () => undefined,
     },
@@ -114,6 +119,7 @@ function fixture(initialPolicy: string = "ask") {
   };
   return {
     command,
+    warnings,
     prompts,
     values,
     settings,
@@ -281,5 +287,50 @@ test("secret change during final startup verification never admits stale credent
   await f.command("start");
   assert.equal(f.connections[0]!.closed, true);
   assert.equal(f.services[0]!.canWrite(), false);
+  await f.command("stop");
+});
+
+for (const fails of [false, true])
+  test(`Always deny revokes before ${fails ? "failing" : "delayed"} settings persistence`, async () => {
+    const f = fixture("allow");
+    await f.command("start");
+    assert.equal(f.services[0]!.canWrite(), true);
+    let finish!: () => void;
+    f.settings.set = () =>
+      new Promise<void>((resolve, reject) => {
+        finish = () =>
+          fails ? reject(new Error("Settings unavailable")) : resolve();
+      }) as unknown as Map<string, unknown>;
+    const changing = f.command("enableWrites");
+    f.prompts[0]!.resolve("Always deny");
+    await tick();
+    assert.equal(f.services[0]!.canWrite(), false);
+    assert.equal(f.settings.get("writePolicy"), "allow");
+    finish();
+    await changing;
+    assert.equal(f.services[0]!.canWrite(), false);
+    await f.command("stop");
+  });
+
+test("secret event read failure stops and reports a safe actionable warning", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.context.secrets.get = async () => {
+    throw new Error("Private provider details");
+  };
+  f.changed();
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  assert.ok(
+    f.warnings.some((message) =>
+      /secure token storage could not be read/.test(message),
+    ),
+  );
+  assert.ok(
+    f.warnings.every(
+      (message) => !message.includes("Private provider details"),
+    ),
+  );
   await f.command("stop");
 });

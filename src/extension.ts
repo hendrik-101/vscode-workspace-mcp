@@ -61,6 +61,11 @@ export function activate(context: vscode.ExtensionContext): void {
     )
       return;
     const decision = writeDecision(choice);
+    // Revocation must not depend on a settings write succeeding or finishing.
+    if (!decision.allow) {
+      session.disableWrites();
+      refresh();
+    }
     if (decision.persist) {
       await settings().update(
         "writePolicy",
@@ -118,8 +123,12 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         },
         () => {
-          if (running === session && requestedSecret === secretGeneration)
+          if (running === session && requestedSecret === secretGeneration) {
             void stop().catch(report);
+            void vscode.window.showWarningMessage(
+              "Workspace MCP stopped because secure token storage could not be read. Check VS Code secret storage and restart the bridge.",
+            );
+          }
         },
       );
     }),
