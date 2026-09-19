@@ -18,6 +18,9 @@ nor stores SAP credentials.
 
 ## Install and connect
 
+Requires **VS Code 1.137 or later**. The extension uses VS Code's bundled Node.js
+runtime; a separate Node.js installation is only needed for development.
+
 1. Download the `workspace-mcp-vsix` artifact from a successful GitHub Actions run,
    or build it below. In VS Code, run **Extensions: Install from VSIX**.
 2. Open your workspace and run **Workspace MCP: Start**. Nothing starts implicitly.
@@ -55,7 +58,7 @@ Search reports truncation/errors: it is not an exhaustive SAP repository index.
 
 ## Development
 
-Node.js 22 or later:
+Node.js 24 LTS (use the latest 24.x patch):
 
 ```sh
 npm ci
@@ -67,7 +70,10 @@ npm run package
 ```
 
 Linux extension-host tests require a display: `xvfb-run -a npm run test:vscode`.
-The test runner downloads VS Code and uses a synthetic non-file FileSystemProvider.
+The test runner downloads VS Code 1.137.0 for both the synthetic non-file
+FileSystemProvider suite and SAP ADT coexistence checks. Set `VSCODE_VERSION` to
+test another supported release. Node.js types and the bundle target stay on 24;
+VS Code API types match the minimum supported VS Code version.
 The VSIX is written to `artifacts/workspace-mcp.vsix`. CI builds that artifact on
 every PR; it does **not** publish a Marketplace release.
 
