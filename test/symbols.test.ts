@@ -11,6 +11,9 @@ import type { WorkspaceService } from "../src/workspace";
 /** Minimal URI fixture for deterministic workspace API boundary tests. */
 class Uri {
   private constructor(private readonly value: URL) {}
+  static from(value: { scheme: string; path: string }): Uri {
+    return Uri.parse(`${value.scheme}:${value.path}`);
+  }
   static parse(value: string): Uri {
     return new Uri(new URL(value));
   }
@@ -179,3 +182,207 @@ test("diff completion rechecks a removed comparison root", async () => {
     service.dispose();
   }
 });
+
+test("disposed workspace symbol requests do not dispatch language providers", async () => {
+  let dispatched = 0;
+  const service = loadService({
+    commands: {
+      executeCommand: async () => {
+        dispatched++;
+        return [];
+      },
+    },
+  });
+  service.dispose();
+  await assert.rejects(
+    service.workspaceSymbols({ query: "class" }),
+    (error: unknown) =>
+      error instanceof contracts.WorkspaceError &&
+      error.code === "SESSION_STOPPED",
+  );
+  assert.equal(dispatched, 0);
+});
+
+test("pending diff snapshots survive capacity pressure, failures and stop", async () => {
+  const root = Uri.parse("vfs-test:/project");
+  const file = Uri.parse("vfs-test:/project/main.txt");
+  const end = { line: 0, character: 6 };
+  let registered = 0;
+  let disposed = 0;
+  let content!: (uri: Uri) => string;
+  const commands: Array<{
+    uri: Uri;
+    resolve(): void;
+    reject(error: Error): void;
+  }> = [];
+  const vscode = {
+    Uri,
+    FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
+    FileSystemError: { FileNotFound: () => new Error("Snapshot expired") },
+    workspace: {
+      workspaceFolders: [{ uri: root }],
+      textDocuments: [
+        {
+          uri: file,
+          isClosed: false,
+          lineCount: 1,
+          version: 1,
+          lineAt: () => ({ range: { end } }),
+          offsetAt: (position: { character: number }) => position.character,
+          getText: () => "source",
+        },
+      ],
+      fs: {
+        stat: async (uri: Uri) => ({
+          type: uri.path.endsWith(".txt") ? 1 : 2,
+          size: 6,
+        }),
+      },
+      registerTextDocumentContentProvider: (
+        _scheme: string,
+        provider: { provideTextDocumentContent(uri: Uri): string },
+      ) => {
+        registered++;
+        content = provider.provideTextDocumentContent;
+        return {
+          dispose: () => {
+            disposed++;
+          },
+        };
+      },
+    },
+    commands: {
+      executeCommand: (_command: string, _left: Uri, right: Uri) =>
+        new Promise<void>((resolve, reject) => {
+          commands.push({ uri: right, resolve, reject });
+        }),
+    },
+  };
+  const service = loadService(vscode);
+  const pending: Array<Promise<{ shown: boolean }>> = [];
+  const start = (text: string) =>
+    service.diff({ uri: file.toString(), version: 1, proposedText: text });
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    for (let index = 0; index < 8; index++)
+      pending.push(start(`proposal-${index}`));
+    await tick();
+    assert.equal(commands.length, 8);
+    assert.equal(registered, 1);
+    await assert.rejects(
+      start("ninth"),
+      (error: unknown) =>
+        error instanceof contracts.WorkspaceError &&
+        error.code === "LIMIT_EXCEEDED",
+    );
+    assert.equal(commands.length, 8);
+    assert.equal(content(commands[0]!.uri), "proposal-0");
+    // Complete one opening; a retry may evict that completed snapshot only.
+    commands[1]!.resolve();
+    await pending[1];
+    const retry = start("retry");
+    pending.push(retry);
+    await tick();
+    assert.equal(commands.length, 9);
+    assert.equal(content(commands[0]!.uri), "proposal-0");
+    assert.equal(content(commands[8]!.uri), "retry");
+    assert.throws(() => content(commands[1]!.uri), /Snapshot expired/);
+    // Failed UI commands free both their pending slot and retained contents.
+    const failed = assert.rejects(retry, /UI failed/);
+    commands[8]!.reject(new Error("UI failed"));
+    await failed;
+    assert.throws(() => content(commands[8]!.uri), /Snapshot expired/);
+    const afterFailure = start("after failure");
+    pending.push(afterFailure);
+    await tick();
+    assert.equal(commands.length, 10);
+    const settled = Promise.allSettled(pending);
+    service.dispose();
+    assert.equal(disposed, 1);
+    assert.throws(() => content(commands[0]!.uri), /Snapshot expired/);
+    commands.forEach((command) => command.resolve());
+    const results = await settled;
+    assert.equal(results[0]?.status, "rejected");
+    await assert.rejects(
+      start("after stop"),
+      (error: unknown) =>
+        error instanceof contracts.WorkspaceError &&
+        error.code === "SESSION_STOPPED",
+    );
+    assert.equal(registered, 1);
+  } finally {
+    service.dispose();
+    commands.forEach((command) => command.resolve());
+    await Promise.allSettled(pending);
+  }
+});
+
+for (const operation of ["documentSymbols", "format"] as const) {
+  test(`${operation} does not dispatch a provider after cancellation during document loading`, async () => {
+    const root = Uri.parse("vfs-test:/project");
+    const file = Uri.parse("vfs-test:/project/main.txt");
+    const end = { line: 0, character: 6 };
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let dispatched = 0;
+    const vscode = {
+      Uri,
+      FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
+      workspace: {
+        workspaceFolders: [{ uri: root }],
+        textDocuments: [
+          {
+            uri: file,
+            isClosed: false,
+            version: 1,
+            lineCount: 1,
+            lineAt: () => ({ range: { end } }),
+            offsetAt: (position: { character: number }) => position.character,
+            getText: () => "source",
+          },
+        ],
+        getConfiguration: () => ({
+          get: (_key: string, fallback: unknown) => fallback,
+        }),
+        fs: {
+          stat: async (uri: Uri) => {
+            entered();
+            await gate;
+            return { type: uri.path.endsWith(".txt") ? 1 : 2, size: 6 };
+          },
+        },
+      },
+      commands: {
+        executeCommand: async () => {
+          dispatched++;
+          return [];
+        },
+      },
+    };
+    const service = loadService(vscode);
+    const controller = new AbortController();
+    const pending =
+      operation === "documentSymbols"
+        ? service.documentSymbols({ uri: file.toString() }, controller.signal)
+        : service.format(
+            { uri: file.toString(), version: 1 },
+            controller.signal,
+          );
+    try {
+      await started;
+      controller.abort();
+      release();
+      await assert.rejects(pending, { name: "AbortError" });
+      assert.equal(dispatched, 0);
+    } finally {
+      release();
+      service.dispose();
+    }
+  });
+}

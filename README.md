@@ -100,7 +100,9 @@ matching symbols or no applicable provider; no ADT capability is assumed.
 `show_diff` accepts `uri` and exactly one of `otherUri` or `proposedText`.
 Proposals also require the current `version` from `read_document`. They use
 immutable read-only content-provider URIs in memory, capped at 1 MiB each and
-eight retained proposals per running bridge. Older proposals expire from the
+eight retained proposals per running bridge. Snapshots still opening are pinned;
+when all eight are pending, another proposal fails with `LIMIT_EXCEEDED` until an
+opening completes. Older completed proposals expire from the
 provider; VS Code may retain already opened models until their tabs close.
 Stopping the bridge releases the snapshot provider and its stored text. No
 proposal is written to disk or applied. Comparing existing URIs opens VS Code's

@@ -154,6 +154,7 @@ export class WorkspaceService implements WorkspaceApi {
 
   private disposed = false;
   private readonly snapshots = new Map<string, string>();
+  private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
 
@@ -163,6 +164,7 @@ export class WorkspaceService implements WorkspaceApi {
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
+    this.pendingSnapshots.clear();
   }
 
   private active(): void {
@@ -262,6 +264,7 @@ export class WorkspaceService implements WorkspaceApi {
     signal?: AbortSignal,
   ): Promise<SymbolResult> {
     signal?.throwIfAborted();
+    this.active();
     if (!query || query.length > MAX_SELECTION)
       fail("INVALID_ARGUMENT", "Provide a query of 1 to 4096 characters.");
     const items = await vscode.commands.executeCommand<
@@ -280,6 +283,8 @@ export class WorkspaceService implements WorkspaceApi {
     const uri = parseUri(value);
     const document = await this.document(uri);
     this.text(document);
+    signal?.throwIfAborted();
+    this.active();
     const items = await vscode.commands.executeCommand<
       Array<vscode.DocumentSymbol | vscode.SymbolInformation>
     >("vscode.executeDocumentSymbolProvider", uri);
@@ -341,6 +346,7 @@ export class WorkspaceService implements WorkspaceApi {
     signal?.throwIfAborted();
     this.active();
     let right: vscode.Uri;
+    let snapshot: string | undefined;
     if (input.otherUri !== undefined) {
       const other = await this.document(parseUri(input.otherUri));
       this.text(other);
@@ -362,28 +368,46 @@ export class WorkspaceService implements WorkspaceApi {
               },
             },
           );
-      if (this.snapshots.size >= 8)
-        this.snapshots.delete(this.snapshots.keys().next().value!);
+      if (this.snapshots.size >= 8) {
+        const expired = [...this.snapshots.keys()].find(
+          (key) => !this.pendingSnapshots.has(key),
+        );
+        if (expired === undefined)
+          fail(
+            "LIMIT_EXCEEDED",
+            "All eight diff snapshots are still opening. Retry after a diff completes.",
+          );
+        this.snapshots.delete(expired);
+      }
       right = vscode.Uri.from({
         scheme: this.snapshotScheme,
         path: `/${randomUUID()}/proposal`,
       });
-      this.snapshots.set(right.toString(), input.proposedText!);
+      snapshot = right.toString();
+      this.snapshots.set(snapshot, input.proposedText!);
+      this.pendingSnapshots.add(snapshot);
     }
-    this.currentRoot(document.uri);
-    if (input.otherUri !== undefined) this.currentRoot(right);
-    signal?.throwIfAborted();
-    await vscode.commands.executeCommand(
-      "vscode.diff",
-      document.uri,
-      right,
-      "Workspace MCP: Compare",
-      { preserveFocus: input.preserveFocus ?? true, preview: true },
-    );
-    signal?.throwIfAborted();
-    this.currentRoot(document.uri);
-    if (input.otherUri !== undefined) this.currentRoot(right);
-    return { shown: true };
+    try {
+      this.currentRoot(document.uri);
+      if (input.otherUri !== undefined) this.currentRoot(right);
+      signal?.throwIfAborted();
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        document.uri,
+        right,
+        "Workspace MCP: Compare",
+        { preserveFocus: input.preserveFocus ?? true, preview: true },
+      );
+      signal?.throwIfAborted();
+      this.currentRoot(document.uri);
+      if (input.otherUri !== undefined) this.currentRoot(right);
+      return { shown: true };
+    } catch (error) {
+      if (snapshot !== undefined) this.snapshots.delete(snapshot);
+      throw error;
+    } finally {
+      if (snapshot !== undefined) this.pendingSnapshots.delete(snapshot);
+    }
   }
 
   /** Computes formatting edits; applying them uses the ordinary guarded edit path. */
@@ -405,6 +429,8 @@ export class WorkspaceService implements WorkspaceApi {
     integer(options.tabSize, "tabSize", 1);
     if (options.tabSize > 32)
       fail("INVALID_ARGUMENT", "tabSize must not exceed 32.");
+    signal?.throwIfAborted();
+    this.active();
     const supplied = input.range
       ? await vscode.commands.executeCommand<vscode.TextEdit[]>(
           "vscode.executeFormatRangeProvider",
@@ -537,6 +563,7 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   private writable(): void {
+    this.active();
     if (!this.allowWrites())
       fail("WRITES_DISABLED", "Workspace writes are disabled.");
     if (!vscode.workspace.isTrusted)
@@ -554,6 +581,7 @@ export class WorkspaceService implements WorkspaceApi {
 
   /** Lists the currently admitted workspace folders as complete URIs. */
   async roots(): Promise<RootInfo[]> {
+    this.active();
     return (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
       uri: folder.uri.toString(),
       name: folder.name,
