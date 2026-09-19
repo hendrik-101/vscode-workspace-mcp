@@ -140,6 +140,9 @@ function isLink(stat: vscode.FileStat): boolean {
 }
 
 export class WorkspaceService implements WorkspaceApi {
+  /**
+   * @param allowWrites Callback rechecked immediately before each mutation.
+   */
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
   private currentRoot(uri: vscode.Uri): vscode.Uri {
@@ -251,6 +254,7 @@ export class WorkspaceService implements WorkspaceApi {
       );
   }
 
+  /** Lists the currently admitted workspace folders as complete URIs. */
   async roots(): Promise<RootInfo[]> {
     return (vscode.workspace.workspaceFolders ?? []).map((folder) => ({
       uri: folder.uri.toString(),
@@ -259,6 +263,10 @@ export class WorkspaceService implements WorkspaceApi {
     }));
   }
 
+  /**
+   * Returns the active editor and open text tabs that remain inside admitted
+   * workspace roots, omitting inaccessible or out-of-workspace resources.
+   */
   async context(): Promise<ContextResult> {
     const result: ContextResult = {
       roots: await this.roots(),
@@ -339,6 +347,10 @@ export class WorkspaceService implements WorkspaceApi {
     return result;
   }
 
+  /**
+   * Lists a workspace directory without following symbolic links.
+   * The result reports omitted links and whether the entry limit was reached.
+   */
   async list({ uri: value }: UriInput): Promise<ListResult> {
     const uri = parseUri(value);
     const stat = await this.authorize(uri);
@@ -389,6 +401,10 @@ export class WorkspaceService implements WorkspaceApi {
     return uri;
   }
 
+  /**
+   * Reads a zero-based, half-open line range from the current live document.
+   * Unsaved buffer content takes precedence over the provider's stored bytes.
+   */
   async read({
     uri: value,
     startLine = 0,
@@ -419,6 +435,10 @@ export class WorkspaceService implements WorkspaceApi {
     };
   }
 
+  /**
+   * Searches live document text for a single-line literal within a file or tree.
+   * Bounded or unreadable traversal returns an incomplete result with details.
+   */
   async search({
     uri: value,
     query,
@@ -570,6 +590,11 @@ export class WorkspaceService implements WorkspaceApi {
     return new vscode.Position(value.line, value.character);
   }
 
+  /**
+   * Applies version-checked edits to a live buffer without saving it.
+   * Write approval, Workspace Trust, disabled Auto Save, and a non-aborted signal
+   * are rechecked before the edit is handed to VS Code.
+   */
   async edit(
     { uri: value, version, edits }: EditInput,
     signal?: AbortSignal,
@@ -655,6 +680,10 @@ export class WorkspaceService implements WorkspaceApi {
     return state(document);
   }
 
+  /**
+   * Explicitly saves the requested live document at the expected version.
+   * The operation fails if saving leaves the document dirty or changes its version.
+   */
   async save(
     { uri: value, version }: SaveInput,
     signal?: AbortSignal,
@@ -682,6 +711,7 @@ export class WorkspaceService implements WorkspaceApi {
     return state(document);
   }
 
+  /** Returns bounded editor diagnostics for an admitted workspace URI. */
   async diagnostics({ uri: value }: UriInput): Promise<DiagnosticsResult> {
     const uri = parseUri(value);
     await this.authorize(uri);

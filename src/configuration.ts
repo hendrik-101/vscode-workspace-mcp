@@ -1,3 +1,7 @@
+/**
+ * Renders MCP client configuration for the bridge URL and bearer token.
+ * The returned text contains the token and must be treated as a secret.
+ */
 export function clientConfiguration(
   client: "codex" | "claude",
   url: string,

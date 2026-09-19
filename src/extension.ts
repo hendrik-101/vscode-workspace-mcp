@@ -8,6 +8,7 @@ let running: BridgeSession | undefined;
 let starting = Promise.resolve();
 let generation = 0;
 
+/** Registers the commands and status item that control this window's bridge session. */
 export function activate(context: vscode.ExtensionContext): void {
   const status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
@@ -140,6 +141,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 }
 
+/** Revokes the active session and waits for any in-progress startup to settle. */
 export async function deactivate(): Promise<void> {
   generation++;
   const session = running;

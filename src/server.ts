@@ -235,6 +235,11 @@ function readBody(request: IncomingMessage): Promise<unknown> {
   });
 }
 
+/**
+ * Starts a bearer-authenticated MCP endpoint on the IPv4 loopback interface.
+ * An omitted port requests an ephemeral port. The returned token authorizes the
+ * endpoint until `close` shuts down its listener and active connections.
+ */
 export async function startServer(
   workspace: WorkspaceApi,
   options: { port?: number } = {},
