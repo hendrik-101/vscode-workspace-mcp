@@ -66,6 +66,22 @@ async function updateRoots(
 }
 
 export async function run(): Promise<void> {
+  const adtVersion = process.env.WORKSPACE_MCP_ADT_VERSION;
+  if (adtVersion) {
+    const adt = vscode.extensions.getExtension("SAPSE.adt-vscode");
+    assert.ok(adt, "SAP ADT must be installed in the isolated test profile");
+    assert.equal(adt.packageJSON.version, adtVersion);
+    await adt.activate();
+    assert.equal(adt.isActive, true);
+    assert.notEqual(
+      vscode.workspace.fs.isWritableFileSystem("abap"),
+      undefined,
+      "SAP ADT must register its abap filesystem provider without a backend",
+    );
+    console.log(
+      `SAP ADT ${adtVersion}: active; abap provider registered; no backend configured`,
+    );
+  }
   console.log("VS Code integration: registering virtual providers");
   const provider = new MemoryProvider();
   const readonlyProvider = new MemoryProvider();

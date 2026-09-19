@@ -3,10 +3,16 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
+import {
+  downloadAndUnzipVSCode,
+  resolveCliArgsFromVSCodeExecutablePath,
+  runTests,
+} from "@vscode/test-electron";
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporary = await mkdtemp(join(tmpdir(), "workspace-mcp-vscode-"));
+const withAdt = process.argv.includes("--adt");
+const adtVersion = "1.1.2";
 
 try {
   execFileSync(
@@ -18,7 +24,7 @@ try {
     },
   );
   const vscodeExecutablePath = await downloadAndUnzipVSCode({
-    version: process.env.VSCODE_VERSION || "1.102.3",
+    version: process.env.VSCODE_VERSION || (withAdt ? "1.105.1" : "1.102.3"),
     cachePath: join(project, ".vscode-test"),
     timeout: 30_000,
   });
@@ -34,6 +40,7 @@ try {
   const workspace = join(temporary, "workspace");
   const workspaceFile = join(temporary, "integration.code-workspace");
   const userData = join(temporary, "user-data");
+  const extensions = join(temporary, "extensions");
   await mkdir(workspace);
   // Begin in multi-root mode: converting a single folder during a test restarts
   // the extension host and cancels the running suite.
@@ -52,10 +59,35 @@ try {
       "update.mode": "none",
     }),
   );
+  if (withAdt) {
+    const [cli, ...args] = resolveCliArgsFromVSCodeExecutablePath(
+      vscodeExecutablePath,
+      { reuseMachineInstall: true },
+    );
+    execFileSync(
+      cli,
+      [
+        ...args,
+        "--no-sandbox",
+        "--disable-telemetry",
+        "--disable-crash-reporter",
+        `--user-data-dir=${userData}`,
+        `--extensions-dir=${extensions}`,
+        "--install-extension",
+        `SAPSE.adt-vscode@${adtVersion}`,
+      ],
+      {
+        stdio: "inherit",
+        timeout: 180_000,
+        shell: process.platform === "win32",
+      },
+    );
+  }
   await runTests({
     vscodeExecutablePath,
     extensionDevelopmentPath: project,
     extensionTestsPath: join(project, "dist/test/vscode.cjs"),
+    extensionTestsEnv: { WORKSPACE_MCP_ADT_VERSION: withAdt ? adtVersion : "" },
     launchArgs: [
       workspaceFile,
       "--no-sandbox",
@@ -63,9 +95,9 @@ try {
       "--disable-workspace-trust",
       "--skip-welcome",
       "--skip-release-notes",
-      "--disable-extensions",
+      ...(withAdt ? [] : ["--disable-extensions"]),
       `--user-data-dir=${userData}`,
-      `--extensions-dir=${join(temporary, "extensions")}`,
+      `--extensions-dir=${extensions}`,
     ],
   });
 } catch (error) {

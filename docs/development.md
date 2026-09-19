@@ -19,6 +19,9 @@
   `npm run test:vscode`, `npm run package`, and a production dependency audit.
 - Record actual results and limitations. Synthetic VFS tests never count as
   SAP-backend or native-client acceptance. A check that could not run is pending.
+- Installing and running VS Code/SAP ADT for tests may use Microsoft/SAP network
+  services, including their telemetry. The project's own runtime must not emit
+  telemetry. Keep third-party tools and test profiles isolated from the product.
 
 ## Pull requests and Codex
 

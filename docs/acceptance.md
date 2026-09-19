@@ -1,5 +1,17 @@
 # SAP ADT acceptance checklist
 
+## Automated coexistence check
+
+`xvfb-run -a npm run test:vscode -- --adt` installs SAPSE.adt-vscode 1.1.2
+in an isolated VS Code 1.105.1 profile with no destinations or credentials.
+It checks ADT activation and registration of the `abap` filesystem provider,
+then runs the bridge's synthetic VFS suite with ADT loaded. CI runs this check.
+This does not establish that real ABAP objects can be listed, read or saved.
+Microsoft/SAP downloads and third-party network behavior are allowed for setup;
+the no-telemetry requirement applies to this project's own runtime code.
+
+## Manual backend and client checks
+
 Run on a disposable development object with an authorized SAP development user.
 Never paste private sources, system URLs or tokens into public feedback.
 

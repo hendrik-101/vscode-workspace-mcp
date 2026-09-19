@@ -32,6 +32,8 @@ jobs:
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - run: xvfb-run -a npm run test:vscode
+      - name: SAP ADT coexistence without a backend
+        run: xvfb-run -a npm run test:vscode -- --adt
       - run: npm run package
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
