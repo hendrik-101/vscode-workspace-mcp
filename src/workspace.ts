@@ -235,24 +235,24 @@ export class WorkspaceService implements WorkspaceApi {
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
   private disposed = false;
-  private readonly searchCursors = new Map<string, SearchContinuation>();
-  private searchRoots: vscode.Disposable | undefined;
-  private searchGeneration = 0;
-  private activeSearches = 0;
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
+  private readonly searchCursors = new Map<string, SearchContinuation>();
+  private searchRoots: vscode.Disposable | undefined;
+  private searchGeneration = 0;
+  private activeSearches = 0;
 
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
     this.disposed = true;
-    this.searchRoots?.dispose();
-    this.searchCursors.clear();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
     this.pendingSnapshots.clear();
+    this.searchRoots?.dispose();
+    this.searchCursors.clear();
   }
 
   private active(): void {
