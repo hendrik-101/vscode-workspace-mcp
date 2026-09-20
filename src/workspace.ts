@@ -545,7 +545,9 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   /** Validate all visible targets as one operation; never filter an unsafe edit into a safe-looking plan. */
-  private async refactoringQuery<T>(
+  private async refactoringQuery<
+    T extends Refactoring.RenameResult | Refactoring.ActionsResult,
+  >(
     input: SaveInput,
     signal: AbortSignal | undefined,
     query: (
@@ -566,20 +568,23 @@ export class WorkspaceService implements WorkspaceApi {
     const openDocuments = vscode.workspace.textDocuments;
     if (openDocuments.length > 1000)
       fail("LIMIT_EXCEEDED", "Provider snapshot exceeds 1000 open documents.");
-    const initial = new Map<string, number>();
+    const initial = new Map<
+      string,
+      { document: vscode.TextDocument; version: number }
+    >();
     let initialBytes = 0;
     for (const document of openDocuments) {
       const uri = document.uri.toString();
       initialBytes += Buffer.byteLength(uri);
       if (initialBytes > 256 * 1024)
         fail("LIMIT_EXCEEDED", "Provider snapshot URI text exceeds 256 KiB.");
-      initial.set(uri, document.version);
+      initial.set(uri, { document, version: document.version });
     }
     const changed = new Set<string>();
     let changedBytes = 0;
     let trackingOverflow = false;
     const listener = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (trackingOverflow) return;
+      if (trackingOverflow || event.contentChanges?.length === 0) return;
       const uri = event.document.uri.toString();
       if (changed.has(uri)) return;
       changedBytes += Buffer.byteLength(uri);
@@ -641,7 +646,14 @@ export class WorkspaceService implements WorkspaceApi {
           );
           signal?.throwIfAborted();
           this.active();
-          const version = initial.get(target.toString()) ?? document.version;
+          const previous =
+            observed.get(target.toString()) ?? initial.get(target.toString());
+          if (previous && previous.document !== document)
+            fail(
+              "VERSION_CONFLICT",
+              "A provider target was closed and reopened during preview.",
+            );
+          const version = previous?.version ?? document.version;
           this.expected(document, version);
           observed.set(target.toString(), { document, version });
           editCount += edits.length;
@@ -686,6 +698,13 @@ export class WorkspaceService implements WorkspaceApi {
           );
         this.expected(document, version);
       }
+      // Saves can change dirty state without changing content or document versions.
+      // Refresh every returned state after all asynchronous authorization has ended.
+      Object.assign(result, state(source));
+      const previews = "preview" in result ? [result.preview] : result.actions;
+      for (const preview of previews)
+        for (const snapshot of preview.documents)
+          Object.assign(snapshot, state(observed.get(snapshot.uri)!.document));
       return result;
     } finally {
       cleanup();

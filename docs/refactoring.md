@@ -12,7 +12,9 @@ including each live buffer's URI, version and dirty state. All visible targets
 must pass containment, symlink, size, exact-range and overlap validation; one
 unsafe target rejects the whole request. A rename is never filtered into a
 smaller edit. Changes to any observed target during the request reject the
-preview, including changes during the provider call. Roots and versions are
+preview, including changes during the provider call and same-version document
+replacement after close/reopen. Dirty-state-only changes are allowed; returned
+dirty states are refreshed after all authorization finishes. Roots and versions are
 checked again after all asynchronous work. Cancellation and stopped sessions
 also discard pending results. Change observers are released immediately on
 cancellation or session stop, even when a provider never settles. Tracking is

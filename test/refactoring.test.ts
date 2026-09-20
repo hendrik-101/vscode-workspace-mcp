@@ -49,7 +49,10 @@ const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
 }).code;
 function fixture() {
   const listeners = new Set<
-    (event: { document: (typeof documents)[number] }) => void
+    (event: {
+      document: (typeof documents)[number];
+      contentChanges?: readonly unknown[];
+    }) => void
   >();
   const documents = ["/project/a", "/project/b"].map((path) => ({
     uri: new Uri(path),
@@ -83,7 +86,10 @@ function fixture() {
           (document) => document.uri.toString() === uri.toString(),
         )!,
       onDidChangeTextDocument: (
-        listener: (event: { document: (typeof documents)[number] }) => void,
+        listener: (event: {
+          document: (typeof documents)[number];
+          contentChanges?: readonly unknown[];
+        }) => void,
       ) => {
         listeners.add(listener);
         return { dispose: () => listeners.delete(listener) };
@@ -447,4 +453,73 @@ for (const blockedCall of [1, 2, 3, 4, 5, 6]) {
     assert.equal(f.listeners.size, 0);
     if (blockedCall <= 2) assert.equal(f.calls.length, 0);
   });
+}
+
+test("a target closed and reopened at the same version rejects the provider preview", async () => {
+  const f = fixture();
+  f.supply(() => {
+    const original = f.documents[1]!;
+    original.isClosed = true;
+    const replacement = {
+      ...original,
+      isClosed: false,
+      getText: () => "change",
+    };
+    f.vscode.workspace.textDocuments = [f.documents[0]!, replacement];
+    return { entries: () => [[original.uri, [{ range, newText: "after" }]]] };
+  });
+  await assert.rejects(
+    f.service.rename(f.input),
+    errorCode("VERSION_CONFLICT"),
+  );
+  assert.equal(f.listeners.size, 0);
+});
+
+for (const operation of ["rename", "codeActions"] as const) {
+  for (const emitEvent of [false, true]) {
+    test(`${operation} refreshes every dirty state after a save during final authorization (${emitEvent ? "dirty event" : "no event"})`, async () => {
+      const f = fixture();
+      let statCalls = 0;
+      const stat = f.vscode.workspace.fs.stat;
+      f.vscode.workspace.fs.stat = async (uri) => {
+        const result = await stat(uri);
+        if (++statCalls === 7) {
+          for (const document of f.documents) {
+            document.isDirty = false;
+            if (emitEvent)
+              f.listeners.forEach((listener) =>
+                listener({ document, contentChanges: [] }),
+              );
+          }
+        }
+        return result;
+      };
+      const edit = {
+        entries: () =>
+          f.documents.map((document) => [
+            document.uri,
+            [{ range, newText: "after" }],
+          ]),
+      };
+      if (operation === "codeActions") f.supply(() => [{ title: "Fix", edit }]);
+      else f.supply(() => edit);
+      const result =
+        operation === "rename"
+          ? await f.service.rename(f.input)
+          : await f.service.codeActions({
+              uri: f.input.uri,
+              version: 3,
+              range,
+              kind: "quickfix",
+            });
+      const preview = "preview" in result ? result.preview : result.actions[0]!;
+      assert.equal(result.dirty, false);
+      assert.equal(preview.documents.length, 2);
+      assert.ok(
+        preview.documents.every(
+          (document) => document.dirty === false && document.version === 3,
+        ),
+      );
+    });
+  }
 }
