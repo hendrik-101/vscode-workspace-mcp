@@ -232,6 +232,28 @@ function createMcpServer(
     (args) => workspace.format(args, signal),
     false,
   );
+  tool(
+    "preview_rename",
+    "Preview the text portion of a language-provider rename across admitted files. Automatic application is unsupported because public WorkspaceEdit cannot reveal all operations. Never apply this incomplete projection as a rename.",
+    z.strictObject({
+      uri,
+      version: index,
+      position,
+      newName: z.string().min(1).max(4096),
+    }),
+    (args) => workspace.rename(args, signal),
+  );
+  tool(
+    "preview_code_actions",
+    "List up to 20 resolved quickfix or refactor actions with bounded multi-document text previews. Commands are never executed. Automatic application and complete operation inspection are unsupported; empty results do not prove provider absence.",
+    z.strictObject({
+      uri,
+      version: index,
+      range: z.strictObject({ start: position, end: position }),
+      kind: z.enum(["quickfix", "refactor"]),
+    }),
+    (args) => workspace.codeActions(args, signal),
+  );
   return server;
 }
 

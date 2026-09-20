@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
   WorkspaceError,
+  type Refactoring,
   type ShowInput,
   type SymbolsInput,
   type SymbolResult,
@@ -465,6 +466,185 @@ export class WorkspaceService implements WorkspaceApi {
         )
       : state(document);
     return { ...final, edits, applied };
+  }
+
+  /** Preview only: public WorkspaceEdit.entries() cannot enumerate file/notebook operations. */
+  async rename(
+    input: Refactoring.RenameInput,
+    signal?: AbortSignal,
+  ): Promise<Refactoring.RenameResult> {
+    if (
+      typeof input.newName !== "string" ||
+      !input.newName.trim() ||
+      input.newName.length > 4096
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "Provide a nonempty new name of at most 4096 characters.",
+      );
+    return this.refactoringQuery(input, signal, async (document, preview) => {
+      const supplied =
+        await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+          "vscode.executeDocumentRenameProvider",
+          document.uri,
+          this.exactPosition(document, input.position),
+          input.newName,
+        );
+      return {
+        ...state(document),
+        providerResult: !!supplied,
+        preview: await preview(supplied),
+      };
+    });
+  }
+
+  /** Resolve a bounded number of provider actions without executing their commands. */
+  async codeActions(
+    input: Refactoring.ActionsInput,
+    signal?: AbortSignal,
+  ): Promise<Refactoring.ActionsResult> {
+    if (input.kind !== "quickfix" && input.kind !== "refactor")
+      fail("INVALID_ARGUMENT", "Action kind must be quickfix or refactor.");
+    return this.refactoringQuery(input, signal, async (document, preview) => {
+      const selected = this.exactRange(document, input.range);
+      const supplied = await vscode.commands.executeCommand<
+        Array<vscode.CodeAction | vscode.Command>
+      >(
+        "vscode.executeCodeActionProvider",
+        document.uri,
+        new vscode.Selection(selected.start, selected.end),
+        input.kind,
+        20,
+      );
+      const actions: Refactoring.ActionsResult["actions"] = [];
+      for (const action of (supplied ?? []).slice(0, 20)) {
+        const codeAction =
+          typeof action.command !== "string"
+            ? (action as vscode.CodeAction)
+            : undefined;
+        const result = await preview(codeAction?.edit);
+        if (action.command) result.reasons.push("COMMAND_REQUIRED");
+        if (codeAction?.disabled) result.reasons.push("DISABLED");
+        actions.push({
+          ...result,
+          title: action.title.slice(0, 512),
+          ...(codeAction?.kind
+            ? { kind: codeAction.kind.value.slice(0, 256) }
+            : {}),
+          preferred: codeAction?.isPreferred === true,
+        });
+      }
+      return {
+        ...state(document),
+        actions,
+        truncated: (supplied?.length ?? 0) > 20,
+      };
+    });
+  }
+
+  /** Validate all visible targets as one operation; never filter an unsafe edit into a safe-looking plan. */
+  private async refactoringQuery<T>(
+    input: SaveInput,
+    signal: AbortSignal | undefined,
+    query: (
+      document: vscode.TextDocument,
+      preview: (
+        edit: vscode.WorkspaceEdit | undefined,
+      ) => Promise<Refactoring.Preview>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    const source = await this.document(parseUri(input.uri));
+    this.expected(source, input.version);
+    const observed = new Map<
+      string,
+      { document: vscode.TextDocument; version: number }
+    >();
+    const initial = new Map(
+      vscode.workspace.textDocuments.map((document) => [
+        document.uri.toString(),
+        document.version,
+      ]),
+    );
+    const changed = new Set<string>();
+    const listener = vscode.workspace.onDidChangeTextDocument((event) =>
+      changed.add(event.document.uri.toString()),
+    );
+    let editCount = 0;
+    let documentCount = 0;
+    let bytes = 0;
+    observed.set(source.uri.toString(), {
+      document: source,
+      version: input.version,
+    });
+    try {
+      signal?.throwIfAborted();
+      this.active();
+      const result = await query(source, async (edit) => {
+        signal?.throwIfAborted();
+        this.active();
+        const preview: Refactoring.Preview = {
+          supported: false,
+          applicable: false,
+          complete: false,
+          reasons: [edit ? "OPAQUE_WORKSPACE_EDIT" : "NO_EDIT"],
+          documents: [],
+        };
+        if (!edit) return preview;
+        const entries = edit.entries();
+        documentCount += entries.length;
+        if (documentCount > 20)
+          fail(
+            "LIMIT_EXCEEDED",
+            "Provider previews exceed 20 document entries.",
+          );
+        for (const [target, edits] of entries) {
+          signal?.throwIfAborted();
+          bytes += Buffer.byteLength(target.toString());
+          if (bytes > 256 * 1024)
+            fail("LIMIT_EXCEEDED", "Provider previews exceed 256 KiB.");
+          const document = await this.document(parseUri(target.toString()));
+          const version = initial.get(target.toString()) ?? document.version;
+          this.expected(document, version);
+          observed.set(target.toString(), { document, version });
+          editCount += edits.length;
+          if (editCount > 100)
+            fail("LIMIT_EXCEEDED", "Provider previews exceed 100 text edits.");
+          const textEdits = edits.map((edit) => {
+            if (typeof edit.newText !== "string")
+              fail(
+                "INVALID_ARGUMENT",
+                "Provider edit is not a plain text edit.",
+              );
+            bytes +=
+              Buffer.byteLength(edit.newText) +
+              Buffer.byteLength(target.toString());
+            if (bytes > 256 * 1024)
+              fail("LIMIT_EXCEEDED", "Provider previews exceed 256 KiB.");
+            return { range: range(edit.range), text: edit.newText };
+          });
+          this.checkedEdits(document, textEdits);
+          preview.documents.push({ ...state(document), edits: textEdits });
+        }
+        return preview;
+      });
+      // Reauthorize every target after provider work, then check all versions without awaits.
+      for (const { document } of observed.values())
+        await this.authorize(document.uri);
+      signal?.throwIfAborted();
+      for (const [uri, { document, version }] of observed) {
+        this.currentRoot(document.uri);
+        if (changed.has(uri) || document.isClosed)
+          fail(
+            "VERSION_CONFLICT",
+            "A provider target changed during preview. Request a fresh preview.",
+          );
+        this.expected(document, version);
+      }
+      return result;
+    } finally {
+      listener.dispose();
+    }
   }
 
   private currentRoot(uri: vscode.Uri): vscode.Uri {

@@ -18,6 +18,26 @@ const workspace: WorkspaceApi = {
     edits: [],
     applied: false,
   }),
+  rename: async ({ uri, version }) => ({
+    uri,
+    version,
+    dirty: false,
+    providerResult: false,
+    preview: {
+      supported: false,
+      applicable: false,
+      complete: false,
+      reasons: ["NO_EDIT"],
+      documents: [],
+    },
+  }),
+  codeActions: async ({ uri, version }) => ({
+    uri,
+    version,
+    dirty: false,
+    actions: [],
+    truncated: false,
+  }),
   roots: async () => [{ uri: "memfs:/project", name: "project", index: 0 }],
   context: async () => ({ roots: [], tabs: [], truncated: false }),
   list: async ({ uri }) => ({
@@ -132,6 +152,8 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "format_document",
     "get_diagnostics",
     "list_directory",
+    "preview_code_actions",
+    "preview_rename",
     "read_document",
     "save_document",
     "search_workspace",
@@ -144,6 +166,27 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
     ["document_symbols", { uri: "memfs:/project/a.abap" }],
     ["workspace_symbols", { query: "class" }],
+    [
+      "preview_rename",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        position: { line: 0, character: 0 },
+        newName: "renamed",
+      },
+    ],
+    [
+      "preview_code_actions",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        kind: "quickfix",
+      },
+    ],
     [
       "show_diff",
       { uri: "memfs:/project/a.abap", proposedText: "", version: 4 },
@@ -165,6 +208,28 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
     ],
     ["workspace_symbols", { query: "" }],
+    [
+      "preview_rename",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        position: { line: 0, character: 0 },
+        newName: "renamed",
+        apply: true,
+      },
+    ],
+    [
+      "preview_code_actions",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        kind: "source",
+      },
+    ],
   ] as const) {
     assert.equal(
       (await client.callTool({ name, arguments: args })).isError,

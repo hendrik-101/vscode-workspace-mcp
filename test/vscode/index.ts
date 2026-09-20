@@ -7,6 +7,7 @@ import {
   type EditInput,
 } from "../../src/types";
 import { MemoryProvider } from "./memory-provider";
+import { refactoringTools } from "./refactoring";
 
 const uri = (value: string): vscode.Uri => vscode.Uri.parse(value);
 const range = (start: number, end: number) => ({
@@ -221,6 +222,7 @@ export async function run(): Promise<void> {
     }
 
     await ideTools(provider, first, outside, linkedFile);
+    await refactoringTools(provider, first, second, outside, linkedFile);
     const initial = await service.read({ uri: file.toString() });
     await rejectsCode(
       service.edit({

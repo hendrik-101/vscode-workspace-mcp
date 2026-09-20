@@ -72,6 +72,41 @@ export interface FormatResult extends DocumentState {
   applied: boolean;
 }
 
+/** Provider previews are observations, never independently applicable edit plans. */
+export namespace Refactoring {
+  export interface RenameInput extends UriInput {
+    version: number;
+    position: Position;
+    newName: string;
+  }
+  export interface ActionsInput extends UriInput {
+    version: number;
+    range: TextRange;
+    kind: "quickfix" | "refactor";
+  }
+  export interface Preview {
+    /** Automatic application is unsupported: public WorkspaceEdit hides operations. */
+    supported: false;
+    applicable: false;
+    complete: false;
+    reasons: Array<
+      "OPAQUE_WORKSPACE_EDIT" | "COMMAND_REQUIRED" | "DISABLED" | "NO_EDIT"
+    >;
+    /** Only publicly inspectable text edits; never the complete provider operation. */
+    documents: Array<DocumentState & { edits: EditInput["edits"] }>;
+  }
+  export interface RenameResult extends DocumentState {
+    providerResult: boolean;
+    preview: Preview;
+  }
+  export interface ActionsResult extends DocumentState {
+    actions: Array<
+      Preview & { title: string; kind?: string; preferred: boolean }
+    >;
+    truncated: boolean;
+  }
+}
+
 export interface DocumentState {
   uri: string;
   version: number;
@@ -143,6 +178,14 @@ export interface WorkspaceApi {
   documentSymbols(input: UriInput, signal?: AbortSignal): Promise<SymbolResult>;
   diff(input: DiffInput, signal?: AbortSignal): Promise<{ shown: boolean }>;
   format(input: FormatInput, signal?: AbortSignal): Promise<FormatResult>;
+  rename(
+    input: Refactoring.RenameInput,
+    signal?: AbortSignal,
+  ): Promise<Refactoring.RenameResult>;
+  codeActions(
+    input: Refactoring.ActionsInput,
+    signal?: AbortSignal,
+  ): Promise<Refactoring.ActionsResult>;
   roots(): Promise<RootInfo[]>;
   context(): Promise<ContextResult>;
   list(input: UriInput): Promise<ListResult>;
