@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
@@ -31,6 +31,88 @@ const MAX_LIST_ENTRIES = 1000;
 const MAX_SEARCH_FILES = 200;
 const MAX_SEARCH_ENTRIES = 2000;
 const MAX_SEARCH_DEPTH = 12;
+const MAX_SEARCH_CURSORS = 16;
+const SEARCH_TTL = 5 * 60 * 1000;
+const MAX_SEARCH_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_SEARCH_TOTAL_ENTRIES = 20_000;
+const MAX_SEARCH_PAGES = 1000;
+const MAX_SEARCH_URI = 8192;
+const MAX_SEARCH_PENDING_CHARACTERS = 128 * 1024;
+
+interface SearchEntry {
+  uri: vscode.Uri;
+  depth: number;
+  type: vscode.FileType;
+  offset?: number;
+  version?: number;
+  contentHash?: string;
+}
+interface SearchContinuation {
+  fingerprint: string;
+  expires: number;
+  generation: number;
+  pending: SearchEntry[];
+  pendingCharacters: number;
+  bytes: number;
+  entries: number;
+  pages: number;
+  incomplete: boolean;
+  limits: Set<string>;
+}
+
+/** Bounded dynamic programming avoids regexp backtracking on untrusted globs. */
+function filenameFilter(
+  patterns: string[],
+  budget: { remaining: number },
+): (path: string) => boolean {
+  const compiled = patterns.map((pattern) => {
+    const tokens: string[] = [];
+    for (let i = 0; i < pattern.length; i++) {
+      if (pattern[i] === "*" && pattern[i + 1] === "*") {
+        i++;
+        if (pattern[i + 1] === "/") {
+          tokens.push("**/");
+          i++;
+        } else tokens.push("**");
+      } else tokens.push(pattern[i]!);
+    }
+    return { tokens, basename: !pattern.includes("/") };
+  });
+  return (path) =>
+    compiled.some(({ tokens, basename }) => {
+      const value = basename ? path.slice(path.lastIndexOf("/") + 1) : path;
+      budget.remaining -= tokens.length * (value.length + 1);
+      if (budget.remaining < 0)
+        fail("LIMIT_EXCEEDED", "Filename matching exceeded its work budget.");
+      let previous = new Uint8Array(value.length + 1);
+      previous[0] = 1;
+      for (const token of tokens) {
+        const next = new Uint8Array(value.length + 1);
+        if (token === "*" || token === "**" || token === "**/") {
+          next[0] = previous[0]!;
+          let reachable = previous[0]!;
+          for (let i = 1; i <= value.length; i++) {
+            if (token === "**/") {
+              next[i] = previous[i]! || (value[i - 1] === "/" ? reachable : 0);
+              reachable ||= previous[i]!;
+            } else
+              next[i] =
+                previous[i]! ||
+                (token === "**" || value[i - 1] !== "/" ? next[i - 1]! : 0);
+          }
+        } else {
+          for (let i = 1; i <= value.length; i++)
+            next[i] =
+              previous[i - 1]! &&
+              (token === "?" ? value[i - 1] !== "/" : token === value[i - 1])
+                ? 1
+                : 0;
+        }
+        previous = next;
+      }
+      return previous[value.length] === 1;
+    });
+}
 const MAX_SEARCH_BYTES = 4 * MAX_FILE_BYTES;
 const MAX_RESULTS = 100;
 const MAX_PREVIEW = 1000;
@@ -153,6 +235,10 @@ export class WorkspaceService implements WorkspaceApi {
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
   private disposed = false;
+  private readonly searchCursors = new Map<string, SearchContinuation>();
+  private searchRoots: vscode.Disposable | undefined;
+  private searchGeneration = 0;
+  private activeSearches = 0;
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
@@ -161,6 +247,8 @@ export class WorkspaceService implements WorkspaceApi {
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
     this.disposed = true;
+    this.searchRoots?.dispose();
+    this.searchCursors.clear();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
@@ -773,139 +861,346 @@ export class WorkspaceService implements WorkspaceApi {
     };
   }
 
-  /**
-   * Searches live document text for a single-line literal within a file or tree.
-   * Bounded or unreadable traversal returns an incomplete result with details.
-   */
-  async search({
-    uri: value,
-    query,
-    maxResults = MAX_RESULTS,
-  }: SearchInput): Promise<SearchResult> {
+  /** Progressive live search. Cursors retain traversal positions, never source text. */
+  async search(
+    input: SearchInput,
+    signal?: AbortSignal,
+  ): Promise<SearchResult> {
+    signal?.throwIfAborted();
+    this.active();
+    const {
+      uri: value,
+      query,
+      maxResults = MAX_RESULTS,
+      cursor,
+      include = [],
+      exclude = [],
+      caseSensitive = true,
+      wholeWord = false,
+      contextLines = 0,
+    } = input;
     if (
       typeof query !== "string" ||
       !query ||
       query.length > MAX_SELECTION ||
       /[\r\n]/.test(query)
-    ) {
+    )
       fail(
         "INVALID_ARGUMENT",
         "query must be a nonempty single-line literal of at most 4096 characters.",
       );
-    }
     integer(maxResults, "maxResults", 1);
-    if (maxResults > MAX_RESULTS)
-      fail("INVALID_ARGUMENT", "maxResults must not exceed 100.");
+    integer(contextLines, "contextLines");
+    if (
+      maxResults > MAX_RESULTS ||
+      contextLines > 5 ||
+      typeof caseSensitive !== "boolean" ||
+      typeof wholeWord !== "boolean"
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "Invalid search options; maxResults is at most 100 and contextLines at most 5.",
+      );
+    for (const patterns of [include, exclude]) {
+      if (
+        !Array.isArray(patterns) ||
+        patterns.length > 20 ||
+        patterns.some(
+          (p) =>
+            typeof p !== "string" || !p || p.length > 256 || /[\\\r\n]/.test(p),
+        )
+      )
+        fail(
+          "INVALID_ARGUMENT",
+          "Filters must contain at most 20 filename globs of 1 to 256 characters.",
+        );
+    }
+    if (value.length > MAX_SEARCH_URI)
+      fail("INVALID_ARGUMENT", "Search URI exceeds 8192 characters.");
     const uri = parseUri(value);
-    const initialStat = await this.authorize(uri);
-    const result: SearchResult = {
-      uri: uri.toString(),
-      query,
-      matches: [],
-      filesSearched: 0,
-      truncated: false,
-      incomplete: false,
-      errors: [],
-    };
-    const queue: Array<{
-      uri: vscode.Uri;
-      depth: number;
-      type: vscode.FileType;
-    }> = [{ uri, depth: 0, type: initialStat.type }];
-    let visited = 0;
-    let filesVisited = 0;
-    let bytes = 0;
-    for (let cursor = 0; cursor < queue.length; cursor++) {
-      const item = queue[cursor]!;
-      if (++visited > MAX_SEARCH_ENTRIES) {
-        result.truncated = true;
-        break;
-      }
-      try {
-        if ((item.type & vscode.FileType.SymbolicLink) !== 0) {
-          fail("SYMLINK_DENIED", "Symbolic link skipped.");
+    if (uri.toString().length > MAX_SEARCH_URI)
+      fail("INVALID_ARGUMENT", "Encoded search URI exceeds 8192 characters.");
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify([
+          uri.toString(),
+          query,
+          maxResults,
+          include,
+          exclude,
+          caseSensitive,
+          wholeWord,
+          contextLines,
+        ]),
+      )
+      .digest("hex");
+    this.searchRoots ??= vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      this.searchGeneration++;
+      this.searchCursors.clear();
+    });
+    for (const [key, state] of this.searchCursors) {
+      if (state.expires <= Date.now()) this.searchCursors.delete(key);
+    }
+    let state: SearchContinuation;
+    if (cursor !== undefined) {
+      if (typeof cursor !== "string" || cursor.length !== 36)
+        fail("INVALID_ARGUMENT", "Invalid search cursor. Restart the search.");
+      const saved = this.searchCursors.get(cursor);
+      // Consume synchronously before any await: concurrent/replayed pages fail closed.
+      this.searchCursors.delete(cursor);
+      if (!saved || saved.fingerprint !== fingerprint)
+        fail(
+          "SEARCH_INVALIDATED",
+          "Search cursor expired, was invalidated, or does not match these options. Restart the search.",
+        );
+      state = saved;
+    } else {
+      state = {
+        fingerprint,
+        expires: Date.now() + SEARCH_TTL,
+        generation: this.searchGeneration,
+        pending: [],
+        pendingCharacters: 0,
+        bytes: 0,
+        entries: 0,
+        pages: 0,
+        incomplete: false,
+        limits: new Set(),
+      };
+    }
+    if (this.activeSearches >= MAX_SEARCH_CURSORS)
+      fail("LIMIT_EXCEEDED", "Too many searches are running.");
+    this.activeSearches++;
+    try {
+      const checkpoint = () => {
+        signal?.throwIfAborted();
+        this.currentRoot(uri);
+        if (
+          state.generation !== this.searchGeneration ||
+          state.expires <= Date.now()
+        )
+          fail(
+            "SEARCH_INVALIDATED",
+            "Workspace roots changed or search expired. Restart the search.",
+          );
+      };
+      checkpoint();
+      const initialStat = await this.authorize(uri);
+      checkpoint();
+      const enqueue = (item: SearchEntry) => {
+        const characters = item.uri.toString().length;
+        if (
+          state.pending.length >= MAX_SEARCH_ENTRIES ||
+          state.pendingCharacters + characters > MAX_SEARCH_PENDING_CHARACTERS
+        ) {
+          state.limits.add("pendingEntries");
+          return;
         }
-        if ((item.type & vscode.FileType.Directory) !== 0) {
-          if (item.depth >= MAX_SEARCH_DEPTH) {
-            result.truncated = true;
-            continue;
-          }
-          await this.authorize(item.uri);
-          const children = await vscode.workspace.fs.readDirectory(item.uri);
-          this.currentRoot(item.uri);
-          for (const [name, type] of children) {
-            if (queue.length >= MAX_SEARCH_ENTRIES) {
-              result.truncated = true;
+        state.pending.push(item);
+        state.pendingCharacters += characters;
+      };
+      if (cursor === undefined)
+        enqueue({ uri, depth: 0, type: initialStat.type });
+      const filterBudget = { remaining: 1_000_000 };
+      const accepts = filenameFilter(include, filterBudget);
+      const rejects = filenameFilter(exclude, filterBudget);
+      const literal = new RegExp(
+        query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        caseSensitive ? "g" : "giu",
+      );
+      const result: SearchResult = {
+        uri: uri.toString(),
+        query,
+        matches: [],
+        filesSearched: 0,
+        truncated: false,
+        incomplete: state.incomplete,
+        errors: [],
+        consistency: "live",
+        limits: [],
+      };
+      let bytes = 0;
+      let entries = 0;
+      let files = 0;
+      state.pages++;
+      while (state.pending.length) {
+        checkpoint();
+        if (
+          state.bytes >= MAX_SEARCH_TOTAL_BYTES ||
+          state.entries >= MAX_SEARCH_TOTAL_ENTRIES ||
+          state.pages > MAX_SEARCH_PAGES
+        ) {
+          state.limits.add("totalWork");
+          state.pending = [];
+          break;
+        }
+        if (
+          entries >= MAX_SEARCH_ENTRIES ||
+          files >= MAX_SEARCH_FILES ||
+          bytes >= MAX_SEARCH_BYTES ||
+          result.matches.length >= maxResults
+        )
+          break;
+        const item = state.pending.pop()!;
+        state.pendingCharacters -= item.uri.toString().length;
+        entries++;
+        state.entries++;
+        try {
+          if ((item.type & vscode.FileType.SymbolicLink) !== 0)
+            fail("SYMLINK_DENIED", "Symbolic link skipped.");
+          if ((item.type & vscode.FileType.Directory) !== 0) {
+            if (item.depth >= MAX_SEARCH_DEPTH) {
+              state.limits.add("depth");
+              continue;
+            }
+            await this.authorize(item.uri);
+            checkpoint();
+            const children = await vscode.workspace.fs.readDirectory(item.uri);
+            checkpoint();
+            // Providers return whole arrays; retain only a bounded frontier, never reread a directory.
+            const capacity = MAX_SEARCH_ENTRIES - state.pending.length;
+            if (children.length > capacity) state.limits.add("pendingEntries");
+            for (const [name, type] of children.slice(0, capacity).reverse()) {
+              try {
+                const child = this.child(item.uri, name);
+                if (child.toString().length > MAX_SEARCH_URI) {
+                  state.limits.add("uriLength");
+                  continue;
+                }
+                enqueue({ uri: child, depth: item.depth + 1, type });
+              } catch {
+                state.incomplete = true;
+                if (result.errors.length < MAX_RESULTS)
+                  result.errors.push({
+                    uri: item.uri.toString(),
+                    message: "Unsafe provider entry name skipped.",
+                  });
+              }
+            }
+          } else if ((item.type & vscode.FileType.File) !== 0) {
+            const relative =
+              item.depth === 0
+                ? item.uri.path.slice(item.uri.path.lastIndexOf("/") + 1)
+                : item.uri.path.slice(childPrefix(uri.path).length);
+            if ((include.length && !accepts(relative)) || rejects(relative))
+              continue;
+            files++;
+            const document = await this.document(item.uri);
+            checkpoint();
+            if (item.version !== undefined && document.version !== item.version)
+              fail(
+                "SEARCH_INVALIDATED",
+                "The continued live document changed. Restart the search.",
+              );
+            const text = this.text(document);
+            const contentHash = createHash("sha256").update(text).digest("hex");
+            if (
+              item.contentHash !== undefined &&
+              item.contentHash !== contentHash
+            )
+              fail(
+                "SEARCH_INVALIDATED",
+                "The continued live document changed. Restart the search.",
+              );
+            const size = Buffer.byteLength(text);
+            state.bytes += size;
+            if (state.bytes > MAX_SEARCH_TOTAL_BYTES) {
+              state.limits.add("totalWork");
+              state.pending = [];
               break;
             }
-            queue.push({
-              uri: this.child(item.uri, name),
-              depth: item.depth + 1,
-              type,
-            });
-          }
-        } else if ((item.type & vscode.FileType.File) !== 0) {
-          if (filesVisited >= MAX_SEARCH_FILES) {
-            result.truncated = true;
-            break;
-          }
-          filesVisited++;
-          const document = await this.document(item.uri);
-          const text = this.text(document);
-          bytes += Buffer.byteLength(text);
-          if (bytes > MAX_SEARCH_BYTES) {
-            result.truncated = true;
-            break;
-          }
-          result.filesSearched++;
-          let offset = 0;
-          while ((offset = text.indexOf(query, offset)) !== -1) {
-            if (result.matches.length >= maxResults) {
-              result.truncated = true;
+            if (bytes + size > MAX_SEARCH_BYTES) {
+              enqueue(item);
               break;
             }
-            const at = document.positionAt(offset);
-            result.matches.push({
-              uri: item.uri.toString(),
-              line: at.line,
-              character: at.character,
-              text: document
-                .lineAt(at.line)
-                .text.slice(
-                  Math.max(0, at.character - 100),
-                  at.character + MAX_PREVIEW,
-                ),
-            });
-            offset += query.length;
+            bytes += size;
+            result.filesSearched++;
+            literal.lastIndex = item.offset ?? 0;
+            let match: RegExpExecArray | null;
+            while ((match = literal.exec(text)) !== null) {
+              const offset = match.index;
+              if (
+                wholeWord &&
+                (/[A-Za-z0-9_]/.test(text[offset - 1] ?? "") ||
+                  /[A-Za-z0-9_]/.test(text[offset + match[0].length] ?? ""))
+              )
+                continue;
+              if (result.matches.length >= maxResults) {
+                enqueue({
+                  ...item,
+                  offset,
+                  version: document.version,
+                  contentHash,
+                });
+                break;
+              }
+              const at = document.positionAt(offset);
+              const context: Array<{ line: number; text: string }> = [];
+              if (contextLines) {
+                for (
+                  let line = Math.max(0, at.line - contextLines);
+                  line <=
+                  Math.min(document.lineCount - 1, at.line + contextLines);
+                  line++
+                )
+                  context.push({
+                    line,
+                    text: document.lineAt(line).text.slice(0, MAX_PREVIEW),
+                  });
+              }
+              result.matches.push({
+                uri: item.uri.toString(),
+                line: at.line,
+                character: at.character,
+                text: document
+                  .lineAt(at.line)
+                  .text.slice(
+                    Math.max(0, at.character - 100),
+                    at.character + MAX_PREVIEW,
+                  ),
+                ...(contextLines ? { context } : {}),
+              });
+            }
+          } else fail("NOT_A_FILE", "Entry has an unsupported file type.");
+        } catch (error) {
+          checkpoint();
+          if (filterBudget.remaining < 0) {
+            state.limits.add("filterWork");
+            state.pending = [];
+            break;
           }
           if (
-            result.matches.length >= maxResults &&
-            cursor < queue.length - 1
-          ) {
-            result.truncated = true;
-            break;
-          }
-        } else {
-          fail("NOT_A_FILE", "Entry has an unsupported file type.");
+            error instanceof WorkspaceError &&
+            error.code === "SEARCH_INVALIDATED"
+          )
+            throw error;
+          state.incomplete = true;
+          if (result.errors.length < MAX_RESULTS)
+            result.errors.push({
+              uri: item.uri.toString(),
+              message:
+                error instanceof WorkspaceError
+                  ? error.message
+                  : "Entry could not be read by the workspace filesystem provider.",
+            });
+          else state.limits.add("errors");
         }
-      } catch (error) {
-        // Root changes invalidate the entire result, including already collected text.
-        this.currentRoot(uri);
-        result.incomplete = true;
-        if (result.errors.length < MAX_RESULTS) {
-          result.errors.push({
-            uri: item.uri.toString(),
-            message:
-              error instanceof WorkspaceError
-                ? error.message
-                : "Entry could not be read by the workspace filesystem provider.",
-          });
-        } else result.truncated = true;
       }
+      checkpoint();
+      result.limits = [...state.limits];
+      if (state.pending.length) {
+        // Bound idle cursor storage. Evicted cursors fail explicitly when reused.
+        while (this.searchCursors.size >= MAX_SEARCH_CURSORS)
+          this.searchCursors.delete(this.searchCursors.keys().next().value!);
+        result.nextCursor = randomUUID();
+        this.searchCursors.set(result.nextCursor, state);
+      }
+      result.truncated = !!result.nextCursor || state.limits.size > 0;
+      result.incomplete = state.incomplete || result.truncated;
+      return result;
+    } finally {
+      this.activeSearches--;
     }
-    this.currentRoot(uri);
-    result.incomplete ||= result.truncated;
-    return result;
   }
 
   private exactPosition(
