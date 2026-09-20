@@ -1091,17 +1091,15 @@ export class WorkspaceService implements WorkspaceApi {
         fail("UNTRUSTED_WORKSPACE", "Workspace Trust is required.");
     };
     check();
-    let observed = false;
     let wake!: () => void;
-    const event = new Promise<void>((resolve) => {
-      wake = resolve;
+    const event = new Promise<"event_observed">((resolve) => {
+      wake = () => resolve("event_observed");
     });
     // Subscribe before any asynchronous document checks/loading can emit events.
     const listener = vscode.languages.onDidChangeDiagnostics((change) => {
       if (
         change.uris.some((changed) => changed.toString() === uri.toString())
       ) {
-        observed = true;
         wake();
       }
     });
@@ -1127,13 +1125,23 @@ export class WorkspaceService implements WorkspaceApi {
       return await Promise.race([
         cancelled,
         (async (): Promise<WaitDiagnosticsResult> => {
+          // Versions are scoped to a document instance, including during loading.
+          const initialDocument = vscode.workspace.textDocuments.find(
+            (document) =>
+              !document.isClosed && document.uri.toString() === uri.toString(),
+          );
           const document = await this.document(uri);
           check();
+          if (initialDocument && initialDocument !== document)
+            fail(
+              "VERSION_CONFLICT",
+              "The observed document was closed or replaced during loading.",
+            );
           this.expected(document, version);
-          await Promise.race([
+          const outcome = await Promise.race([
             event,
-            new Promise<void>((resolve) => {
-              timer = setTimeout(resolve, timeoutMs);
+            new Promise<"timeout">((resolve) => {
+              timer = setTimeout(() => resolve("timeout"), timeoutMs);
             }),
           ]);
           check();
@@ -1150,7 +1158,7 @@ export class WorkspaceService implements WorkspaceApi {
           this.expected(document, version);
           return {
             ...this.diagnosticSnapshot(uri),
-            outcome: observed ? "event_observed" : "timeout",
+            outcome,
             documentVersion: document.version,
             capturedAt: new Date().toISOString(),
             analysisComplete: "unknown",

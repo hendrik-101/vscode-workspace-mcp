@@ -10,7 +10,8 @@ After loading and checking the document, it waits up to `timeoutMs` for an event
 unless one was already observed. It then returns the current bounded diagnostic
 snapshot with:
 
-- `outcome`: `event_observed` if a matching event was seen, otherwise `timeout`.
+- `outcome`: `event_observed` if a matching event wins the wait, otherwise `timeout`.
+  Events arriving during final authorization do not change the settled outcome.
 - `documentVersion`: the live document version at capture.
 - `capturedAt`: the snapshot capture time as an ISO timestamp.
 - `analysisComplete`: always `"unknown"`.

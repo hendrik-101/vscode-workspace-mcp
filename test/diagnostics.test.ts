@@ -254,3 +254,30 @@ test("final authorization catches a version race before diagnostics are exposed"
   await assert.rejects(pending, code("VERSION_CONFLICT"));
   f.clean();
 });
+
+test("a late event during final authorization cannot turn a timeout into event_observed", async () => {
+  const f = fixture();
+  let calls = 0;
+  f.setStat(async () => {
+    if (++calls === 3) {
+      await tick();
+      f.emit();
+    }
+  });
+  assert.equal((await f.wait()).outcome, "timeout");
+  f.clean();
+});
+
+test("an already-open document replaced at the same version during loading conflicts", async () => {
+  const f = fixture();
+  let calls = 0;
+  f.setStat(async () => {
+    if (++calls === 1) {
+      f.document.isClosed = true;
+      f.vscode.workspace.textDocuments = [{ ...f.document, isClosed: false }];
+      f.emit();
+    }
+  });
+  await assert.rejects(f.wait(), code("VERSION_CONFLICT"));
+  f.clean();
+});
