@@ -14,7 +14,10 @@ unsafe target rejects the whole request. A rename is never filtered into a
 smaller edit. Changes to any observed target during the request reject the
 preview, including changes during the provider call. Roots and versions are
 checked again after all asynchronous work. Cancellation and stopped sessions
-also discard pending results.
+also discard pending results. Change observers are released immediately on
+cancellation or session stop, even when a provider never settles. Tracking is
+capped at 1000 changed document URIs and 256 KiB of URI text; overflow rejects
+the preview.
 
 ## Application limitation
 
