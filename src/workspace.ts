@@ -941,6 +941,8 @@ export class WorkspaceService implements WorkspaceApi {
     for (const [key, state] of this.searchCursors) {
       if (state.expires <= Date.now()) this.searchCursors.delete(key);
     }
+    if (this.activeSearches >= MAX_SEARCH_CURSORS)
+      fail("LIMIT_EXCEEDED", "Too many searches are running.");
     let state: SearchContinuation;
     if (cursor !== undefined) {
       if (typeof cursor !== "string" || cursor.length !== 36)
@@ -968,8 +970,6 @@ export class WorkspaceService implements WorkspaceApi {
         limits: new Set(),
       };
     }
-    if (this.activeSearches >= MAX_SEARCH_CURSORS)
-      fail("LIMIT_EXCEEDED", "Too many searches are running.");
     this.activeSearches++;
     try {
       const checkpoint = () => {

@@ -399,3 +399,44 @@ test("default literal search preserves UTF-16 matching within surrogate pairs", 
   assert.equal(page.matches.length, 1);
   assert.equal(page.matches[0]?.character, 0);
 });
+
+test("search saturation preserves a continuation for retry after provider work settles", async () => {
+  const f = fixture({ "many.txt": "needle needle needle" });
+  const input = { uri: f.root, query: "needle", maxResults: 1 };
+  const first = await f.service.search(input);
+  assert.ok(first.nextCursor);
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const original = f.workspace.fs.stat;
+  let entered = 0;
+  f.workspace.fs.stat = async (uri: Uri) => {
+    entered++;
+    await blocked;
+    return original(uri);
+  };
+  const running = Array.from({ length: 16 }, () =>
+    f.service.search({ uri: f.root, query: "absent" }),
+  );
+  try {
+    assert.equal(entered, 16);
+    await assert.rejects(
+      f.service.search({ ...input, cursor: first.nextCursor }),
+      (error: unknown) =>
+        error instanceof contracts.WorkspaceError &&
+        error.code === "LIMIT_EXCEEDED",
+    );
+    assert.equal(entered, 16, "rejected request must not begin provider work");
+  } finally {
+    release();
+    await Promise.all(running);
+    f.workspace.fs.stat = original;
+  }
+  const resumed = await f.service.search({
+    ...input,
+    cursor: first.nextCursor,
+  });
+  assert.equal(resumed.matches.length, 1);
+  assert.equal(resumed.matches[0]?.character, 7);
+});
