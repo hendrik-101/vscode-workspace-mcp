@@ -54,6 +54,9 @@ function fixture() {
       contentChanges?: readonly unknown[];
     }) => void
   >();
+  const closeListeners = new Set<
+    (document: (typeof documents)[number]) => void
+  >();
   const documents = ["/project/a", "/project/b"].map((path) => ({
     uri: new Uri(path),
     isClosed: false,
@@ -85,6 +88,12 @@ function fixture() {
         documents.find(
           (document) => document.uri.toString() === uri.toString(),
         )!,
+      onDidCloseTextDocument: (
+        listener: (document: (typeof documents)[number]) => void,
+      ) => {
+        closeListeners.add(listener);
+        return { dispose: () => closeListeners.delete(listener) };
+      },
       onDidChangeTextDocument: (
         listener: (event: {
           document: (typeof documents)[number];
@@ -140,6 +149,7 @@ function fixture() {
     calls,
     vscode,
     listeners,
+    closeListeners,
     supply(value: () => unknown) {
       supplied = value;
     },
@@ -163,6 +173,7 @@ test("multi-document previews explicitly refuse automatic application, even with
   assert.equal(result.preview.complete, false);
   assert.equal(result.preview.reasons[0], "OPAQUE_WORKSPACE_EDIT");
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
   assert.deepEqual(f.calls, ["vscode.executeDocumentRenameProvider"]);
 });
 for (const [path, code] of [
@@ -179,6 +190,7 @@ for (const [path, code] of [
     }));
     await assert.rejects(f.service.rename(f.input), errorCode(code!));
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   });
 }
 for (const index of [0, 1]) {
@@ -199,6 +211,7 @@ for (const index of [0, 1]) {
       errorCode("VERSION_CONFLICT"),
     );
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   });
 }
 test("code actions retain command/disabled limitations and never execute commands", async () => {
@@ -259,6 +272,7 @@ test("cancellation and stop while provider awaits discard all preview content", 
       stop ? errorCode("SESSION_STOPPED") : { name: "AbortError" },
     );
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   }
 });
 test("aggregate edit budget is enforced without returning partial actions", async () => {
@@ -308,6 +322,7 @@ test("root removal during final authorization discards all preview content", asy
     errorCode("OUTSIDE_WORKSPACE"),
   );
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
 });
 
 test("cancelled source loading never dispatches a provider", async () => {
@@ -323,6 +338,7 @@ test("cancelled source loading never dispatches a provider", async () => {
   });
   assert.equal(f.calls.length, 0);
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
 });
 
 for (const stop of [false, true]) {
@@ -340,12 +356,15 @@ for (const stop of [false, true]) {
     void f.service.rename(f.input, controller.signal);
     await providerStarted;
     assert.equal(f.listeners.size, 1);
+    assert.equal(f.closeListeners.size, 1);
     if (stop) f.service.dispose();
     else controller.abort();
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
     f.change(1);
     f.service.dispose();
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   });
 }
 
@@ -363,6 +382,7 @@ test("change tracking overflow fails closed instead of retaining unbounded URIs"
   });
   await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
 });
 
 test("newly opened source exceeding decoded text limit never dispatches a provider", async () => {
@@ -378,6 +398,7 @@ test("newly opened source exceeding decoded text limit never dispatches a provid
   await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
   assert.equal(f.calls.length, 0);
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
 });
 
 for (const limit of ["count", "bytes"] as const) {
@@ -405,6 +426,7 @@ for (const limit of ["count", "bytes"] as const) {
     );
     assert.equal(f.calls.length, 0);
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
     if (limit === "count") assert.equal(copiedUris, 0);
   });
 }
@@ -451,6 +473,7 @@ for (const blockedCall of [1, 2, 3, 4, 5, 6]) {
     assert.equal(statCalls, blockedCall);
     assert.equal(openCalls, opensBeforeAbort);
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
     if (blockedCall <= 2) assert.equal(f.calls.length, 0);
   });
 }
@@ -473,6 +496,7 @@ test("a target closed and reopened at the same version rejects the provider prev
     errorCode("VERSION_CONFLICT"),
   );
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
 });
 
 for (const operation of ["rename", "codeActions"] as const) {
@@ -523,3 +547,25 @@ for (const operation of ["rename", "codeActions"] as const) {
     });
   }
 }
+
+test("a provider-opened target closed and reopened at the same version invalidates the entire preview", async () => {
+  const f = fixture();
+  f.vscode.workspace.textDocuments = [f.documents[0]!];
+  f.supply(() => {
+    const opened = f.documents[1]!;
+    f.vscode.workspace.textDocuments.push(opened);
+    opened.isClosed = true;
+    f.closeListeners.forEach((listener) => listener(opened));
+    const replacement = { ...opened, isClosed: false, getText: () => "change" };
+    f.vscode.workspace.textDocuments = [f.documents[0]!, replacement];
+    return {
+      entries: () => [[replacement.uri, [{ range, newText: "after" }]]],
+    };
+  });
+  await assert.rejects(
+    f.service.rename(f.input),
+    errorCode("VERSION_CONFLICT"),
+  );
+  assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
+});

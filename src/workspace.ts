@@ -583,22 +583,28 @@ export class WorkspaceService implements WorkspaceApi {
     const changed = new Set<string>();
     let changedBytes = 0;
     let trackingOverflow = false;
-    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (trackingOverflow || event.contentChanges?.length === 0) return;
-      const uri = event.document.uri.toString();
+    const recordChange = (document: vscode.TextDocument) => {
+      if (trackingOverflow) return;
+      const uri = document.uri.toString();
       if (changed.has(uri)) return;
       changedBytes += Buffer.byteLength(uri);
       if (changed.size >= 1000 || changedBytes > 256 * 1024) {
         trackingOverflow = true;
         listener.dispose();
+        closeListener.dispose();
         return;
       }
       changed.add(uri);
+    };
+    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.contentChanges?.length !== 0) recordChange(event.document);
     });
+    const closeListener = vscode.workspace.onDidCloseTextDocument(recordChange);
     // Provider commands have no cancellation token and can remain pending forever.
     // Release observers and retained document snapshots independently of settlement.
     const cleanup = () => {
       listener.dispose();
+      closeListener.dispose();
       signal?.removeEventListener("abort", cleanup);
       this.refactoringCleanups.delete(cleanup);
       changed.clear();

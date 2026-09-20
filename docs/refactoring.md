@@ -13,12 +13,13 @@ must pass containment, symlink, size, exact-range and overlap validation; one
 unsafe target rejects the whole request. A rename is never filtered into a
 smaller edit. Changes to any observed target during the request reject the
 preview, including changes during the provider call and same-version document
-replacement after close/reopen. Dirty-state-only changes are allowed; returned
+replacement after close/reopen, even when the provider first opened the target
+during the query. Dirty-state-only changes are allowed; returned
 dirty states are refreshed after all authorization finishes. Roots and versions are
 checked again after all asynchronous work. Cancellation and stopped sessions
 also discard pending results. Change observers are released immediately on
 cancellation or session stop, even when a provider never settles. Tracking is
-capped at 1000 changed document URIs and 256 KiB of URI text; overflow rejects
+capped at 1000 changed or closed document URIs and 256 KiB of URI text; overflow rejects
 the preview. The initial version snapshot is also bounded to 1000 open documents
 and 256 KiB of URI text, checked before dispatching a provider.
 
