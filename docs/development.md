@@ -50,6 +50,34 @@
 
 ## Merging
 
+### Completion evidence
+
+Before the final handoff, record the current head SHA and links to the completed
+CI run, Codex result and CodeRabbit result. Re-read the head after collecting the
+evidence; if it changed, repeat verification for the new revision.
+
+- Check both review findings and formal GitHub review state. A clean comment or
+  successful bot status does not supersede that bot's earlier `CHANGES_REQUESTED`.
+  Ask the reviewer to complete its formal re-review; do not dismiss the review or
+  weaken branch protection to make the PR mergeable.
+- Verify all review conversations are resolved and required checks have finished
+  successfully. Pending, unavailable, interrupted and stale reviews are pending,
+  not successful. Check both commit statuses and check runs.
+- Once the current-head gates pass, mark the draft ready. Await any automatic
+  reviews triggered by that transition and handle new findings before handoff.
+  Codex's documented clean-result thumbs-up can confirm a completed review when
+  it is attributable to the latest review trigger and unchanged head; an eyes
+  reaction or an older thumbs-up is not completion evidence.
+- Read GitHub's actual merge gate from the authenticated PR page or REST PR
+  response. `mergeable: true` means no merge conflict, not permission to merge.
+  Require `mergeable_state: clean` for the normal handoff. If it is blocked,
+  unknown or pending, identify the remaining gate and do not report readiness.
+- Report the reviewed SHA, completed gates and any material validation limits.
+  Leave Squash and Merge to the owner. Do not end a review watcher merely because
+  the code checks are green while the actual merge gate remains blocked.
+
+### Owner-controlled integration
+
 - The owner decides when to merge. Agents must not merge without an explicit
   instruction for that PR. No auto-merge.
 - Require passing CI, resolved review conversations and clean completed Codex
