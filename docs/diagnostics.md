@@ -29,4 +29,5 @@ before returning diagnostics. Cancellation and stopping the bridge release the
 listener and timers. An additional 25-second overall deadline bounds slow
 provider authorization/loading, below the server's 30-second request timeout;
 exceeding it returns `LIMIT_EXCEEDED`, not a diagnostic snapshot. VS Code provider
-calls already in progress cannot be cancelled, but cannot publish a late result.
+calls already in progress cannot be cancelled, but cannot publish a late result
+or start further authorization or document-opening calls after cancellation.

@@ -502,7 +502,11 @@ export class WorkspaceService implements WorkspaceApi {
     }
   }
 
-  private async authorize(uri: vscode.Uri): Promise<vscode.FileStat> {
+  private async authorize(
+    uri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<vscode.FileStat> {
+    signal?.throwIfAborted();
     const root = this.currentRoot(uri);
     const base = root.path;
     const target = uri.path;
@@ -512,6 +516,7 @@ export class WorkspaceService implements WorkspaceApi {
         : target.slice(base.length).replace(/^\//, "").split("/");
     let current = root;
     let stat = await vscode.workspace.fs.stat(current);
+    signal?.throwIfAborted();
     this.stillAllowed(uri, root);
     if (isLink(stat)) fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
     for (const [index, segment] of remainder.entries()) {
@@ -524,6 +529,7 @@ export class WorkspaceService implements WorkspaceApi {
           ? uri
           : current.with({ path: `${childPrefix(current.path)}${segment}` });
       stat = await vscode.workspace.fs.stat(current);
+      signal?.throwIfAborted();
       this.stillAllowed(uri, root);
       if (isLink(stat))
         fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
@@ -531,8 +537,12 @@ export class WorkspaceService implements WorkspaceApi {
     return stat;
   }
 
-  private async document(uri: vscode.Uri): Promise<vscode.TextDocument> {
-    const stat = await this.authorize(uri);
+  private async document(
+    uri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<vscode.TextDocument> {
+    const stat = await this.authorize(uri, signal);
+    signal?.throwIfAborted();
     if ((stat.type & vscode.FileType.File) === 0)
       fail("NOT_A_FILE", "URI must identify a workspace file.");
     const open = vscode.workspace.textDocuments.find(
@@ -546,6 +556,7 @@ export class WorkspaceService implements WorkspaceApi {
     if (stat.size > MAX_FILE_BYTES)
       fail("LIMIT_EXCEEDED", "File exceeds the 1 MiB limit.");
     const document = await vscode.workspace.openTextDocument(uri);
+    signal?.throwIfAborted();
     this.currentRoot(uri);
     if (document.uri.toString() !== uri.toString()) {
       fail(
@@ -1130,7 +1141,7 @@ export class WorkspaceService implements WorkspaceApi {
             (document) =>
               !document.isClosed && document.uri.toString() === uri.toString(),
           );
-          const document = await this.document(uri);
+          const document = await this.document(uri, controller.signal);
           check();
           if (initialDocument && initialDocument !== document)
             fail(
@@ -1145,7 +1156,7 @@ export class WorkspaceService implements WorkspaceApi {
             }),
           ]);
           check();
-          await this.authorize(uri);
+          await this.authorize(uri, controller.signal);
           check();
           if (
             document.isClosed ||

@@ -50,6 +50,7 @@ function fixture(hardDeadlineMs = 25_000) {
   const emit = (target = uri) =>
     listeners.forEach((listener) => listener({ uris: [target] }));
   let onStat = async () => {};
+  const opened: Uri[] = [];
   const vscode = {
     Uri,
     FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
@@ -57,6 +58,10 @@ function fixture(hardDeadlineMs = 25_000) {
       isTrusted: true,
       workspaceFolders: [{ uri: root }],
       textDocuments: [document],
+      openTextDocument: async (uri: Uri) => {
+        opened.push(uri);
+        return document;
+      },
       fs: {
         stat: async (value: Uri) => {
           await onStat();
@@ -116,6 +121,7 @@ function fixture(hardDeadlineMs = 25_000) {
     emit,
     listeners,
     timers,
+    opened,
     setStat: (fn: () => Promise<void>) => {
       onStat = fn;
     },
@@ -281,3 +287,47 @@ test("an already-open document replaced at the same version during loading confl
   await assert.rejects(f.wait(), code("VERSION_CONFLICT"));
   f.clean();
 });
+
+for (const termination of ["abort", "deadline"] as const) {
+  for (const blockedStat of [1, 2, 3]) {
+    test(`${termination} during stat ${blockedStat} prevents subsequent provider calls`, async () => {
+      const f = fixture(termination === "deadline" ? 10 : 25_000);
+      if (blockedStat < 3) f.vscode.workspace.textDocuments = [];
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let calls = 0;
+      f.setStat(async () => {
+        if (++calls === blockedStat) {
+          entered();
+          await gate;
+        }
+      });
+      const controller = new AbortController();
+      const pending = f.wait(controller.signal);
+      f.emit();
+      await started;
+      if (termination === "abort") controller.abort();
+      await assert.rejects(
+        pending,
+        termination === "abort"
+          ? { name: "AbortError" }
+          : code("LIMIT_EXCEEDED"),
+      );
+      // Keep the service alive while late provider work completes: stopping it
+      // here would mask cancellation bugs with the existing session checks.
+      assert.equal(f.listeners.size, 0);
+      assert.equal(f.timers.size, 0);
+      release();
+      await tick();
+      assert.equal(calls, blockedStat);
+      assert.equal(f.opened.length, 0);
+      f.clean();
+    });
+  }
+}
