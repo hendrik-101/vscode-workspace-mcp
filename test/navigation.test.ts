@@ -103,12 +103,21 @@ function fixture() {
       contentChanges: unknown[];
     }) => void
   >();
+  const closeListeners = new Set<
+    (document: (typeof documents)[number]) => void
+  >();
   const vscode = {
     Uri,
     Position,
     Range,
     FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
     workspace: {
+      onDidCloseTextDocument: (
+        listener: (document: (typeof documents)[number]) => void,
+      ) => {
+        closeListeners.add(listener);
+        return { dispose: () => closeListeners.delete(listener) };
+      },
       onDidChangeTextDocument: (
         listener: (event: {
           document: (typeof documents)[number];
@@ -143,6 +152,11 @@ function fixture() {
     documents,
     calls,
     listeners,
+    closeListeners,
+    close(document: (typeof documents)[number]) {
+      document.isClosed = true;
+      closeListeners.forEach((listener) => listener(document));
+    },
     change(document = documents[1]!) {
       document.version++;
       listeners.forEach((listener) =>
@@ -251,6 +265,7 @@ test("target edits during provider execution omit old ranges, including newly op
     assert.equal(result.locations.length, 0);
     assert.equal(result.omitted, 1);
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   }
 });
 
@@ -304,6 +319,7 @@ test("abort and stop dispose navigation observers even when the command never se
     if (stop) f.service.dispose();
     else controller.abort();
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   }
 });
 
@@ -325,6 +341,7 @@ test("oversized open-document snapshots fail before provider dispatch or listene
     });
     assert.equal(f.calls.length, 0);
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   }
 });
 
@@ -370,6 +387,7 @@ test("cancellation during source or target stat prevents subsequent filesystem c
     assert.equal(opens, 0);
     assert.equal(f.calls.length, target ? 1 : 0);
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   }
 });
 
@@ -424,5 +442,45 @@ for (const limit of ["count", "bytes"] as const) {
       code: "LIMIT_EXCEEDED",
     });
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
   });
 }
+
+test("initially closed targets opened then reopened during provider execution are omitted", async () => {
+  const f = fixture();
+  const target = f.documents.pop()!;
+  f.result([{ uri: f.target, range: f.full }]);
+  f.onCommand(() => {
+    f.documents.push(target);
+    f.close(target);
+    f.documents[1] = { ...target, isClosed: false };
+  });
+  const result = await f.service.definition(f.input);
+  assert.equal(result.locations.length, 0);
+  assert.equal(result.omitted, 1);
+  assert.equal(f.closeListeners.size, 0);
+});
+
+test("target closure during later target authorization invalidates already normalized ranges", async () => {
+  const f = fixture();
+  const third = Uri.parse("vfs-test://host/project/third.txt?tenant=one");
+  f.documents.push({ ...f.documents[1]!, uri: third });
+  const stat = f.vscode.workspace.fs.stat;
+  f.vscode.workspace.fs.stat = async (uri) => {
+    if (uri.toString() === third.toString()) {
+      const target = f.documents[1]!;
+      f.close(target);
+      f.documents[1] = { ...target, isClosed: false };
+    }
+    return stat(uri);
+  };
+  f.result([
+    { uri: f.target, range: f.full },
+    { uri: third, range: f.full },
+  ]);
+  const result = await f.service.references(f.input);
+  assert.equal(result.locations.length, 1);
+  assert.equal(result.locations[0]?.uri, third.toString());
+  assert.equal(result.omitted, 1);
+  assert.equal(f.closeListeners.size, 0);
+});
