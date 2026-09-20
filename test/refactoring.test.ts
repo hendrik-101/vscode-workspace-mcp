@@ -402,3 +402,49 @@ for (const limit of ["count", "bytes"] as const) {
     if (limit === "count") assert.equal(copiedUris, 0);
   });
 }
+
+for (const blockedCall of [1, 2, 3, 4, 5, 6]) {
+  test(`abort during refactoring stat ${blockedCall} prevents later stats and document opens`, async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let statCalls = 0;
+    let openCalls = 0;
+    const stat = f.vscode.workspace.fs.stat;
+    const open = f.vscode.workspace.openTextDocument;
+    f.vscode.workspace.textDocuments = [];
+    f.vscode.workspace.openTextDocument = async (uri) => {
+      openCalls++;
+      return open(uri);
+    };
+    f.vscode.workspace.fs.stat = async (uri) => {
+      statCalls++;
+      const result = await stat(uri);
+      if (statCalls === blockedCall) {
+        entered();
+        await gate;
+      }
+      return result;
+    };
+    f.supply(() => ({
+      entries: () => [[f.documents[1]!.uri, [{ range, newText: "after" }]]],
+    }));
+    const pending = f.service.rename(f.input, controller.signal);
+    await started;
+    const opensBeforeAbort = openCalls;
+    controller.abort();
+    release();
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(statCalls, blockedCall);
+    assert.equal(openCalls, opensBeforeAbort);
+    assert.equal(f.listeners.size, 0);
+    if (blockedCall <= 2) assert.equal(f.calls.length, 0);
+  });
+}

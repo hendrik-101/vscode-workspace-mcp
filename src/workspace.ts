@@ -556,7 +556,7 @@ export class WorkspaceService implements WorkspaceApi {
     ) => Promise<T>,
   ): Promise<T> {
     signal?.throwIfAborted();
-    const source = await this.document(parseUri(input.uri));
+    const source = await this.document(parseUri(input.uri), signal);
     this.text(source);
     this.expected(source, input.version);
     const observed = new Map<
@@ -635,7 +635,10 @@ export class WorkspaceService implements WorkspaceApi {
           bytes += Buffer.byteLength(target.toString());
           if (bytes > 256 * 1024)
             fail("LIMIT_EXCEEDED", "Provider previews exceed 256 KiB.");
-          const document = await this.document(parseUri(target.toString()));
+          const document = await this.document(
+            parseUri(target.toString()),
+            signal,
+          );
           signal?.throwIfAborted();
           this.active();
           const version = initial.get(target.toString()) ?? document.version;
@@ -666,7 +669,7 @@ export class WorkspaceService implements WorkspaceApi {
       signal?.throwIfAborted();
       this.active();
       for (const { document } of observed.values())
-        await this.authorize(document.uri);
+        await this.authorize(document.uri, signal);
       signal?.throwIfAborted();
       this.active();
       if (trackingOverflow)
@@ -719,7 +722,11 @@ export class WorkspaceService implements WorkspaceApi {
     }
   }
 
-  private async authorize(uri: vscode.Uri): Promise<vscode.FileStat> {
+  private async authorize(
+    uri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<vscode.FileStat> {
+    signal?.throwIfAborted();
     const root = this.currentRoot(uri);
     const base = root.path;
     const target = uri.path;
@@ -729,6 +736,7 @@ export class WorkspaceService implements WorkspaceApi {
         : target.slice(base.length).replace(/^\//, "").split("/");
     let current = root;
     let stat = await vscode.workspace.fs.stat(current);
+    signal?.throwIfAborted();
     this.stillAllowed(uri, root);
     if (isLink(stat)) fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
     for (const [index, segment] of remainder.entries()) {
@@ -741,6 +749,7 @@ export class WorkspaceService implements WorkspaceApi {
           ? uri
           : current.with({ path: `${childPrefix(current.path)}${segment}` });
       stat = await vscode.workspace.fs.stat(current);
+      signal?.throwIfAborted();
       this.stillAllowed(uri, root);
       if (isLink(stat))
         fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
@@ -748,8 +757,12 @@ export class WorkspaceService implements WorkspaceApi {
     return stat;
   }
 
-  private async document(uri: vscode.Uri): Promise<vscode.TextDocument> {
-    const stat = await this.authorize(uri);
+  private async document(
+    uri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<vscode.TextDocument> {
+    const stat = await this.authorize(uri, signal);
+    signal?.throwIfAborted();
     if ((stat.type & vscode.FileType.File) === 0)
       fail("NOT_A_FILE", "URI must identify a workspace file.");
     const open = vscode.workspace.textDocuments.find(
@@ -763,6 +776,7 @@ export class WorkspaceService implements WorkspaceApi {
     if (stat.size > MAX_FILE_BYTES)
       fail("LIMIT_EXCEEDED", "File exceeds the 1 MiB limit.");
     const document = await vscode.workspace.openTextDocument(uri);
+    signal?.throwIfAborted();
     this.currentRoot(uri);
     if (document.uri.toString() !== uri.toString()) {
       fail(
