@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import * as vscode from "vscode";
 
 const files = ["stdio.cjs", "THIRD_PARTY_NOTICES.txt"] as const;
-const bundlePattern = /^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/;
+const commitPattern = /^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}\.ready$/;
 // This immutable launcher reads only its extension-owned directory. Protocol v1
-// updates publish complete directories; no existing launcher or bundle is replaced.
+// updates select only committed payloads; leftover preparation is never executable.
 const launcher = `// Workspace MCP adapter protocol v1
 const { readdirSync } = require("node:fs");
-const bundles = readdirSync(__dirname).filter(name => /^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(name)).sort();
+const bundles = readdirSync(__dirname, { withFileTypes: true }).filter(entry => entry.isDirectory() && /^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}\\.ready$/.test(entry.name)).map(entry => entry.name.slice(0, -6)).sort();
 if (!bundles.length) throw new Error("Run Workspace MCP: Start to install the adapter.");
 require("./" + bundles[bundles.length - 1] + "/stdio.cjs");
 `;
@@ -88,8 +89,11 @@ export async function installAdapter(
   };
   const hasLauncher = await verifyLauncher();
   const bundles = (await fs.readDirectory(directory))
-    .map(([name]) => name)
-    .filter((name) => bundlePattern.test(name))
+    .filter(
+      ([name, type]) =>
+        type === vscode.FileType.Directory && commitPattern.test(name),
+    )
+    .map(([name]) => name.slice(0, -6))
     .sort();
   const latest = bundles.at(-1);
   if (latest) await verifyBundle(join(directory, latest), latest.slice(17, 81));
@@ -99,12 +103,23 @@ export async function installAdapter(
   const owner = randomUUID().replaceAll("-", "");
   const name = `${revision.toString(16).padStart(16, "0")}-${id}-${owner}`;
   const destination = join(directory, name);
+  const marker = join(directory, `${name}.ready`);
   // UUID names avoid ordinary concurrent window collisions. Public VS Code fs
   // cannot exclude races with malicious same-user processes (outside our boundary).
   const stage = join(directory, `.install-${randomUUID()}`);
   const stagedEntry = join(directory, `.launcher-${randomUUID()}`);
   const cleanup: vscode.Uri[] = [];
-  let published = false;
+  const removeUnused = async (uri: vscode.Uri) => {
+    try {
+      await fs.delete(uri, { recursive: true });
+    } catch (error) {
+      if ((error as { code?: string }).code !== "FileNotFound")
+        throw new Error(
+          "Workspace MCP adapter could not remove unused installation files. See the adapter storage cleanup instructions.",
+        );
+    }
+  };
+  let prepared = false;
   try {
     try {
       if (await stat(stage))
@@ -115,12 +130,12 @@ export async function installAdapter(
       for (const [index, file] of files.entries())
         await mutate(() => fs.writeFile(join(stage, file), contents[index]!));
       await verifyBundle(stage, id);
-      // Never adopt another installation's destination, even with the same hash:
-      // its owner might still be awaiting a rename and need to roll it back.
+      // This destination remains unselectable until its marker is committed.
+      // Keep it unique so cleanup cannot remove another window's preparation.
       checkCurrent();
       await fs.rename(stage, destination, { overwrite: false });
       // Record ownership before checking cancellation after an in-flight rename.
-      published = true;
+      prepared = true;
       checkCurrent();
       await verifyBundle(destination, id);
       if (!hasLauncher) {
@@ -139,22 +154,21 @@ export async function installAdapter(
         await verifyLauncher();
       }
     } finally {
-      await Promise.all(
-        cleanup.map((uri) =>
-          fs.delete(uri, { recursive: true }).then(
-            () => {},
-            () => {},
-          ),
-        ),
-      );
+      await Promise.all(cleanup.map(removeUnused));
     }
     // Cleanup also awaits provider operations, so cancellation can arrive there.
+    const adapterPath = entry.fsPath;
+    const markerPath = marker.fsPath;
     checkCurrent();
-    return entry.fsPath;
+    // Sole commit point: one exclusive synchronous mkdir on guarded local,
+    // extension-owned storage. Stop cannot interleave with it; no awaits or
+    // cancellation checks follow a successful commit. Existing markers are never
+    // overwritten. Workspace resources always remain on the public VS Code API.
+    mkdirSync(markerPath);
+    return adapterPath;
   } catch (error) {
-    // A reader can observe an already-issued rename before Stop takes effect.
-    // Once it settles, remove only our unique publication, never a shared bundle.
-    if (published) await fs.delete(destination, { recursive: true });
+    // Even when this cleanup fails, an uncommitted payload cannot be selected.
+    if (prepared) await removeUnused(destination);
     throw error;
   }
 }

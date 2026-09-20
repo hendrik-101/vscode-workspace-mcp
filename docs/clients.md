@@ -31,16 +31,16 @@ unavailable or is not a local filesystem on that host, Start fails visibly.
 The extension installs only its packaged adapter and third-party notices, with no
 downloads or credentials in these files. Successfully installed adapter generations are retained
 so updates cannot remove code that another client is loading. Each Start retains
-its own copy (about 1.7 MB), even for the same extension version, so one cancelled
-installation can be removed without deleting another window's copy. These copies
-are not automatically pruned. To reclaim that space,
+its own copy (about 1.7 MB), even for the same extension version. Only committed
+copies are selected; cancelled preparation remains unused even if cleanup fails.
+Completed copies and unused files are not automatically pruned. To reclaim that space,
 stop every bridge and client using this storage, remove only its `adapter-v1`
 directory, then Start again. The same path is recreated.
 
 Windows sharing storage use the most recently published compatible protocol-v1
-adapter. A rename already in progress when Stop runs can become briefly visible;
-after it settles, a cancelled installation removes only its own generation.
-Simultaneous publications select one complete generation deterministically;
+adapter. Cancelling Start before installation commits preserves the selected
+adapter. Stopping after installation commits leaves that completed adapter available.
+Simultaneous installations select one committed generation deterministically;
 starting an older extension later can select its older compatible adapter. Restart
 the upgraded extension's bridge to select its bundle again. A future incompatible
 adapter protocol will need a new path and updated client configuration.

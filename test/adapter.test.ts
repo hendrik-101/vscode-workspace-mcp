@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,7 @@ async function fixture(t: TestContext) {
   const extensionUri = uri(pathToFileURL(join(root, "extension")));
   const globalStorageUri = uri(pathToFileURL(join(root, "storage")));
   const file = (resource: vscode.Uri) => new URL(resource.toString());
+  const local = { mkdirSync: (path: string) => mkdirSync(path) };
   const api = {
     stat: async (resource: vscode.Uri) => {
       try {
@@ -93,6 +94,7 @@ async function fixture(t: TestContext) {
       Buffer,
       require: (id: string) => {
         if (id === "node:crypto") return crypto;
+        if (id === "node:fs") return local;
         if (id === "vscode")
           return {
             FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
@@ -121,6 +123,7 @@ async function fixture(t: TestContext) {
   return {
     root,
     api,
+    local,
     bundle,
     context: { extensionUri, globalStorageUri },
     install: module.exports.installAdapter!,
@@ -322,6 +325,84 @@ test("cancellation during staging cleanup also rolls back the publication", asyn
     /cancelled/,
   );
   assert.equal(f.launch(path), "first");
+});
+
+test("cancelled preparation stays unselectable when deletion fails", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await f.bundle("second");
+  let cancelled = false;
+  let orphan = "";
+  const rename = f.api.rename;
+  f.api.rename = async (from, to, options) => {
+    await rename(from, to, options);
+    if (from.fsPath.includes("/.install-")) {
+      orphan = to.fsPath;
+      cancelled = true;
+    }
+  };
+  f.api.delete = async () => {
+    throw new Error("cleanup denied");
+  };
+  await assert.rejects(
+    f.install(f.context, () => {
+      if (cancelled) throw new Error("cancelled");
+    }),
+    /Workspace MCP adapter could not remove unused installation files/,
+  );
+  assert.ok((await fs.stat(orphan)).isDirectory());
+  assert.equal(f.launch(path), "first");
+});
+
+test("commit marker failure preserves the previous selected adapter", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await f.bundle("second");
+  f.local.mkdirSync = () => {
+    throw new Error("commit denied");
+  };
+  await assert.rejects(f.install(f.context), /commit denied/);
+  assert.equal(f.launch(path), "first");
+});
+
+test("cancellation queued after a synchronous commit does not undo the completed installation", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await f.bundle("second");
+  let cancelled = false;
+  const commit = f.local.mkdirSync;
+  f.local.mkdirSync = (marker) => {
+    commit(marker);
+    queueMicrotask(() => {
+      cancelled = true;
+    });
+  };
+  assert.equal(
+    await f.install(f.context, () => {
+      if (cancelled) throw new Error("cancelled");
+    }),
+    path,
+  );
+  assert.equal(cancelled, true);
+  assert.equal(f.launch(path), "second");
+});
+
+test("launcher and installer ignore marker files and symbolic links", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  const directory = join(f.context.globalStorageUri.fsPath, "adapter-v1");
+  const name = `${"f".repeat(16)}-${"f".repeat(64)}-`;
+  await fs.writeFile(
+    join(directory, `${name}${"f".repeat(32)}.ready`),
+    "foreign",
+  );
+  const outside = join(f.root, "outside");
+  await fs.mkdir(outside);
+  await fs.symlink(outside, join(directory, `${name}${"e".repeat(32)}.ready`));
+  assert.equal(f.launch(path), "first");
+  await f.bundle("second");
+  await f.install(f.context);
+  assert.equal(f.launch(path), "second");
 });
 
 test("non-file storage is rejected before writing or producing an executable path", async (t) => {
