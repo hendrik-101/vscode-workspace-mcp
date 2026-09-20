@@ -1,0 +1,31 @@
+# Waiting for diagnostics
+
+`get_diagnostics` continues to return the currently stored editor diagnostics.
+It does not wait for a language provider.
+
+`wait_for_diagnostics` accepts a complete workspace `uri`, its expected live
+`version`, and optional `timeoutMs` (1–20000, default 1000). It observes diagnostic
+change events for that exact URI, including changes during document loading.
+After loading and checking the document, it waits up to `timeoutMs` for an event
+unless one was already observed. It then returns the current bounded diagnostic
+snapshot with:
+
+- `outcome`: `event_observed` if a matching event was seen, otherwise `timeout`.
+- `documentVersion`: the live document version at capture.
+- `capturedAt`: the snapshot capture time as an ISO timestamp.
+- `analysisComplete`: always `"unknown"`.
+
+VS Code's public diagnostic API does not expose the analyzed document version,
+causal relationship to an edit, provider availability, or analysis completion.
+An event may represent clearing diagnostics or unrelated provider activity for
+that document. Neither an event nor an empty result establishes a clean build or
+completed analysis. The returned document version describes the live buffer,
+not a language server's analysis version. No save or activation is performed.
+
+Document changes, closure or replacement produce `VERSION_CONFLICT`. Workspace
+roots, symbolic-link admission, Workspace Trust and session state are checked
+before returning diagnostics. Cancellation and stopping the bridge release the
+listener and timers. An additional 25-second overall deadline bounds slow
+provider authorization/loading, below the server's 30-second request timeout;
+exceeding it returns `LIMIT_EXCEEDED`, not a diagnostic snapshot. VS Code provider
+calls already in progress cannot be cancelled, but cannot publish a late result.
