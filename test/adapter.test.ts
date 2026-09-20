@@ -11,6 +11,14 @@ import test, { type TestContext } from "node:test";
 import { transformSync } from "esbuild";
 import type * as vscode from "vscode";
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(join(tmpdir(), "workspace-mcp-adapter-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -135,7 +143,7 @@ test("the same generated path loads an upgraded bundle after the extension is re
   );
   const notices = await Promise.all(
     entries
-      .filter((entry) => /^[a-f0-9]{16}-[a-f0-9]{64}$/.test(entry))
+      .filter((entry) => /^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(entry))
       .map((entry) =>
         fs.readFile(
           join(
@@ -157,7 +165,7 @@ test("a failed publication preserves the previous usable adapter", async (t) => 
   await f.bundle("second");
   const rename = f.api.rename;
   f.api.rename = async (from, to, options) => {
-    if (/\/[a-f0-9]{16}-[a-f0-9]{64}$/.test(to.fsPath))
+    if (/\/[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(to.fsPath))
       throw new Error("disk unavailable");
     return rename(from, to, options);
   };
@@ -197,7 +205,7 @@ test("modified bundle contents are rejected without replacing the launcher", asy
   const original = await fs.readFile(path, "utf8");
   const directory = join(f.context.globalStorageUri.fsPath, "adapter-v1");
   const [bundle] = (await fs.readdir(directory)).filter((entry) =>
-    /^[a-f0-9]{16}-[a-f0-9]{64}$/.test(entry),
+    /^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(entry),
   );
   await fs.writeFile(join(directory, bundle!, "stdio.cjs"), "changed");
   await assert.rejects(f.install(f.context), /modified/);
@@ -229,6 +237,83 @@ test("cancellation during a staged write cannot publish a later generation", asy
   f.api.writeFile = async (uri, contents) => {
     await write(uri, contents);
     cancelled = true;
+  };
+  await assert.rejects(
+    f.install(f.context, () => {
+      if (cancelled) throw new Error("cancelled");
+    }),
+    /cancelled/,
+  );
+  assert.equal(f.launch(path), "first");
+});
+
+for (const phase of ["before", "after"] as const)
+  test(`cancellation ${phase} the publication rename settles restores the prior adapter`, async (t) => {
+    const f = await fixture(t);
+    const path = await f.install(f.context);
+    await f.bundle("second");
+    let cancelled = false;
+    const entered = deferred();
+    const release = deferred();
+    const rename = f.api.rename;
+    f.api.rename = async (from, to, options) => {
+      if (!from.fsPath.includes("/.install-")) return rename(from, to, options);
+      if (phase === "after") await rename(from, to, options);
+      entered.resolve();
+      await release.promise;
+      if (phase === "before") await rename(from, to, options);
+    };
+    const installing = f.install(f.context, () => {
+      if (cancelled) throw new Error("cancelled");
+    });
+    await entered.promise;
+    cancelled = true;
+    release.resolve();
+    await assert.rejects(installing, /cancelled/);
+    assert.equal(f.launch(path), "first");
+  });
+
+test("rolling back a cancelled publication preserves another window's same-version installation", async (t) => {
+  const first = await fixture(t);
+  const path = await first.install(first.context);
+  await first.bundle("second");
+  const second = await fixture(t);
+  await second.bundle("second");
+  const shared = {
+    ...second.context,
+    globalStorageUri: first.context.globalStorageUri,
+  };
+  let cancelled = false;
+  const published = deferred();
+  const release = deferred();
+  const rename = first.api.rename;
+  first.api.rename = async (from, to, options) => {
+    await rename(from, to, options);
+    if (from.fsPath.includes("/.install-")) {
+      published.resolve();
+      await release.promise;
+    }
+  };
+  const installing = first.install(first.context, () => {
+    if (cancelled) throw new Error("cancelled");
+  });
+  await published.promise;
+  await second.install(shared);
+  cancelled = true;
+  release.resolve();
+  await assert.rejects(installing, /cancelled/);
+  assert.equal(first.launch(path), "second");
+});
+
+test("cancellation during staging cleanup also rolls back the publication", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await f.bundle("second");
+  let cancelled = false;
+  const remove = f.api.delete;
+  f.api.delete = async (uri) => {
+    await remove(uri);
+    if (uri.fsPath.includes("/.install-")) cancelled = true;
   };
   await assert.rejects(
     f.install(f.context, () => {
