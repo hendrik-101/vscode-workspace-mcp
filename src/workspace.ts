@@ -6,6 +6,9 @@ import {
   type ShowInput,
   type SymbolsInput,
   type SymbolResult,
+  type NavigationInput,
+  type NavigationResult,
+  type HoverResult,
   type DiffInput,
   type FormatInput,
   type FormatResult,
@@ -327,6 +330,175 @@ export class WorkspaceService implements WorkspaceApi {
       omittedChildren ||
       !!stack.length ||
       (items?.length ?? 0) > MAX_LIST_ENTRIES;
+    return result;
+  }
+
+  private async navigationSource(input: NavigationInput, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const document = await this.document(parseUri(input.uri));
+    this.text(document);
+    if (input.version !== undefined) this.expected(document, input.version);
+    const position = this.exactPosition(document, input.position);
+    signal?.throwIfAborted();
+    this.currentRoot(document.uri);
+    return { document, position, version: document.version };
+  }
+
+  private navigationComplete(
+    document: vscode.TextDocument,
+    version: number,
+    signal?: AbortSignal,
+  ): void {
+    signal?.throwIfAborted();
+    this.currentRoot(document.uri);
+    this.expected(document, version);
+    if (document.isClosed)
+      fail("VERSION_CONFLICT", "The queried document was closed.");
+  }
+
+  async definition(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    return this.navigation("vscode.executeDefinitionProvider", input, signal);
+  }
+
+  async references(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    return this.navigation("vscode.executeReferenceProvider", input, signal);
+  }
+
+  private async navigation(
+    command:
+      "vscode.executeDefinitionProvider" | "vscode.executeReferenceProvider",
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    const source = await this.navigationSource(input, signal);
+    this.navigationComplete(source.document, source.version, signal);
+    const items = await vscode.commands.executeCommand<
+      Array<vscode.Location | vscode.LocationLink>
+    >(command, source.document.uri, source.position);
+    this.navigationComplete(source.document, source.version, signal);
+    const result: NavigationResult = {
+      ...state(source.document),
+      locations: [],
+      truncated: (items?.length ?? 0) > MAX_LIST_ENTRIES,
+      omitted: 0,
+    };
+    const documents = new Map<string, Promise<vscode.TextDocument>>();
+    const resolved = new Map<string, vscode.TextDocument>();
+    for (const item of (items ?? []).slice(0, MAX_LIST_ENTRIES)) {
+      signal?.throwIfAborted();
+      this.active();
+      if (result.locations.length >= MAX_RESULTS) {
+        result.truncated = true;
+        break;
+      }
+      try {
+        const uri = parseUri(
+          ("targetUri" in item ? item.targetUri : item.uri).toString(),
+        );
+        const key = uri.toString();
+        let pending = documents.get(key);
+        if (!pending) {
+          pending = this.document(uri);
+          documents.set(key, pending);
+        }
+        const document = await pending;
+        resolved.set(key, document);
+        this.text(document);
+        this.currentRoot(uri);
+        const target = this.exactRange(
+          document,
+          "targetUri" in item
+            ? (item.targetSelectionRange ?? item.targetRange)
+            : item.range,
+        );
+        if (
+          "targetUri" in item &&
+          !this.exactRange(document, item.targetRange).contains(target)
+        )
+          fail(
+            "INVALID_ARGUMENT",
+            "Target selection must be inside its target range.",
+          );
+        result.locations.push({ ...state(document), range: range(target) });
+      } catch {
+        result.omitted++;
+      }
+    }
+    this.navigationComplete(source.document, source.version, signal);
+    // Recheck targets after asynchronous authorization of later locations.
+    const retained: NavigationResult["locations"] = [];
+    for (const location of result.locations) {
+      try {
+        const document = resolved.get(location.uri)!;
+        this.navigationComplete(document, location.version, signal);
+        retained.push(location);
+      } catch {
+        result.omitted++;
+      }
+    }
+    this.navigationComplete(source.document, source.version, signal);
+    result.locations = retained;
+    return result;
+  }
+
+  async hover(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<HoverResult> {
+    const source = await this.navigationSource(input, signal);
+    this.navigationComplete(source.document, source.version, signal);
+    const items = await vscode.commands.executeCommand<vscode.Hover[]>(
+      "vscode.executeHoverProvider",
+      source.document.uri,
+      source.position,
+    );
+    this.navigationComplete(source.document, source.version, signal);
+    const result: HoverResult = {
+      ...state(source.document),
+      untrusted: true,
+      hovers: [],
+      truncated: (items?.length ?? 0) > MAX_RESULTS,
+      omitted: 0,
+    };
+    let remaining = MAX_SELECTION * 4;
+    for (const item of (items ?? []).slice(0, MAX_RESULTS)) {
+      if (!remaining) {
+        result.truncated = true;
+        break;
+      }
+      try {
+        const hoverRange = item.range
+          ? range(this.exactRange(source.document, item.range))
+          : undefined;
+        const contents: string[] = [];
+        for (const content of item.contents.slice(0, MAX_RESULTS)) {
+          const value = typeof content === "string" ? content : content.value;
+          if (typeof value !== "string") {
+            result.omitted++;
+            continue;
+          }
+          const text = value.slice(0, remaining);
+          result.truncated ||= value.length > remaining;
+          remaining -= text.length;
+          contents.push(text);
+          if (!remaining) break;
+        }
+        result.truncated ||= item.contents.length > contents.length;
+        result.hovers.push({
+          contents,
+          ...(hoverRange ? { range: hoverRange } : {}),
+        });
+      } catch {
+        result.omitted++;
+      }
+    }
+    this.navigationComplete(source.document, source.version, signal);
     return result;
   }
 

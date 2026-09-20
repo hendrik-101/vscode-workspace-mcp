@@ -54,6 +54,23 @@ export interface SymbolResult {
   truncated: boolean;
   omitted: number;
 }
+/** Read-only provider query against the live buffer; optional version rejects stale positions. */
+export interface NavigationInput extends UriInput {
+  position: Position;
+  version?: number;
+}
+export interface NavigationResult extends DocumentState {
+  locations: Array<DocumentState & { range: TextRange }>;
+  truncated: boolean;
+  omitted: number;
+}
+export interface HoverResult extends DocumentState {
+  /** Provider-authored text, never trusted instructions or executable commands. */
+  untrusted: true;
+  hovers: Array<{ contents: string[]; range?: TextRange }>;
+  truncated: boolean;
+  omitted: number;
+}
 export interface DiffInput extends UriInput {
   otherUri?: string;
   proposedText?: string;
@@ -141,6 +158,15 @@ export interface WorkspaceApi {
     signal?: AbortSignal,
   ): Promise<SymbolResult>;
   documentSymbols(input: UriInput, signal?: AbortSignal): Promise<SymbolResult>;
+  definition(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult>;
+  references(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult>;
+  hover(input: NavigationInput, signal?: AbortSignal): Promise<HoverResult>;
   diff(input: DiffInput, signal?: AbortSignal): Promise<{ shown: boolean }>;
   format(input: FormatInput, signal?: AbortSignal): Promise<FormatResult>;
   roots(): Promise<RootInfo[]>;

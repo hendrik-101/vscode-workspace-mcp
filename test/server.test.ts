@@ -9,6 +9,31 @@ import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 const workspace: WorkspaceApi = {
   show: async ({ uri }) => ({ uri, version: 1, dirty: false }),
   workspaceSymbols: async () => ({ symbols: [], truncated: false, omitted: 0 }),
+  definition: async () => ({
+    uri: "vfs:/project/file",
+    version: 1,
+    dirty: false,
+    locations: [],
+    truncated: false,
+    omitted: 0,
+  }),
+  references: async () => ({
+    uri: "vfs:/project/file",
+    version: 1,
+    dirty: false,
+    locations: [],
+    truncated: false,
+    omitted: 0,
+  }),
+  hover: async () => ({
+    uri: "vfs:/project/file",
+    version: 1,
+    dirty: false,
+    untrusted: true,
+    hovers: [],
+    truncated: false,
+    omitted: 0,
+  }),
   documentSymbols: async () => ({ symbols: [], truncated: false, omitted: 0 }),
   diff: async () => ({ shown: true }),
   format: async ({ uri, version }) => ({
@@ -130,7 +155,10 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "edit_document",
     "editor_context",
     "format_document",
+    "get_definition",
     "get_diagnostics",
+    "get_hover",
+    "get_references",
     "list_directory",
     "read_document",
     "save_document",
@@ -144,6 +172,18 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
     ["document_symbols", { uri: "memfs:/project/a.abap" }],
     ["workspace_symbols", { query: "class" }],
+    [
+      "get_definition",
+      { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
+    ],
+    [
+      "get_references",
+      { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
+    ],
+    [
+      "get_hover",
+      { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
+    ],
     [
       "show_diff",
       { uri: "memfs:/project/a.abap", proposedText: "", version: 4 },
