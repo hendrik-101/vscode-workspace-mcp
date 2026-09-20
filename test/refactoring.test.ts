@@ -373,3 +373,32 @@ test("newly opened source exceeding decoded text limit never dispatches a provid
   assert.equal(f.calls.length, 0);
   assert.equal(f.listeners.size, 0);
 });
+
+for (const limit of ["count", "bytes"] as const) {
+  test(`initial document snapshot rejects its ${limit} budget before provider dispatch`, async () => {
+    const f = fixture();
+    let copiedUris = 0;
+    const extras = Array.from(
+      { length: limit === "count" ? 1000 : 1 },
+      (_, index) => {
+        const uri = new Uri(
+          `/project/${limit === "bytes" ? "é".repeat(131_072) : index}`,
+        );
+        const stringify = uri.toString.bind(uri);
+        uri.toString = () => {
+          copiedUris++;
+          return stringify();
+        };
+        return { ...f.documents[0]!, uri };
+      },
+    );
+    f.vscode.workspace.textDocuments = [f.documents[0]!, ...extras];
+    await assert.rejects(
+      f.service.rename(f.input),
+      errorCode("LIMIT_EXCEEDED"),
+    );
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.listeners.size, 0);
+    if (limit === "count") assert.equal(copiedUris, 0);
+  });
+}

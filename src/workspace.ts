@@ -563,12 +563,18 @@ export class WorkspaceService implements WorkspaceApi {
       string,
       { document: vscode.TextDocument; version: number }
     >();
-    const initial = new Map(
-      vscode.workspace.textDocuments.map((document) => [
-        document.uri.toString(),
-        document.version,
-      ]),
-    );
+    const openDocuments = vscode.workspace.textDocuments;
+    if (openDocuments.length > 1000)
+      fail("LIMIT_EXCEEDED", "Provider snapshot exceeds 1000 open documents.");
+    const initial = new Map<string, number>();
+    let initialBytes = 0;
+    for (const document of openDocuments) {
+      const uri = document.uri.toString();
+      initialBytes += Buffer.byteLength(uri);
+      if (initialBytes > 256 * 1024)
+        fail("LIMIT_EXCEEDED", "Provider snapshot URI text exceeds 256 KiB.");
+      initial.set(uri, document.version);
+    }
     const changed = new Set<string>();
     let changedBytes = 0;
     let trackingOverflow = false;

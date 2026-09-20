@@ -17,7 +17,8 @@ checked again after all asynchronous work. Cancellation and stopped sessions
 also discard pending results. Change observers are released immediately on
 cancellation or session stop, even when a provider never settles. Tracking is
 capped at 1000 changed document URIs and 256 KiB of URI text; overflow rejects
-the preview.
+the preview. The initial version snapshot is also bounded to 1000 open documents
+and 256 KiB of URI text, checked before dispatching a provider.
 
 ## Application limitation
 
