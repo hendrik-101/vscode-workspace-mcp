@@ -165,10 +165,10 @@ export class WorkspaceService implements WorkspaceApi {
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
     this.disposed = true;
-    for (const observer of this.navigationObservers) observer.dispose();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
+    for (const observer of this.navigationObservers) observer.dispose();
     this.pendingSnapshots.clear();
   }
 
