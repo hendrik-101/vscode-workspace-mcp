@@ -6,6 +6,7 @@ import { transformSync } from "esbuild";
 import * as preferences from "../src/preferences";
 import { TLS_KEY } from "../src/tls";
 import { BridgeSession } from "../src/session";
+import { clientConfiguration } from "../src/configuration";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -15,8 +16,14 @@ function fixture(initialPolicy: string = "ask") {
   const warnings: string[] = [];
   const errors: string[] = [];
   const identity = { cert: "test certificate", key: "test private key" };
-  const delays: { bind?: Promise<void>; identityGeneration?: Promise<void> } =
-    {};
+  const delays: {
+    bind?: Promise<void>;
+    identityGeneration?: Promise<void>;
+    adapterInstallation?: Promise<void>;
+    adapterFailure?: Error;
+  } = {};
+  const installedAdapters: string[] = [];
+  const documents: { content: string; language: string }[] = [];
   const values = new Map<string, string>([[TLS_KEY, JSON.stringify(identity)]]);
   const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
   const connections: {
@@ -30,6 +37,8 @@ function fixture(initialPolicy: string = "ask") {
   const services: { canWrite: () => boolean }[] = [];
   let secretChanged: ((event: { key: string }) => void) | undefined;
   const context = {
+    extensionUri: { scheme: "file", fsPath: "/extensions/workspace-mcp-0.1.0" },
+    globalStorageUri: { scheme: "file", fsPath: "/storage/workspace-mcp" },
     subscriptions: [] as { dispose(): void }[],
     secrets: {
       get: async (key: string) => values.get(key),
@@ -53,6 +62,13 @@ function fixture(initialPolicy: string = "ask") {
       },
     },
     workspace: {
+      openTextDocument: async (options: {
+        content: string;
+        language: string;
+      }) => {
+        documents.push(options);
+        return options;
+      },
       isTrusted: true,
       onDidChangeConfiguration: () => ({ dispose() {} }),
       getConfiguration: () => ({
@@ -66,6 +82,8 @@ function fixture(initialPolicy: string = "ask") {
       }),
     },
     window: {
+      showQuickPick: async () => ({ value: "codex" }),
+      showTextDocument: async () => undefined,
       createStatusBarItem: () => status,
       showWarningMessage: (message: string) => {
         warnings.push(message);
@@ -114,7 +132,21 @@ function fixture(initialPolicy: string = "ask") {
           },
         };
       if (id === "./session") return { BridgeSession };
-      if (id === "./configuration") return {};
+      if (id === "./configuration") return { clientConfiguration };
+      if (id === "./adapter")
+        return {
+          installAdapter: async (
+            _context: unknown,
+            checkCurrent: () => void,
+          ) => {
+            await delays.adapterInstallation;
+            checkCurrent();
+            if (delays.adapterFailure) throw delays.adapterFailure;
+            const path = "/storage/workspace-mcp/adapter-v1/stdio.cjs";
+            installedAdapters.push(path);
+            return path;
+          },
+        };
       if (id === "./workspace")
         return {
           WorkspaceService: class {
@@ -167,9 +199,56 @@ function fixture(initialPolicy: string = "ask") {
     connections,
     services,
     context,
+    documents,
+    installedAdapters,
     changed: (key = preferences.TOKEN_KEY) => secretChanged!({ key }),
   };
 }
+
+test("connection configuration uses the installed stable adapter path", async () => {
+  const f = fixture("deny");
+  await f.command("start");
+  await f.command("connection");
+  assert.equal(f.documents.length, 1);
+  assert.match(
+    f.documents[0]!.content,
+    /args = \["\/storage\/workspace-mcp\/adapter-v1\/stdio.cjs"\]/,
+  );
+  assert.ok(!f.documents[0]!.content.includes("test private key"));
+  await f.command("stop");
+});
+
+test("adapter installation failure prevents listener startup and credential initialization", async () => {
+  const f = fixture("deny");
+  f.delays.adapterFailure = new Error(
+    "Workspace MCP adapter could not be installed.",
+  );
+  await f.command("start");
+  assert.equal(f.connections.length, 0);
+  assert.equal(f.values.has(preferences.TOKEN_KEY), false);
+  assert.match(f.errors[0]!, /adapter/);
+});
+
+test("Stop cancels adapter startup before a delayed install can publish", async () => {
+  const f = fixture("deny");
+  let release!: () => void;
+  f.delays.adapterInstallation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const starting = f.command("start");
+  await tick();
+  await f.command("stop");
+  await starting;
+  release();
+  await tick();
+  assert.equal(f.installedAdapters.length, 0);
+  assert.equal(f.connections.length, 0);
+  f.delays.adapterInstallation = undefined;
+  await f.command("start");
+  assert.equal(f.installedAdapters.length, 1);
+  assert.equal(f.connections.length, 1);
+  await f.command("stop");
+});
 
 test("startup prompts never block Stop; stale replies cannot persist or grant writes", async () => {
   const f = fixture();

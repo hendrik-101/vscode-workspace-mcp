@@ -4,7 +4,8 @@ Install the VSIX, open the intended workspace, then run **Workspace MCP: Start**
 and **Workspace MCP: Show Connection Details** from the VS Code Command Palette.
 The details contain ready-to-copy **stdio** client configuration for `workspace_mcp`.
 Install Node.js 24 or newer on the client host. The client launches the bundled
-`dist/stdio.cjs` adapter with `node`; keep the generated absolute path. The adapter
+adapter with `node`; keep the generated absolute path. Start installs it in VS Code's
+extension storage, so the path survives extension upgrades. The adapter
 connects only to the local extension over authenticated TLS, using its public
 certificate as the sole trust anchor. It never discovers other endpoints or follows
 redirects. Credentials are environment values, never command-line arguments.
@@ -12,11 +13,33 @@ The loopback port is fixed: `workspaceMcp.port` defaults to **39117** (1024–65
 The bearer token is generated once in VS Code SecretStorage and reused across
 restarts and port changes. Set these options in **User** settings; workspace
 overrides are ignored. Update client configuration only after changing the port
-or explicitly rotating the token or server identity. Extension upgrades can change
-the adapter path; refresh connection details after upgrading. A port already in use fails visibly, without
+or explicitly rotating the token or server identity. After an extension upgrade,
+run Start, then restart the client connection to load the updated adapter. If your
+existing configuration still points inside a versioned extension installation,
+copy connection details once to switch to the stable path; your credentials stay
+the same. A port already in use fails visibly, without
 fallback; stop the other window or choose another user port before starting.
 Windows sharing this extension SecretStorage share the credential; inspect the
 returned workspace roots before working.
+
+The stable path belongs to the current VS Code storage location and extension
+host. Moving profiles, user-data directories, or remote hosts may require new
+connection details. The client needs access to that file and the extension host's
+loopback interface; a stable path does not provide remote access. If storage is
+unavailable or is not a local filesystem on that host, Start fails visibly.
+
+The extension installs only its packaged adapter and third-party notices, with no
+downloads or credentials in these files. Complete adapter generations are retained
+so updates cannot remove code that another client is loading; they consume disk
+space across upgrades and are not automatically pruned. To reclaim that space,
+stop every bridge and client using this storage, remove only its `adapter-v1`
+directory, then Start again. The same path is recreated.
+
+Windows sharing storage use the most recently published compatible protocol-v1
+adapter. Simultaneous publications select one complete generation deterministically;
+starting an older extension later can select its older compatible adapter. Restart
+the upgraded extension's bridge to select its bundle again. A future incompatible
+adapter protocol will need a new path and updated client configuration.
 
 Before enabling agent edits, turn **Files: Auto Save** off for the workspace.
 Otherwise VS Code may save an edited buffer automatically even though the bridge
