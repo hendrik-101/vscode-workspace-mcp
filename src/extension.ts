@@ -264,6 +264,11 @@ export function activate(context: vscode.ExtensionContext): void {
           const installing = installAdapter(context, checkCurrent).catch(
             (error: unknown) => {
               if (error === cancelledStartup) throw error;
+              if (
+                error instanceof Error &&
+                error.message.startsWith("Workspace MCP adapter")
+              )
+                throw error;
               throw new Error(
                 "Workspace MCP adapter could not be installed. Check extension storage on this host and restart the bridge.",
               );

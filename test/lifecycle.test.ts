@@ -110,6 +110,7 @@ function fixture(initialPolicy: string = "ask") {
   runInNewContext(code, {
     module,
     exports,
+    Error,
     URL,
     require: (id: string) => {
       if (id === "vscode") return vscode;
@@ -228,6 +229,26 @@ test("adapter installation failure prevents listener startup and credential init
   assert.equal(f.values.has(preferences.TOKEN_KEY), false);
   assert.match(f.errors[0]!, /adapter/);
 });
+
+for (const [name, message, expected] of [
+  [
+    "preserves safe adapter guidance",
+    "Workspace MCP adapter requires local file storage on the extension host.",
+    "Workspace MCP adapter requires local file storage on the extension host.",
+  ],
+  [
+    "hides raw filesystem details",
+    "EACCES: permission denied, open '/private/customer/storage/stdio.cjs'",
+    "Workspace MCP adapter could not be installed. Check extension storage on this host and restart the bridge.",
+  ],
+] as const)
+  test(`adapter installation ${name}`, async () => {
+    const f = fixture("deny");
+    f.delays.adapterFailure = new Error(message);
+    await f.command("start");
+    assert.deepEqual(f.errors, [expected]);
+    assert.equal(f.connections.length, 0);
+  });
 
 test("Stop cancels adapter startup before a delayed install can publish", async () => {
   const f = fixture("deny");
