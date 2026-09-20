@@ -327,3 +327,48 @@ test("oversized open-document snapshots fail before provider dispatch or listene
     assert.equal(f.listeners.size, 0);
   }
 });
+
+test("cancellation during source or target stat prevents subsequent filesystem calls and opens", async () => {
+  for (const target of [false, true]) {
+    const f = fixture();
+    const controller = new AbortController();
+    let stats = 0;
+    let opens = 0;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalStat = f.vscode.workspace.fs.stat;
+    f.vscode.workspace.fs.stat = async (uri) => {
+      stats++;
+      if (stats === (target ? 3 : 1)) {
+        entered();
+        await gate;
+      }
+      return originalStat(uri);
+    };
+    Object.assign(f.vscode.workspace, {
+      openTextDocument: async () => {
+        opens++;
+        return f.documents[0];
+      },
+    });
+    if (target) {
+      f.documents.pop();
+      f.result([{ uri: f.target, range: f.full }]);
+    }
+    const pending = f.service.definition(f.input, controller.signal);
+    await started;
+    controller.abort();
+    release();
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(stats, target ? 3 : 1);
+    assert.equal(opens, 0);
+    assert.equal(f.calls.length, target ? 1 : 0);
+    assert.equal(f.listeners.size, 0);
+  }
+});
