@@ -382,12 +382,18 @@ export class WorkspaceService implements WorkspaceApi {
     this.navigationComplete(source.document, source.version, signal);
     // Snapshot open targets before dispatch; also observe documents opened and
     // edited while the command runs. Never label old ranges with a new version.
-    const initialVersions = new Map(
-      vscode.workspace.textDocuments.map((document) => [
-        document.uri.toString(),
-        document.version,
-      ]),
-    );
+    const openDocuments = vscode.workspace.textDocuments;
+    if (openDocuments.length > MAX_LIST_ENTRIES)
+      fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 1000 documents.");
+    const initialVersions = new Map<string, number>();
+    let snapshotBytes = 0;
+    for (const document of openDocuments) {
+      const uri = document.uri.toString();
+      snapshotBytes += Buffer.byteLength(uri);
+      if (snapshotBytes > 256 * 1024)
+        fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 256 KiB of URIs.");
+      initialVersions.set(uri, document.version);
+    }
     const changed = new Set<string>();
     let overflow = false;
     const listener = vscode.workspace.onDidChangeTextDocument((event) => {

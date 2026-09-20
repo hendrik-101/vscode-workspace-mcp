@@ -306,3 +306,24 @@ test("abort and stop dispose navigation observers even when the command never se
     assert.equal(f.listeners.size, 0);
   }
 });
+
+test("oversized open-document snapshots fail before provider dispatch or listener registration", async () => {
+  for (const limit of ["count", "bytes"] as const) {
+    const f = fixture();
+    if (limit === "count") {
+      f.documents.push(
+        ...Array.from({ length: 999 }, () => ({ ...f.documents[1]! })),
+      );
+    } else {
+      f.documents.push({
+        ...f.documents[1]!,
+        uri: Uri.parse(`vfs-test:/project/${"a".repeat(256 * 1024)}`),
+      });
+    }
+    await assert.rejects(f.service.definition(f.input), {
+      code: "LIMIT_EXCEEDED",
+    });
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.listeners.size, 0);
+  }
+});
