@@ -23,10 +23,11 @@ that document. Neither an event nor an empty result establishes a clean build or
 completed analysis. The returned document version describes the live buffer,
 not a language server's analysis version. No save or activation is performed.
 
-Document changes, closure or replacement produce `VERSION_CONFLICT`. Workspace
-roots, symbolic-link admission, Workspace Trust and session state are checked
+Document changes, closure or replacement produce `VERSION_CONFLICT`. Closure
+is observed from the start of authorization, even if the URI was initially unopened.
+Workspace roots, symbolic-link admission, Workspace Trust and session state are checked
 before returning diagnostics. Cancellation and stopping the bridge release the
-listener and timers. An additional 25-second overall deadline bounds slow
+listeners and timers. An additional 25-second overall deadline bounds slow
 provider authorization/loading, below the server's 30-second request timeout;
 exceeding it returns `LIMIT_EXCEEDED`, not a diagnostic snapshot. VS Code provider
 calls already in progress cannot be cancelled, but cannot publish a late result

@@ -47,6 +47,7 @@ function fixture(hardDeadlineMs = 25_000) {
   };
   const listeners = new Set<(event: { uris: Uri[] }) => void>();
   let registrations = 0;
+  const closeListeners = new Set<(document: { uri: Uri }) => void>();
   const timers = new Map<ReturnType<typeof setTimeout>, number>();
   const emit = (target = uri) =>
     listeners.forEach((listener) => listener({ uris: [target] }));
@@ -59,6 +60,10 @@ function fixture(hardDeadlineMs = 25_000) {
       isTrusted: true,
       workspaceFolders: [{ uri: root }],
       textDocuments: [document],
+      onDidCloseTextDocument: (listener: (document: { uri: Uri }) => void) => {
+        closeListeners.add(listener);
+        return { dispose: () => closeListeners.delete(listener) };
+      },
       openTextDocument: async (uri: Uri) => {
         opened.push(uri);
         return document;
@@ -122,6 +127,9 @@ function fixture(hardDeadlineMs = 25_000) {
     document,
     emit,
     listeners,
+    closeListeners,
+    close: (uri = document.uri) =>
+      closeListeners.forEach((listener) => listener({ uri })),
     timers,
     opened,
     registrations: () => registrations,
@@ -135,6 +143,7 @@ function fixture(hardDeadlineMs = 25_000) {
       ),
     clean: () => {
       assert.equal(listeners.size, 0);
+      assert.equal(closeListeners.size, 0);
       assert.equal(timers.size, 0);
       service.dispose();
     },
@@ -325,6 +334,7 @@ for (const termination of ["abort", "deadline"] as const) {
       // Keep the service alive while late provider work completes: stopping it
       // here would mask cancellation bugs with the existing session checks.
       assert.equal(f.listeners.size, 0);
+      assert.equal(f.closeListeners.size, 0);
       assert.equal(f.timers.size, 0);
       release();
       await tick();
@@ -345,6 +355,7 @@ test("cancelled waits retain provider capacity until the pending work actually s
     controller.abort();
     await assert.rejects(pending, { name: "AbortError" });
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
     assert.equal(f.timers.size, 0);
   };
   try {
@@ -360,6 +371,7 @@ test("cancelled waits retain provider capacity until the pending work actually s
     assert.equal(releases.length, 16);
     assert.equal(f.registrations(), 16);
     assert.equal(f.listeners.size, 0);
+    assert.equal(f.closeListeners.size, 0);
     assert.equal(f.timers.size, 0);
     releases[0]!();
     await tick();
@@ -370,4 +382,35 @@ test("cancelled waits retain provider capacity until the pending work actually s
     await tick();
     f.clean();
   }
+});
+
+test("an initially closed URI opened, diagnosed and replaced during authorization conflicts", async () => {
+  const f = fixture();
+  f.vscode.workspace.textDocuments = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  f.setStat(async () => {
+    if (++calls === 1) await gate;
+  });
+  const pending = f.wait();
+  f.vscode.workspace.textDocuments = [f.document];
+  f.emit();
+  f.document.isClosed = true;
+  f.close();
+  f.vscode.workspace.textDocuments = [{ ...f.document, isClosed: false }];
+  release();
+  await assert.rejects(pending, code("VERSION_CONFLICT"));
+  f.clean();
+});
+
+test("closing an unrelated URI does not invalidate the diagnostic wait", async () => {
+  const f = fixture();
+  const pending = f.wait();
+  f.close(Uri.parse("memfs:/project/unrelated.txt"));
+  f.emit();
+  assert.equal((await pending).outcome, "event_observed");
+  f.clean();
 });

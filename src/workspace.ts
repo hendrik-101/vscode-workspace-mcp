@@ -1120,6 +1120,18 @@ export class WorkspaceService implements WorkspaceApi {
         wake();
       }
     });
+    // Even a URI unopened at entry can open and close while authorization awaits.
+    const closeListener = vscode.workspace.onDidCloseTextDocument(
+      (document) => {
+        if (document.uri.toString() === uri.toString())
+          controller.abort(
+            new WorkspaceError(
+              "VERSION_CONFLICT",
+              "The observed document was closed during the wait.",
+            ),
+          );
+      },
+    );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = setTimeout(
       () =>
@@ -1193,6 +1205,7 @@ export class WorkspaceService implements WorkspaceApi {
       clearTimeout(timer);
       clearTimeout(deadline);
       listener.dispose();
+      closeListener.dispose();
       this.diagnosticWaits.delete(stop);
       signal?.removeEventListener("abort", abort);
       controller.signal.removeEventListener("abort", rejectAbort);
