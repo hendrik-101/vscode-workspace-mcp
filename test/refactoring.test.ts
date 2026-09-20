@@ -59,7 +59,7 @@ function fixture() {
     lineCount: 1,
     lineAt: () => ({ text: "before", range }),
     offsetAt: (position: Position) => position.character,
-    getText: () => "before",
+    getText: (): string => "before",
   }));
   let supplied: () => unknown = () => ({
     entries: () =>
@@ -78,6 +78,10 @@ function fixture() {
     workspace: {
       workspaceFolders: [{ uri: new Uri("/project") }],
       textDocuments: documents,
+      openTextDocument: async (uri: Uri) =>
+        documents.find(
+          (document) => document.uri.toString() === uri.toString(),
+        )!,
       onDidChangeTextDocument: (
         listener: (event: { document: (typeof documents)[number] }) => void,
       ) => {
@@ -311,6 +315,61 @@ test("cancelled source loading never dispatches a provider", async () => {
   await assert.rejects(f.service.rename(f.input, controller.signal), {
     name: "AbortError",
   });
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.listeners.size, 0);
+});
+
+for (const stop of [false, true]) {
+  test(`${stop ? "dispose" : "abort"} releases observers while a provider never settles`, async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    let started!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    f.supply(() => {
+      started();
+      return new Promise(() => {});
+    });
+    void f.service.rename(f.input, controller.signal);
+    await providerStarted;
+    assert.equal(f.listeners.size, 1);
+    if (stop) f.service.dispose();
+    else controller.abort();
+    assert.equal(f.listeners.size, 0);
+    f.change(1);
+    f.service.dispose();
+    assert.equal(f.listeners.size, 0);
+  });
+}
+
+test("change tracking overflow fails closed instead of retaining unbounded URIs", async () => {
+  const f = fixture();
+  f.supply(() => {
+    for (let index = 0; index < 1001; index++) {
+      const document = {
+        ...f.documents[0]!,
+        uri: new Uri(`/project/changed-${index}`),
+      };
+      f.listeners.forEach((listener) => listener({ document }));
+    }
+    return { entries: () => [] };
+  });
+  await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
+  assert.equal(f.listeners.size, 0);
+});
+
+test("newly opened source exceeding decoded text limit never dispatches a provider", async () => {
+  const f = fixture();
+  const source = f.documents[0]!;
+  const text = "é".repeat(600_000);
+  source.getText = () => text;
+  source.lineAt = () => ({
+    text,
+    range: new Range(new Position(0, 0), new Position(0, text.length)),
+  });
+  f.vscode.workspace.textDocuments = [];
+  await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
   assert.equal(f.calls.length, 0);
   assert.equal(f.listeners.size, 0);
 });

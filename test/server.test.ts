@@ -167,6 +167,14 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ["document_symbols", { uri: "memfs:/project/a.abap" }],
     ["workspace_symbols", { query: "class" }],
     [
+      "show_diff",
+      { uri: "memfs:/project/a.abap", proposedText: "", version: 4 },
+    ],
+    [
+      "format_document",
+      { uri: "memfs:/project/a.abap", version: 4, apply: false },
+    ],
+    [
       "preview_rename",
       {
         uri: "memfs:/project/a.abap",
@@ -187,14 +195,6 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
         kind: "quickfix",
       },
     ],
-    [
-      "show_diff",
-      { uri: "memfs:/project/a.abap", proposedText: "", version: 4 },
-    ],
-    [
-      "format_document",
-      { uri: "memfs:/project/a.abap", version: 4, apply: false },
-    ],
   ] as const) {
     assert.equal(
       (await client.callTool({ name, arguments: args })).isError,
@@ -202,12 +202,6 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     );
   }
   for (const [name, args] of [
-    ["show_document", { uri: "memfs:/project/a.abap", command: "unsafe" }],
-    [
-      "format_document",
-      { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
-    ],
-    ["workspace_symbols", { query: "" }],
     [
       "preview_rename",
       {
@@ -230,6 +224,12 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
         kind: "source",
       },
     ],
+    ["show_document", { uri: "memfs:/project/a.abap", command: "unsafe" }],
+    [
+      "format_document",
+      { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
+    ],
+    ["workspace_symbols", { query: "" }],
   ] as const) {
     assert.equal(
       (await client.callTool({ name, arguments: args })).isError,

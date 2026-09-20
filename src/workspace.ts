@@ -153,6 +153,7 @@ export class WorkspaceService implements WorkspaceApi {
    */
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
+  private readonly refactoringCleanups = new Set<() => void>();
   private disposed = false;
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
@@ -164,6 +165,7 @@ export class WorkspaceService implements WorkspaceApi {
     this.disposed = true;
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
+    for (const cleanup of this.refactoringCleanups) cleanup();
     this.snapshots.clear();
     this.pendingSnapshots.clear();
   }
@@ -555,6 +557,7 @@ export class WorkspaceService implements WorkspaceApi {
   ): Promise<T> {
     signal?.throwIfAborted();
     const source = await this.document(parseUri(input.uri));
+    this.text(source);
     this.expected(source, input.version);
     const observed = new Map<
       string,
@@ -567,9 +570,32 @@ export class WorkspaceService implements WorkspaceApi {
       ]),
     );
     const changed = new Set<string>();
-    const listener = vscode.workspace.onDidChangeTextDocument((event) =>
-      changed.add(event.document.uri.toString()),
-    );
+    let changedBytes = 0;
+    let trackingOverflow = false;
+    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (trackingOverflow) return;
+      const uri = event.document.uri.toString();
+      if (changed.has(uri)) return;
+      changedBytes += Buffer.byteLength(uri);
+      if (changed.size >= 1000 || changedBytes > 256 * 1024) {
+        trackingOverflow = true;
+        listener.dispose();
+        return;
+      }
+      changed.add(uri);
+    });
+    // Provider commands have no cancellation token and can remain pending forever.
+    // Release observers and retained document snapshots independently of settlement.
+    const cleanup = () => {
+      listener.dispose();
+      signal?.removeEventListener("abort", cleanup);
+      this.refactoringCleanups.delete(cleanup);
+      changed.clear();
+      initial.clear();
+      observed.clear();
+    };
+    this.refactoringCleanups.add(cleanup);
+    signal?.addEventListener("abort", cleanup, { once: true });
     let editCount = 0;
     let documentCount = 0;
     let bytes = 0;
@@ -604,6 +630,8 @@ export class WorkspaceService implements WorkspaceApi {
           if (bytes > 256 * 1024)
             fail("LIMIT_EXCEEDED", "Provider previews exceed 256 KiB.");
           const document = await this.document(parseUri(target.toString()));
+          signal?.throwIfAborted();
+          this.active();
           const version = initial.get(target.toString()) ?? document.version;
           this.expected(document, version);
           observed.set(target.toString(), { document, version });
@@ -629,9 +657,17 @@ export class WorkspaceService implements WorkspaceApi {
         return preview;
       });
       // Reauthorize every target after provider work, then check all versions without awaits.
+      signal?.throwIfAborted();
+      this.active();
       for (const { document } of observed.values())
         await this.authorize(document.uri);
       signal?.throwIfAborted();
+      this.active();
+      if (trackingOverflow)
+        fail(
+          "LIMIT_EXCEEDED",
+          "Too many document changes during provider preview.",
+        );
       for (const [uri, { document, version }] of observed) {
         this.currentRoot(document.uri);
         if (changed.has(uri) || document.isClosed)
@@ -643,7 +679,7 @@ export class WorkspaceService implements WorkspaceApi {
       }
       return result;
     } finally {
-      listener.dispose();
+      cleanup();
     }
   }
 
