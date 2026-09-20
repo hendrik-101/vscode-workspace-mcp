@@ -24,7 +24,7 @@ export async function refactoringTools(
   let target = other;
   let commandRuns = 0;
   let mutate = false;
-  let expectedKind: "quickfix" | "refactor" = "quickfix";
+  const actionTitle = "Workspace MCP integration: edit both buffers";
   const registrations = [
     vscode.commands.registerCommand(
       "workspaceMcp.testNeverExecute",
@@ -48,8 +48,10 @@ export async function refactoringTools(
     }),
     vscode.languages.registerCodeActionsProvider(selector, {
       provideCodeActions(_document, _range, context) {
-        assert.equal(context.only?.value, expectedKind);
-        const action = new vscode.CodeAction("Fix both", context.only);
+        const action = new vscode.CodeAction(
+          `${actionTitle} (${context.only?.value ?? "unfiltered"})`,
+          context.only,
+        );
         action.edit = new vscode.WorkspaceEdit();
         action.edit.replace(file, range, "after");
         action.edit.replace(other, range, "after");
@@ -78,17 +80,21 @@ export async function refactoringTools(
     assert.equal(rename.preview.documents.length, 2);
     assert.equal(rename.preview.documents[1]?.version, sibling.version);
     for (const kind of ["quickfix", "refactor"] as const) {
-      expectedKind = kind;
       const actions = await service.codeActions({
         uri: file.toString(),
         version: document.version,
         range,
         kind,
       });
-      assert.equal(actions.actions.length, 1);
-      assert.equal(actions.actions[0]?.kind, kind);
-      assert.equal(actions.actions[0]?.documents.length, 2);
-      assert.ok(actions.actions[0]?.reasons.includes("COMMAND_REQUIRED"));
+      // VS Code can also supply built-in actions. The fixture title records the
+      // provider's actual context without asserting on unrelated automatic queries.
+      const ownAction = actions.actions.find(
+        (action) => action.title === `${actionTitle} (${kind})`,
+      );
+      assert.ok(ownAction, `Fixture provider must receive the ${kind} context`);
+      assert.equal(ownAction.kind, kind);
+      assert.equal(ownAction.documents.length, 2);
+      assert.ok(ownAction.reasons.includes("COMMAND_REQUIRED"));
     }
     assert.equal(commandRuns, 0);
     assert.equal(document.getText(), "before");
