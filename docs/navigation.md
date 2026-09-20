@@ -19,6 +19,12 @@ buffers. Full URI scheme, authority, path, and query identity are preserved.
 At most 1,000 candidates are inspected and 100 locations returned. `omitted`
 counts inspected denied, invalid, unavailable, or changed targets; `truncated`
 indicates a processing/output cap. Source document state accompanies results.
+Open target versions are captured before provider dispatch, and content edits are
+observed throughout the query (including documents opened while it runs). Changed
+targets are omitted rather than labeling old ranges with a new version. Tracking
+more than 1,000 changed URIs fails with `LIMIT_EXCEEDED`. Source and target dirty
+states are captured again immediately before return, so intervening saves are
+reflected. Repeated target locations reuse full-text validation per URI/version.
 
 Hover results contain bounded text arrays and optional validated ranges, with
 `untrusted: true`. Provider text, including Markdown and command links, is data:
@@ -29,4 +35,5 @@ and 16,384 total UTF-16 code units. Invalid hover entries are counted as omitted
 Cancellation and current roots are checked before dispatch and before returning.
 The public provider commands expose no request cancellation token: already-running
 provider work cannot be forcibly cancelled, but its results are discarded after
-cancellation. Synthetic provider tests do not establish SAP-backend compatibility.
+cancellation. Change listeners are removed on cancellation or bridge stop even
+when a provider never settles. Synthetic provider tests do not establish SAP-backend compatibility.
