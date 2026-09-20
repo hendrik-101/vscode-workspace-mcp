@@ -12,11 +12,15 @@ in this repository. This is an independent community project, not an SAP product
   never convert workspace URIs into OS paths. Read live buffers, apply versioned
   edits, and save only through a separate operation.
 - `server.ts`: the official MCP TypeScript SDK, input schemas, bounded requests,
-  loopback HTTP, mandatory random bearer token and rejection of browser Origins.
+  internal loopback HTTPS, bearer token and rejection of browser Origins.
+- `tls.ts`: persistent server identity in SecretStorage, generated through native
+  WebCrypto and pinned certificate library; explicit replacement only.
+- `stdio.ts`: MCP stdio adapter with dedicated TLS certificate trust, loopback-only
+  destination, no redirects and no external requests. Native clients use stdio.
 - `extension.ts`: explicit start/stop, per-window lifecycle and connection details.
-  Writes require explicit session approval; no autostart or persistent write opt-in.
+  Writes follow a user-only deny/allow/ask policy (default ask); no autostart.
 - Client packages: common workflows with thin Claude Code and Codex manifests;
-  direct MCP settings for Codex IDE and ChatGPT desktop on the same host.
+  stdio MCP settings for Codex IDE and ChatGPT desktop on the same host.
 
 Tools: roots, editor context, directory listing, text reading, literal text search,
 versioned text edits, explicit save and diagnostics. No shell, terminal, arbitrary
@@ -24,13 +28,16 @@ VS Code commands, file deletion, backend activation or remote listener in v0.1.
 
 ## Security contract
 
-Bind only to 127.0.0.1. Use an ephemeral port and at least 256 bits of random token
-per running server. Authorize every request before MCP parsing, validate Host,
+Bind only to 127.0.0.1 on the configured fixed port (default 39117). Store a
+256-bit random bearer token and TLS server identity in VS Code SecretStorage, reused
+until explicit rotation. The adapter pins the supplied certificate before sending
+credentials. Another local user taking the port cannot impersonate the bridge. Authorize every request before MCP parsing, validate Host,
 reject Origin, cap request size/concurrency and close transports on completion.
 The token grants access to this window's admitted workspace roots only. Recheck
 roots and Workspace Trust for operations. Reject traversal and symlinks. A hostile
 filesystem provider is outside the boundary: installed VS Code extensions already
-run with user privileges. No telemetry, analytics or outbound HTTP in product code.
+run with user privileges. No telemetry, analytics or external network requests in product code. Only the
+stdio adapter may connect to the loopback listener, with verified server identity.
 
 Search is bounded and reports incomplete results. No assumptions about a search
 provider or local ripgrep. File operations use workspace.fs / TextDocument /

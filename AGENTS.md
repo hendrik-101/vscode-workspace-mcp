@@ -1,7 +1,9 @@
 # Agent entry point
 
 Keep this MIT project small, readable and free of telemetry. Preserve full VS Code
-URIs and live buffers. No shell tools, arbitrary commands or outbound requests.
+URIs and live buffers. No shell tools, arbitrary commands or external outbound requests.
+The stdio adapter may connect only to the configured loopback TLS endpoint, with
+its pinned certificate; never disable certificate verification or follow redirects.
 Use feature branches and PRs. **Never push development commits to `main`, merge
 without the owner's explicit instruction, or publish a release without approval.**
 
@@ -27,7 +29,7 @@ Read unsaved buffers; require document versions for edits; never implicitly save
 
 Every resource and editor context must be within admitted current workspace roots.
 Reject traversal, symlink escapes, hostile Host/Origin and missing/invalid tokens.
-Writes need explicit session opt-in and Workspace Trust. No network binding beyond
+Writes need the user write policy or session approval and Workspace Trust. No network binding beyond
 loopback, no outgoing product requests, no secrets in logs or checked-in files.
 
 ### Honest results

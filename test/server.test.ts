@@ -540,3 +540,122 @@ for (const toolName of ["edit_document", "save_document"]) {
     assert.equal(mutated, false);
   });
 }
+
+test("configured endpoint reuses credentials and rejects port collisions without fallback", async () => {
+  const token = "a".repeat(64);
+  const first = await startServer(workspace, { token });
+  const port = Number(new URL(first.url).port);
+  try {
+    await assert.rejects(startServer(workspace, { port, token }), {
+      code: "EADDRINUSE",
+    });
+  } finally {
+    await first.close();
+  }
+  const restarted = await startServer(workspace, { port, token });
+  try {
+    assert.equal(restarted.url, first.url);
+    assert.equal(restarted.token, token);
+    assert.notEqual(
+      (await http(restarted.url, { Authorization: `Bearer ${token}` })).status,
+      401,
+    );
+    assert.equal(
+      (await http(restarted.url, { Authorization: `Bearer ${"b".repeat(64)}` }))
+        .status,
+      401,
+    );
+  } finally {
+    await restarted.close();
+  }
+});
+
+test("secret verification suspends HTTP acceptance before body parsing", async () => {
+  let authorized = true;
+  const server = await startServer(workspace, { authorized: () => authorized });
+  try {
+    const headers = { Authorization: `Bearer ${server.token}` };
+    authorized = false;
+    assert.equal((await http(server.url, headers, "not JSON")).status, 401);
+    authorized = true;
+    assert.notEqual((await http(server.url, headers)).status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
+for (const toolName of ["edit_document", "save_document"]) {
+  test(`authorization suspension permanently aborts deferred ${toolName} even after access resumes`, async (t) => {
+    let release!: () => void;
+    let markEntered!: () => void;
+    let receivedSignal: AbortSignal | undefined;
+    let mutated = false;
+    let authorized = true;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const mutate = async (
+      { uri, version }: { uri: string; version: number },
+      signal?: AbortSignal,
+    ) => {
+      receivedSignal = signal;
+      markEntered();
+      await gate;
+      signal?.throwIfAborted();
+      mutated = true;
+      return { uri, version, dirty: false };
+    };
+    const server = await startServer(
+      { ...workspace, edit: mutate, save: mutate },
+      { authorized: () => authorized },
+    );
+    t.after(async () => {
+      release();
+      await server.close();
+    });
+    const client = new Client({ name: "suspension-test", version: "1.0.0" });
+    t.after(() => client.close());
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+      }),
+    );
+    const pending = client.callTool({
+      name: toolName,
+      arguments: {
+        uri: "memfs:/project/a",
+        version: 4,
+        ...(toolName === "edit_document"
+          ? {
+              edits: [
+                {
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 0 },
+                  },
+                  text: "x",
+                },
+              ],
+            }
+          : {}),
+      },
+    });
+    await entered;
+    authorized = false;
+    server.abortRequests();
+    assert.equal(receivedSignal?.aborted, true);
+    authorized = true;
+    release();
+    const result = await pending;
+    assert.equal(result.isError, true);
+    assert.equal(mutated, false);
+    const roots = await client.callTool({
+      name: "workspace_roots",
+      arguments: {},
+    });
+    assert.notEqual(roots.isError, true);
+  });
+}

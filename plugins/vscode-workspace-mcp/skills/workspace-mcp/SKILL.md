@@ -7,7 +7,9 @@ Use the separately configured `workspace_mcp` connection for this workspace.
 This skill does not start the bridge or configure credentials. If its tools are
 unavailable, ask the user to run **Workspace MCP: Start** and **Workspace MCP:
 Show Connection Details** in the intended VS Code window, update their private
-client configuration, and reconnect. Never request the token in chat.
+stdio client configuration, and reconnect. The client needs Node.js 24 or newer
+and the generated adapter path. Never request the token in chat or use a direct
+HTTP connection as a fallback.
 
 1. Inspect the server's tools, workspace roots, and editor context. Use its returned
    URIs unchanged, including scheme and authority. Do not map virtual URIs to local
@@ -17,8 +19,9 @@ client configuration, and reconnect. Never request the token in chat.
    and bounded; report partial results and narrow the search when necessary.
 3. Apply only the requested edits, with the version just read. On a version conflict,
    reread and reconcile with the user's current text. Do not blindly retry.
-   Writes require Workspace Trust and the user's **Workspace MCP: Enable Writes
-   for This Session** action; a refusal is not permission to bypass that gate.
+   Writes require Workspace Trust and the user's write policy or explicit session
+   permission; a refusal is not permission to bypass that gate. Do not change
+   settings or rotate tokens to obtain access.
 4. Read the resulting text and diagnostics. Edits leave buffers unsaved. Call the
    separate save tool only when saving is within the user's request, using the
    current version. Report a declined or failed save accurately.

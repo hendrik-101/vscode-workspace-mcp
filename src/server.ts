@@ -1,3 +1,5 @@
+import { createServer as createHttpsServer } from "node:https";
+import type { ServerIdentity } from "./tls";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   createServer,
@@ -292,28 +294,52 @@ function readBody(request: IncomingMessage): Promise<unknown> {
 
 /**
  * Starts a bearer-authenticated MCP endpoint on the IPv4 loopback interface.
- * An omitted port requests an ephemeral port. The returned token authorizes the
- * endpoint until `close` shuts down its listener and active connections.
+ * Tests may omit port/token for isolated ephemeral listeners. The extension passes
+ * its fixed user port and SecretStorage token; close revokes this listener only.
  */
 export async function startServer(
   workspace: WorkspaceApi,
-  options: { port?: number } = {},
-): Promise<{ url: string; token: string; close(): Promise<void> }> {
-  const token = randomBytes(32).toString("hex");
+  options: {
+    port?: number;
+    token?: string;
+    authorized?: () => boolean;
+    tls?: ServerIdentity;
+  } = {},
+): Promise<{
+  url: string;
+  token: string;
+  abortRequests(): void;
+  close(): Promise<void>;
+}> {
+  const token = options.token ?? randomBytes(32).toString("hex");
+  if (!/^[a-f0-9]{64}$/.test(token)) throw new Error("Invalid bearer token.");
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const connections = new Set<Socket>();
   const sessions = new Set<McpServer>();
+  const controllers = new Set<AbortController>();
+  const abortRequests = () => {
+    for (const controller of controllers) controller.abort();
+  };
   let host = "";
   let active = 0;
   let closed = false;
-  const httpServer = createServer(
-    { maxHeaderSize: 8192 },
-    (request, response) => {
-      void handle(request, response).catch(() =>
-        reject(response, 500, "Request failed."),
-      );
-    },
-  );
+  const listener = (request: IncomingMessage, response: ServerResponse) => {
+    void handle(request, response).catch(() =>
+      reject(response, 500, "Request failed."),
+    );
+  };
+  // Plain HTTP is used only by isolated transport tests; the extension supplies TLS.
+  const httpServer = options.tls
+    ? createHttpsServer(
+        {
+          ...options.tls,
+          minVersion: "TLSv1.2",
+          maxHeaderSize: 8192,
+          handshakeTimeout: REQUEST_TIMEOUT,
+        },
+        listener,
+      )
+    : createServer({ maxHeaderSize: 8192 }, listener);
   httpServer.maxConnections = 64;
   httpServer.headersTimeout = 10_000;
   httpServer.requestTimeout = 15_000;
@@ -340,6 +366,7 @@ export async function startServer(
       (value, i) => i % 2 === 0 && value.toLowerCase() === "authorization",
     ).length;
     if (
+      options.authorized?.() === false ||
       authCount !== 1 ||
       authorization.length !== expectedAuthorization.length ||
       !timingSafeEqual(authorization, expectedAuthorization)
@@ -354,6 +381,7 @@ export async function startServer(
       return reject(response, 413, "Request body too large.");
     active++;
     const controller = new AbortController();
+    controllers.add(controller);
     let mcp: McpServer | undefined;
     let finished = false;
     let running = 0;
@@ -365,10 +393,18 @@ export async function startServer(
       }
     };
     const execute = async (operation: () => unknown) => {
-      if (finished) throw new RequestError(408, "Request ended.");
+      if (finished || controller.signal.aborted)
+        throw new RequestError(408, "Request ended.");
+      if (options.authorized?.() === false)
+        throw new RequestError(401, "Unauthorized.");
       running++;
       try {
-        return await operation();
+        const result = await operation();
+        if (controller.signal.aborted)
+          throw new RequestError(408, "Request ended.");
+        if (options.authorized?.() === false)
+          throw new RequestError(401, "Unauthorized.");
+        return result;
       } finally {
         running--;
         release();
@@ -383,6 +419,7 @@ export async function startServer(
       if (finished) return;
       finished = true;
       controller.abort();
+      controllers.delete(controller);
       clearTimeout(timeout);
       // A disconnected client cannot release capacity while provider work runs.
       release();
@@ -438,8 +475,9 @@ export async function startServer(
     });
   });
   return {
-    url: `http://${host}/mcp`,
+    url: `${options.tls ? "https" : "http"}://${host}/mcp`,
     token,
+    abortRequests,
     async close() {
       if (closed) return;
       closed = true;
@@ -447,6 +485,7 @@ export async function startServer(
       const closing = new Promise<void>((resolve) =>
         httpServer.close(() => resolve()),
       );
+      abortRequests();
       for (const socket of connections) socket.destroy();
       await Promise.allSettled([...sessions].map((session) => session.close()));
       await closing;

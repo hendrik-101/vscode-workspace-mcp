@@ -1,0 +1,853 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import test from "node:test";
+import { transformSync } from "esbuild";
+import * as preferences from "../src/preferences";
+import { TLS_KEY } from "../src/tls";
+import { BridgeSession } from "../src/session";
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+function fixture(initialPolicy: string = "ask") {
+  const commands = new Map<string, () => Promise<void>>();
+  const prompts: { resolve(value?: string): void }[] = [];
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const identity = { cert: "test certificate", key: "test private key" };
+  const delays: { bind?: Promise<void>; identityGeneration?: Promise<void> } =
+    {};
+  const values = new Map<string, string>([[TLS_KEY, JSON.stringify(identity)]]);
+  const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
+  const connections: {
+    closed: boolean;
+    abortedRequests: number;
+    token: string;
+    tls: { cert: string; key: string };
+    url: string;
+    close(): Promise<void>;
+  }[] = [];
+  const services: { canWrite: () => boolean }[] = [];
+  let secretChanged: ((event: { key: string }) => void) | undefined;
+  const context = {
+    subscriptions: [] as { dispose(): void }[],
+    secrets: {
+      get: async (key: string) => values.get(key),
+      store: async (key: string, value: string) => {
+        values.set(key, value);
+      },
+      onDidChange: (callback: typeof secretChanged) => {
+        secretChanged = callback;
+        return { dispose() {} };
+      },
+    },
+  };
+  const status = { text: "", tooltip: "", show() {}, hide() {}, dispose() {} };
+  const vscode = {
+    StatusBarAlignment: { Right: 1 },
+    ConfigurationTarget: { Global: 1 },
+    commands: {
+      registerCommand: (id: string, callback: () => Promise<void>) => {
+        commands.set(id, callback);
+        return { dispose() {} };
+      },
+    },
+    workspace: {
+      isTrusted: true,
+      onDidChangeConfiguration: () => ({ dispose() {} }),
+      getConfiguration: () => ({
+        inspect: (key: string) => ({
+          globalValue: settings.get(key),
+          workspaceValue: "allow",
+        }),
+        update: async (key: string, value: unknown) => {
+          await settings.set(key, value);
+        },
+      }),
+    },
+    window: {
+      createStatusBarItem: () => status,
+      showWarningMessage: (message: string) => {
+        warnings.push(message);
+        return new Promise<string | undefined>((resolve) =>
+          prompts.push({ resolve }),
+        );
+      },
+      showInformationMessage: async () => undefined,
+      showErrorMessage: async (message: string) => {
+        errors.push(message);
+        return undefined;
+      },
+    },
+  };
+  const exports: {
+    activate?: (context: unknown) => void;
+    deactivate?: () => Promise<void>;
+  } = {};
+  const code = transformSync(readFileSync("src/extension.ts", "utf8"), {
+    loader: "ts",
+    format: "cjs",
+  }).code;
+  const module = { exports };
+  runInNewContext(code, {
+    module,
+    exports,
+    URL,
+    require: (id: string) => {
+      if (id === "vscode") return vscode;
+      if (id === "./preferences") return preferences;
+      if (id === "./tls")
+        return {
+          TLS_KEY,
+          storedIdentity: async (secrets: preferences.SecretStore) => {
+            if (!values.has(TLS_KEY))
+              await secrets.store(TLS_KEY, JSON.stringify(identity));
+            return JSON.parse(values.get(TLS_KEY)!);
+          },
+          parseIdentity: (raw: string) => JSON.parse(raw),
+          rotateIdentity: async (secrets: preferences.SecretStore) => {
+            await delays.identityGeneration;
+            await secrets.store(
+              TLS_KEY,
+              JSON.stringify({ cert: "new certificate", key: "new key" }),
+            );
+          },
+        };
+      if (id === "./session") return { BridgeSession };
+      if (id === "./configuration") return {};
+      if (id === "./workspace")
+        return {
+          WorkspaceService: class {
+            constructor(canWrite: () => boolean) {
+              services.push({ canWrite });
+            }
+          },
+        };
+      if (id === "./server")
+        return {
+          startServer: async (
+            _service: unknown,
+            options: { port: number; token: string; tls: typeof identity },
+          ) => {
+            const connection = {
+              closed: false,
+              abortedRequests: 0,
+              abortRequests() {
+                this.abortedRequests++;
+              },
+              token: options.token,
+              tls: options.tls,
+              url: `http://127.0.0.1:${options.port}/mcp`,
+              async close() {
+                this.closed = true;
+              },
+            };
+            connections.push(connection);
+            await delays.bind;
+            return connection;
+          },
+        };
+      throw new Error(`Unexpected import: ${id}`);
+    },
+  });
+  module.exports.activate!(context);
+  const command = async (name: string) => {
+    await commands.get(`workspaceMcp.${name}`)!();
+  };
+  return {
+    command,
+    delays,
+    status,
+    warnings,
+    errors,
+    deactivate: () => module.exports.deactivate!(),
+    prompts,
+    values,
+    settings,
+    connections,
+    services,
+    context,
+    changed: (key = preferences.TOKEN_KEY) => secretChanged!({ key }),
+  };
+}
+
+test("startup prompts never block Stop; stale replies cannot persist or grant writes", async () => {
+  const f = fixture();
+  await f.command("start");
+  assert.equal(f.prompts.length, 1);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await f.command("stop");
+  f.prompts[0]!.resolve("Always allow");
+  await tick();
+  assert.equal(f.settings.get("writePolicy"), "ask");
+  assert.equal(f.services[0]!.canWrite(), false);
+  await f.command("start");
+  assert.equal(f.connections[0]!.token, f.connections[1]!.token);
+  await f.command("stop");
+});
+
+for (const [choice, allow, policy] of [
+  ["Allow for this session", true, "ask"],
+  ["Deny for this session", false, "ask"],
+  ["Always allow", true, "allow"],
+  ["Always deny", false, "deny"],
+  [undefined, false, "ask"],
+] as const)
+  test(`write prompt: ${choice ?? "dismissed"}`, async () => {
+    const f = fixture();
+    await f.command("start");
+    f.prompts[0]!.resolve(choice);
+    await tick();
+    assert.equal(f.services[0]!.canWrite(), allow);
+    assert.equal(f.settings.get("writePolicy"), policy);
+    assert.equal(
+      f.connections[0]!.abortedRequests,
+      0,
+      "A read-only startup choice must not cancel existing reads",
+    );
+    await f.command("stop");
+  });
+
+test("persistent deny cannot be bypassed and secret changes revoke immediately", async () => {
+  const f = fixture("deny");
+  await f.command("start");
+  assert.equal(f.prompts.length, 0);
+  await f.command("enableWrites");
+  assert.equal(f.services[0]!.canWrite(), false);
+  f.values.set(preferences.TOKEN_KEY, "b".repeat(64));
+  f.changed();
+  assert.equal(f.connections[0]!.abortedRequests, 1);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  await f.command("stop");
+});
+
+test("rotation stops immediately, changes token only after confirmation and stays stopped", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const token = f.connections[0]!.token;
+  const rotating = f.command("rotateToken");
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.values.get(preferences.TOKEN_KEY), token);
+  f.prompts[0]!.resolve("Rotate token");
+  await rotating;
+  assert.notEqual(f.values.get(preferences.TOKEN_KEY), token);
+  assert.equal(f.connections.length, 1);
+});
+
+test("pending persistent permission update cannot regrant after Stop", async () => {
+  const f = fixture();
+  await f.command("start");
+  // Intercept persistence to reproduce a slow settings write.
+  const originalSet = f.settings.set.bind(f.settings);
+  let release!: () => void;
+  f.settings.set = (key: string, value: unknown) => {
+    originalSet(key, value);
+    return new Promise<void>((resolve) => {
+      release = resolve;
+    }) as unknown as Map<string, unknown>;
+  };
+  f.prompts[0]!.resolve("Always allow");
+  await tick();
+  await f.command("stop");
+  release();
+  await tick();
+  assert.equal(f.services[0]!.canWrite(), false);
+});
+
+test("storage failure after bind closes the connection and a later start recovers", async () => {
+  const f = fixture("allow");
+  f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+  let reads = 0;
+  const originalGet = f.context.secrets.get;
+  f.context.secrets.get = async (key: string) => {
+    if (++reads === 2) throw new Error("Secret storage unavailable");
+    return originalGet(key);
+  };
+  await f.command("start");
+  assert.equal(f.connections[0]!.closed, true);
+  await f.command("stop");
+  await f.command("start");
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("a new start invalidates an outstanding rotation confirmation", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const token = f.connections[0]!.token;
+  const rotating = f.command("rotateToken");
+  await tick();
+  await f.command("start");
+  f.prompts[0]!.resolve("Rotate token");
+  await rotating;
+  assert.equal(f.values.get(preferences.TOKEN_KEY), token);
+  assert.equal(f.connections[1]!.closed, false);
+  await f.command("stop");
+});
+
+test("delayed own secret event suspends access then resumes without stopping", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.changed();
+  assert.equal(f.connections[0]!.abortedRequests, 1);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.connections[0]!.closed, false);
+  assert.equal(f.services[0]!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("older secret read cannot resume access after a newer token change", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const token = f.connections[0]!.token;
+  const reads: ((token: string) => void)[] = [];
+  f.context.secrets.get = async () =>
+    new Promise((resolve) => reads.push(resolve));
+  f.changed();
+  f.changed();
+  reads[0]!(token);
+  reads[1]!(f.values.get(TLS_KEY)!);
+  await tick();
+  assert.equal(f.services[0]!.canWrite(), false);
+  reads[2]!("b".repeat(64));
+  reads[3]!(f.values.get(TLS_KEY)!);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  await f.command("stop");
+});
+
+test("secret change during final startup verification never admits stale credentials", async () => {
+  const f = fixture("allow");
+  const token = "a".repeat(64);
+  f.values.set(preferences.TOKEN_KEY, token);
+  const originalGet = f.context.secrets.get;
+  let reads = 0;
+  f.context.secrets.get = async (key: string) => {
+    if (++reads === 2) {
+      f.values.set(key, "b".repeat(64));
+      f.changed();
+      return token; // Simulate a stale response already in flight when the event fired.
+    }
+    return originalGet(key);
+  };
+  await f.command("start");
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await f.command("stop");
+});
+
+for (const fails of [false, true])
+  test(`Always deny revokes before ${fails ? "failing" : "delayed"} settings persistence`, async () => {
+    const f = fixture("allow");
+    await f.command("start");
+    assert.equal(f.services[0]!.canWrite(), true);
+    let finish!: () => void;
+    f.settings.set = () =>
+      new Promise<void>((resolve, reject) => {
+        finish = () =>
+          fails ? reject(new Error("Settings unavailable")) : resolve();
+      }) as unknown as Map<string, unknown>;
+    const changing = f.command("enableWrites");
+    f.prompts[0]!.resolve("Always deny");
+    await tick();
+    assert.equal(f.services[0]!.canWrite(), false);
+    assert.equal(f.settings.get("writePolicy"), "allow");
+    finish();
+    await changing;
+    assert.equal(f.services[0]!.canWrite(), false);
+    await f.command("stop");
+  });
+
+test("secret event read failure stops and reports a safe actionable warning", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.context.secrets.get = async () => {
+    throw new Error("Private provider details");
+  };
+  f.changed();
+  assert.equal(f.connections[0]!.abortedRequests, 1);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  assert.ok(
+    f.warnings.some((message) =>
+      /secure token storage could not be read/.test(message),
+    ),
+  );
+  assert.ok(
+    f.warnings.every(
+      (message) => !message.includes("Private provider details"),
+    ),
+  );
+  await f.command("stop");
+});
+
+test("failed startup is reported once; Stop and deactivation settle cleanly", async () => {
+  const f = fixture();
+  f.context.secrets.get = async () => {
+    throw new Error("Storage unavailable");
+  };
+  await f.command("start");
+  assert.equal(f.errors.length, 1);
+  await f.command("stop");
+  assert.equal(f.errors.length, 1);
+  await assert.doesNotReject(f.deactivate());
+  for (const disposable of f.context.subscriptions) disposable.dispose();
+  await tick();
+  assert.equal(f.errors.length, 1);
+});
+
+test("a changed stored server identity suspends and stops the current session", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.values.set(
+    TLS_KEY,
+    JSON.stringify({ cert: "different certificate", key: "different key" }),
+  );
+  f.changed(TLS_KEY);
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  await f.command("stop");
+});
+
+test("explicit identity rotation leaves the bearer token intact and bridge stopped", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const token = f.values.get(preferences.TOKEN_KEY);
+  const originalIdentity = f.values.get(TLS_KEY);
+  const rotating = f.command("rotateIdentity");
+  assert.equal(f.services[0]!.canWrite(), false);
+  await tick();
+  f.prompts[0]!.resolve("Replace server identity");
+  await rotating;
+  assert.equal(f.values.get(preferences.TOKEN_KEY), token);
+  assert.notEqual(f.values.get(TLS_KEY), originalIdentity);
+  assert.equal(f.connections[0]!.closed, true);
+});
+
+test("status immediately shows suspension until deferred credential verification completes", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  assert.match(f.status.text, /read\/write/);
+  const release: (() => void)[] = [];
+  f.context.secrets.get = (key: string) =>
+    new Promise((resolve) => {
+      release.push(() => resolve(f.values.get(key)));
+    });
+  f.changed();
+  assert.match(f.status.text, /suspended/);
+  assert.match(f.status.tooltip, /suspended/);
+  assert.equal(f.services[0]!.canWrite(), false);
+  release.forEach((finish) => finish());
+  await tick();
+  assert.match(f.status.text, /read\/write/);
+  assert.equal(f.services[0]!.canWrite(), true);
+  await f.command("stop");
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+for (const operation of ["stop", "deactivate"] as const) {
+  for (const stage of ["initial read", "verification"] as const) {
+    test(`${operation} cancels hung ${stage}; late replies cannot activate and restart recovers`, async () => {
+      const f = fixture("allow");
+      const read = deferred<string | undefined>();
+      const originalGet = f.context.secrets.get;
+      f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+      f.context.secrets.get = async (key) => {
+        if (
+          key === preferences.TOKEN_KEY &&
+          (stage === "initial read" || f.connections.length > 0)
+        )
+          return read.promise;
+        return originalGet(key);
+      };
+      let startDone = false;
+      const starting = f.command("start").then(() => {
+        startDone = true;
+      });
+      await tick();
+      assert.equal(f.connections.length, stage === "verification" ? 1 : 0);
+      let stopDone = false;
+      const stopping = (
+        operation === "stop" ? f.command("stop") : f.deactivate()
+      ).then(() => {
+        stopDone = true;
+      });
+      await tick();
+      assert.equal(stopDone, true, "shutdown must not wait for secret storage");
+      assert.equal(startDone, true, "cancelled Start must settle too");
+      assert.ok(f.connections.every((connection) => connection.closed));
+      f.context.secrets.get = originalGet;
+      await f.command("start");
+      assert.equal(f.services.at(-1)!.canWrite(), true);
+      read.resolve(undefined);
+      await tick();
+      assert.equal(f.services[0]!.canWrite(), false);
+      assert.equal(f.services.at(-1)!.canWrite(), true);
+      assert.equal(f.errors.length, 0);
+      await Promise.all([starting, stopping]);
+      await f.command("stop");
+    });
+  }
+}
+
+test("Stop during binding settles and closes the late listener without starting verification", async () => {
+  const f = fixture("allow");
+  const bind = deferred<void>();
+  f.delays.bind = bind.promise;
+  const starting = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  await f.command("stop");
+  await starting;
+  f.context.secrets.get = async () => {
+    throw new Error("unexpected verification");
+  };
+  bind.resolve();
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[0]!.canWrite(), false);
+  assert.equal(f.errors.length, 0);
+});
+
+test("superseding Start waits for the cancelled pending listener to close", async () => {
+  const f = fixture("allow");
+  const originalGet = f.context.secrets.get;
+  const read = deferred<string | undefined>();
+  f.context.secrets.get = async (key) =>
+    f.connections.length > 0 ? read.promise : originalGet(key);
+  const first = f.command("start");
+  await tick();
+  const close = deferred<void>();
+  f.connections[0]!.close = async () => {
+    await close.promise;
+    f.connections[0]!.closed = true;
+  };
+  f.context.secrets.get = originalGet;
+  const second = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1, "new bind must wait for old close");
+  close.resolve();
+  await Promise.all([first, second]);
+  assert.equal(f.connections.length, 2);
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+for (const [rotation, confirmation] of [
+  ["rotateToken", "Rotate token"],
+  ["rotateIdentity", "Replace server identity"],
+] as const) {
+  test(`${rotation} cannot rotate if Start arrives during listener shutdown`, async () => {
+    const f = fixture("allow");
+    await f.command("start");
+    const originalValues = [...f.values.entries()];
+    const close = deferred<void>();
+    f.connections[0]!.close = async () => {
+      await close.promise;
+      f.connections[0]!.closed = true;
+    };
+    const rotating = f.command(rotation);
+    const restarting = f.command("start");
+    await tick();
+    assert.equal(f.connections.length, 1);
+    close.resolve();
+    await tick();
+    for (const prompt of f.prompts) prompt.resolve(confirmation);
+    await Promise.all([rotating, restarting]);
+    assert.deepEqual([...f.values.entries()], originalValues);
+    assert.equal(f.prompts.length, 0, "stale rotation must not prompt");
+    assert.equal(f.services[1]!.canWrite(), true);
+    await f.command("stop");
+  });
+}
+
+test("identity rotation checks ownership again after key generation before storage", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const originalIdentity = f.values.get(TLS_KEY);
+  const generated = deferred<void>();
+  f.delays.identityGeneration = generated.promise;
+  const rotating = f.command("rotateIdentity");
+  await tick();
+  f.prompts[0]!.resolve("Replace server identity");
+  await tick();
+  await f.command("start");
+  generated.resolve();
+  await rotating;
+  assert.equal(f.values.get(TLS_KEY), originalIdentity);
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("malformed stored tokens give rotation remediation without exposing their value", async () => {
+  for (const token of ["", "a".repeat(63), "z".repeat(64)]) {
+    const f = fixture("allow");
+    await f.command("start");
+    f.values.set(preferences.TOKEN_KEY, token);
+    f.changed();
+    await tick();
+    assert.equal(f.connections[0]!.closed, true);
+    assert.ok(f.warnings.some((message) => /Rotate Token/.test(message)));
+    assert.ok(
+      f.warnings.every(
+        (message) => !/storage could not be read|Restart/.test(message),
+      ),
+    );
+    if (token)
+      assert.ok(f.warnings.every((message) => !message.includes(token)));
+    await f.command("stop");
+  }
+});
+
+test("invalid identity from a successful secret read gives explicit rotation remediation", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.values.set(TLS_KEY, "invalid identity, private provider details");
+  f.changed(TLS_KEY);
+  await tick();
+  assert.equal(f.connections[0]!.closed, true);
+  assert.ok(
+    f.warnings.some((message) => /Rotate Server Identity/.test(message)),
+  );
+  assert.ok(
+    f.warnings.every(
+      (message) =>
+        !/storage could not be read|private provider details/.test(message),
+    ),
+  );
+  await f.command("stop");
+});
+
+test("restart waits for cancelled binding and its delayed cleanup", async () => {
+  const f = fixture("allow");
+  const bind = deferred<void>();
+  const close = deferred<void>();
+  f.delays.bind = bind.promise;
+  const first = f.command("start");
+  await tick();
+  f.connections[0]!.close = async () => {
+    await close.promise;
+    f.connections[0]!.closed = true;
+  };
+  await f.command("stop");
+  await first;
+  f.delays.bind = undefined;
+  const second = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  bind.resolve();
+  await tick();
+  assert.equal(
+    f.connections.length,
+    1,
+    "new bind waits for late listener cleanup",
+  );
+  close.resolve();
+  await second;
+  assert.equal(f.connections.length, 2);
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+for (const [rotation, confirmation, key] of [
+  ["rotateToken", "Rotate token", preferences.TOKEN_KEY],
+  ["rotateIdentity", "Replace server identity", TLS_KEY],
+] as const) {
+  test(`${rotation}: restart waits for an already-started credential write`, async () => {
+    const f = fixture("allow");
+    await f.command("start");
+    const original = f.values.get(key);
+    const write = deferred<void>();
+    let writing = false;
+    f.context.secrets.store = async (storedKey, value) => {
+      writing = true;
+      await write.promise;
+      f.values.set(storedKey, value);
+    };
+    const rotating = f.command(rotation);
+    await tick();
+    f.prompts[0]!.resolve(confirmation);
+    await tick();
+    assert.equal(writing, true);
+    const restarting = f.command("start");
+    await tick();
+    assert.equal(
+      f.connections.length,
+      1,
+      "no listener may use the old credential",
+    );
+    assert.equal(f.values.get(key), original);
+    await f.command("stop");
+    await restarting;
+    const finalStart = f.command("start");
+    await tick();
+    assert.equal(
+      f.connections.length,
+      1,
+      "Stop must not discard the write barrier",
+    );
+    write.resolve();
+    await Promise.all([rotating, finalStart]);
+    assert.notEqual(f.values.get(key), original);
+    assert.equal(f.connections.length, 2);
+    assert.equal(f.connections[1]!.token, f.values.get(preferences.TOKEN_KEY));
+    assert.deepEqual(f.connections[1]!.tls, JSON.parse(f.values.get(TLS_KEY)!));
+    assert.equal(f.services.at(-1)!.canWrite(), true);
+    await f.command("stop");
+  });
+}
+
+for (const key of [preferences.TOKEN_KEY, TLS_KEY]) {
+  test(`cancelled initialization keeps the in-flight ${key} write barrier`, async () => {
+    const f = fixture("allow");
+    f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+    f.values.delete(key);
+    const write = deferred<void>();
+    let writes = 0;
+    f.context.secrets.store = async (storedKey, value) => {
+      writes++;
+      await write.promise;
+      f.values.set(storedKey, value);
+    };
+    const first = f.command("start");
+    await tick();
+    assert.equal(writes, 1);
+    await f.command("stop");
+    await first;
+    const second = f.command("start");
+    await tick();
+    assert.equal(
+      writes,
+      1,
+      "replacement startup must not race initialization writes",
+    );
+    assert.equal(f.connections.length, 0);
+    await f.deactivate();
+    await second;
+    const third = f.command("start");
+    await tick();
+    assert.equal(f.connections.length, 0);
+    write.resolve();
+    await third;
+    assert.equal(writes, 1);
+    assert.equal(f.connections.length, 1);
+    assert.equal(f.connections[0]!.token, f.values.get(preferences.TOKEN_KEY));
+    assert.deepEqual(f.connections[0]!.tls, JSON.parse(f.values.get(TLS_KEY)!));
+    await f.command("stop");
+  });
+}
+
+test("failed credential writes release restart without hiding the rotation error", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const original = f.values.get(preferences.TOKEN_KEY);
+  const write = deferred<void>();
+  f.context.secrets.store = async () => {
+    await write.promise;
+    throw new Error("private secret-provider failure");
+  };
+  const rotating = f.command("rotateToken");
+  await tick();
+  f.prompts[0]!.resolve("Rotate token");
+  await tick();
+  const restarting = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  write.resolve();
+  await Promise.all([rotating, restarting]);
+  assert.equal(f.errors.length, 1);
+  assert.ok(
+    f.errors.every((error) => !error.includes("private secret-provider")),
+  );
+  assert.equal(f.connections[1]!.token, original);
+  assert.equal(f.services.at(-1)!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("overlapping credential rotations serialize their actual writes", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  const firstWrite = deferred<void>();
+  const secondWrite = deferred<void>();
+  const writes: { key: string; value: string }[] = [];
+  f.context.secrets.store = async (key, value) => {
+    writes.push({ key, value });
+    await (writes.length === 1 ? firstWrite.promise : secondWrite.promise);
+    f.values.set(key, value);
+  };
+  const tokenRotation = f.command("rotateToken");
+  await tick();
+  f.prompts[0]!.resolve("Rotate token");
+  await tick();
+  const identityRotation = f.command("rotateIdentity");
+  await tick();
+  f.prompts[1]!.resolve("Replace server identity");
+  await tick();
+  assert.equal(
+    writes.length,
+    1,
+    "new rotation must wait for irreversible old write",
+  );
+  firstWrite.resolve();
+  await tick();
+  assert.equal(writes.length, 2);
+  const restarting = f.command("start");
+  await tick();
+  assert.equal(f.connections.length, 1);
+  secondWrite.resolve();
+  await Promise.all([tokenRotation, identityRotation, restarting]);
+  assert.equal(f.connections[1]!.token, writes[0]!.value);
+  assert.deepEqual(f.connections[1]!.tls, JSON.parse(writes[1]!.value));
+  assert.equal(f.services.at(-1)!.canWrite(), true);
+  await f.command("stop");
+});
+
+for (const kind of ["malformed", "missing", "changed", "identity"] as const) {
+  test(`final startup verification diagnoses ${kind} credentials`, async () => {
+    const f = fixture("allow");
+    f.values.set(preferences.TOKEN_KEY, "a".repeat(64));
+    const originalGet = f.context.secrets.get;
+    f.context.secrets.get = async (key) => {
+      if (f.connections.length && key === preferences.TOKEN_KEY) {
+        if (kind === "malformed") return "private-invalid-token";
+        if (kind === "missing") return undefined;
+        if (kind === "changed") return "b".repeat(64);
+        f.values.set(
+          TLS_KEY,
+          JSON.stringify({ cert: "replacement", key: "replacement" }),
+        );
+      }
+      return originalGet(key);
+    };
+    await f.command("start");
+    assert.equal(f.connections[0]!.closed, true);
+    assert.equal(f.services[0]!.canWrite(), false);
+    assert.equal(f.errors.length, 1);
+    const message = f.errors[0]!;
+    assert.match(
+      message,
+      kind === "malformed"
+        ? /Rotate Token/
+        : kind === "identity"
+          ? /server identity changed.*trusted certificate/
+          : /token changed.*refresh client configuration/,
+    );
+    assert.ok(!message.includes("private-invalid-token"));
+    await f.command("stop");
+  });
+}
