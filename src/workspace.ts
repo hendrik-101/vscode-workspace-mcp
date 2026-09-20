@@ -159,11 +159,13 @@ export class WorkspaceService implements WorkspaceApi {
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
+  private readonly navigationObservers = new Set<vscode.Disposable>();
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
 
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
     this.disposed = true;
+    for (const observer of this.navigationObservers) observer.dispose();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
@@ -378,73 +380,123 @@ export class WorkspaceService implements WorkspaceApi {
   ): Promise<NavigationResult> {
     const source = await this.navigationSource(input, signal);
     this.navigationComplete(source.document, source.version, signal);
-    const items = await vscode.commands.executeCommand<
-      Array<vscode.Location | vscode.LocationLink>
-    >(command, source.document.uri, source.position);
-    this.navigationComplete(source.document, source.version, signal);
-    const result: NavigationResult = {
-      ...state(source.document),
-      locations: [],
-      truncated: (items?.length ?? 0) > MAX_LIST_ENTRIES,
-      omitted: 0,
+    // Snapshot open targets before dispatch; also observe documents opened and
+    // edited while the command runs. Never label old ranges with a new version.
+    const initialVersions = new Map(
+      vscode.workspace.textDocuments.map((document) => [
+        document.uri.toString(),
+        document.version,
+      ]),
+    );
+    const changed = new Set<string>();
+    let overflow = false;
+    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (!event.contentChanges.length) return; // Dirty-state-only saves are safe.
+      if (changed.size >= MAX_LIST_ENTRIES) {
+        overflow = true;
+        return;
+      }
+      changed.add(event.document.uri.toString());
+    });
+    const dispose = () => {
+      listener.dispose();
+      signal?.removeEventListener("abort", dispose);
+      this.navigationObservers.delete(observer);
     };
-    const documents = new Map<string, Promise<vscode.TextDocument>>();
-    const resolved = new Map<string, vscode.TextDocument>();
-    for (const item of (items ?? []).slice(0, MAX_LIST_ENTRIES)) {
-      signal?.throwIfAborted();
-      this.active();
-      if (result.locations.length >= MAX_RESULTS) {
-        result.truncated = true;
-        break;
-      }
-      try {
-        const uri = parseUri(
-          ("targetUri" in item ? item.targetUri : item.uri).toString(),
-        );
-        const key = uri.toString();
-        let pending = documents.get(key);
-        if (!pending) {
-          pending = this.document(uri);
-          documents.set(key, pending);
+    const observer = { dispose };
+    this.navigationObservers.add(observer);
+    signal?.addEventListener("abort", dispose, { once: true });
+    try {
+      const items = await vscode.commands.executeCommand<
+        Array<vscode.Location | vscode.LocationLink>
+      >(command, source.document.uri, source.position);
+      this.navigationComplete(source.document, source.version, signal);
+      const result: NavigationResult = {
+        ...state(source.document),
+        locations: [],
+        truncated: (items?.length ?? 0) > MAX_LIST_ENTRIES,
+        omitted: 0,
+      };
+      const documents = new Map<string, Promise<vscode.TextDocument>>();
+      const resolved = new Map<string, vscode.TextDocument>();
+      const validated = new Map<string, number>();
+      for (const item of (items ?? []).slice(0, MAX_LIST_ENTRIES)) {
+        signal?.throwIfAborted();
+        this.active();
+        if (result.locations.length >= MAX_RESULTS) {
+          result.truncated = true;
+          break;
         }
-        const document = await pending;
-        resolved.set(key, document);
-        this.text(document);
-        this.currentRoot(uri);
-        const target = this.exactRange(
-          document,
-          "targetUri" in item
-            ? (item.targetSelectionRange ?? item.targetRange)
-            : item.range,
-        );
-        if (
-          "targetUri" in item &&
-          !this.exactRange(document, item.targetRange).contains(target)
-        )
-          fail(
-            "INVALID_ARGUMENT",
-            "Target selection must be inside its target range.",
+        try {
+          const uri = parseUri(
+            ("targetUri" in item ? item.targetUri : item.uri).toString(),
           );
-        result.locations.push({ ...state(document), range: range(target) });
-      } catch {
-        result.omitted++;
+          const key = uri.toString();
+          let pending = documents.get(key);
+          if (!pending) {
+            pending = this.document(uri);
+            documents.set(key, pending);
+          }
+          const document = await pending;
+          resolved.set(key, document);
+          if (
+            changed.has(key) ||
+            (initialVersions.has(key) &&
+              initialVersions.get(key) !== document.version)
+          )
+            fail(
+              "VERSION_CONFLICT",
+              "Target changed during the provider query.",
+            );
+          if (validated.get(key) !== document.version) {
+            this.text(document);
+            validated.set(key, document.version);
+          }
+          this.currentRoot(uri);
+          const target = this.exactRange(
+            document,
+            "targetUri" in item
+              ? (item.targetSelectionRange ?? item.targetRange)
+              : item.range,
+          );
+          if (
+            "targetUri" in item &&
+            !this.exactRange(document, item.targetRange).contains(target)
+          )
+            fail(
+              "INVALID_ARGUMENT",
+              "Target selection must be inside its target range.",
+            );
+          result.locations.push({ ...state(document), range: range(target) });
+        } catch {
+          result.omitted++;
+        }
       }
-    }
-    this.navigationComplete(source.document, source.version, signal);
-    // Recheck targets after asynchronous authorization of later locations.
-    const retained: NavigationResult["locations"] = [];
-    for (const location of result.locations) {
-      try {
-        const document = resolved.get(location.uri)!;
-        this.navigationComplete(document, location.version, signal);
-        retained.push(location);
-      } catch {
-        result.omitted++;
+      this.navigationComplete(source.document, source.version, signal);
+      // Recheck targets after asynchronous authorization of later locations.
+      const retained: NavigationResult["locations"] = [];
+      for (const location of result.locations) {
+        try {
+          const document = resolved.get(location.uri)!;
+          this.navigationComplete(document, location.version, signal);
+          if (changed.has(location.uri))
+            fail(
+              "VERSION_CONFLICT",
+              "Target changed during the provider query.",
+            );
+          retained.push({ ...state(document), range: location.range });
+        } catch {
+          result.omitted++;
+        }
       }
+      this.navigationComplete(source.document, source.version, signal);
+      if (overflow)
+        fail("LIMIT_EXCEEDED", "Too many documents changed during navigation.");
+      result.locations = retained;
+      return { ...result, ...state(source.document) };
+    } finally {
+      dispose();
     }
-    this.navigationComplete(source.document, source.version, signal);
-    result.locations = retained;
-    return result;
   }
 
   async hover(

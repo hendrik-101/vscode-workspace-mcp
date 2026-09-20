@@ -97,12 +97,27 @@ function fixture() {
   let commandResult: unknown = [];
   let onCommand = () => {};
   const calls: string[] = [];
+  const listeners = new Set<
+    (event: {
+      document: (typeof documents)[number];
+      contentChanges: unknown[];
+    }) => void
+  >();
   const vscode = {
     Uri,
     Position,
     Range,
     FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
     workspace: {
+      onDidChangeTextDocument: (
+        listener: (event: {
+          document: (typeof documents)[number];
+          contentChanges: unknown[];
+        }) => void,
+      ) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
       workspaceFolders: [{ uri: root }],
       textDocuments: documents,
       fs: {
@@ -127,6 +142,13 @@ function fixture() {
     vscode,
     documents,
     calls,
+    listeners,
+    change(document = documents[1]!) {
+      document.version++;
+      listeners.forEach((listener) =>
+        listener({ document, contentChanges: [{}] }),
+      );
+    },
     file,
     target,
     full,
@@ -214,3 +236,73 @@ for (const operation of ["definition", "references", "hover"] as const) {
     }
   });
 }
+
+test("target edits during provider execution omit old ranges, including newly opened documents", async () => {
+  for (const newlyOpened of [false, true]) {
+    const f = fixture();
+    const target = f.documents[1]!;
+    if (newlyOpened) f.documents.pop();
+    f.result([{ uri: f.target, range: f.full }]);
+    f.onCommand(() => {
+      if (newlyOpened) f.documents.push(target);
+      f.change(target);
+    });
+    const result = await f.service.definition(f.input);
+    assert.equal(result.locations.length, 0);
+    assert.equal(result.omitted, 1);
+    assert.equal(f.listeners.size, 0);
+  }
+});
+
+test("repeated invalid locations validate a target buffer only once per version", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.documents[1]!.getText = () => {
+    reads++;
+    return "source";
+  };
+  f.result(
+    Array.from({ length: 1000 }, () => ({
+      uri: f.target,
+      range: new Range(new Position(0, 0), new Position(0, 7)),
+    })),
+  );
+  const result = await f.service.references(f.input);
+  assert.equal(result.omitted, 1000);
+  assert.ok(reads <= 2, `target full-text reads: ${reads}`);
+});
+
+test("final states reflect saves during later target authorization", async () => {
+  const f = fixture();
+  const third = Uri.parse("vfs-test://host/project/third.txt?tenant=one");
+  f.documents.push({ ...f.documents[1]!, uri: third });
+  const stat = f.vscode.workspace.fs.stat;
+  f.vscode.workspace.fs.stat = async (uri) => {
+    if (uri.toString() === third.toString()) {
+      f.documents[0]!.isDirty = false;
+      f.documents[1]!.isDirty = false;
+    }
+    return stat(uri);
+  };
+  f.result([
+    { uri: f.target, range: f.full },
+    { uri: third, range: f.full },
+  ]);
+  const result = await f.service.definition(f.input);
+  assert.equal(result.dirty, false);
+  assert.equal(result.locations[0]?.dirty, false);
+});
+
+test("abort and stop dispose navigation observers even when the command never settles", async () => {
+  for (const stop of [false, true]) {
+    const f = fixture();
+    f.vscode.commands.executeCommand = () => new Promise(() => {});
+    const controller = new AbortController();
+    void f.service.definition(f.input, controller.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.listeners.size, 1);
+    if (stop) f.service.dispose();
+    else controller.abort();
+    assert.equal(f.listeners.size, 0);
+  }
+});
