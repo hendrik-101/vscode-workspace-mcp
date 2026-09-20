@@ -19,11 +19,11 @@ buffers. Full URI scheme, authority, path, and query identity are preserved.
 At most 1,000 candidates are inspected and 100 locations returned. `omitted`
 counts inspected denied, invalid, unavailable, or changed targets; `truncated`
 indicates a processing/output cap. Source document state accompanies results.
-Open target versions are captured before provider dispatch (limited to 1,000 open
+Open target identities and versions are captured before provider dispatch (limited to 1,000 open
 documents and 256 KiB of URI text), and content edits are
 observed throughout the query (including documents opened while it runs). Changed
 targets are omitted rather than labeling old ranges with a new version. Tracking
-more than 1,000 changed URIs fails with `LIMIT_EXCEEDED`. Source and target dirty
+more than 1,000 distinct changed URIs or 256 KiB of changed URI text fails with `LIMIT_EXCEEDED`. Source and target dirty
 states are captured again immediately before return, so intervening saves are
 reflected. Repeated target locations reuse full-text validation per URI/version.
 

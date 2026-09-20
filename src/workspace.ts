@@ -385,29 +385,39 @@ export class WorkspaceService implements WorkspaceApi {
     const openDocuments = vscode.workspace.textDocuments;
     if (openDocuments.length > MAX_LIST_ENTRIES)
       fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 1000 documents.");
-    const initialVersions = new Map<string, number>();
+    const initialDocuments = new Map<
+      string,
+      { document: vscode.TextDocument; version: number }
+    >();
     let snapshotBytes = 0;
     for (const document of openDocuments) {
       const uri = document.uri.toString();
       snapshotBytes += Buffer.byteLength(uri);
       if (snapshotBytes > 256 * 1024)
         fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 256 KiB of URIs.");
-      initialVersions.set(uri, document.version);
+      initialDocuments.set(uri, { document, version: document.version });
     }
     const changed = new Set<string>();
     let overflow = false;
+    let changedBytes = 0;
     const listener = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (!event.contentChanges.length) return; // Dirty-state-only saves are safe.
-      if (changed.size >= MAX_LIST_ENTRIES) {
+      if (overflow || !event.contentChanges.length) return; // Dirty-state-only saves are safe.
+      const uri = event.document.uri.toString();
+      if (changed.has(uri)) return;
+      changedBytes += Buffer.byteLength(uri);
+      if (changed.size >= MAX_LIST_ENTRIES || changedBytes > 256 * 1024) {
         overflow = true;
+        listener.dispose();
         return;
       }
-      changed.add(event.document.uri.toString());
+      changed.add(uri);
     });
     const dispose = () => {
       listener.dispose();
       signal?.removeEventListener("abort", dispose);
       this.navigationObservers.delete(observer);
+      initialDocuments.clear();
+      changed.clear();
     };
     const observer = { dispose };
     this.navigationObservers.add(observer);
@@ -445,10 +455,12 @@ export class WorkspaceService implements WorkspaceApi {
           }
           const document = await pending;
           resolved.set(key, document);
+          const initial = initialDocuments.get(key);
           if (
             changed.has(key) ||
-            (initialVersions.has(key) &&
-              initialVersions.get(key) !== document.version)
+            (initial &&
+              (initial.document !== document ||
+                initial.version !== document.version))
           )
             fail(
               "VERSION_CONFLICT",

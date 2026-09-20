@@ -372,3 +372,57 @@ test("cancellation during source or target stat prevents subsequent filesystem c
     assert.equal(f.listeners.size, 0);
   }
 });
+
+test("closed and reopened targets cannot reuse an initial numeric version", async () => {
+  const f = fixture();
+  f.result([{ uri: f.target, range: f.full }]);
+  f.onCommand(() => {
+    const old = f.documents[1]!;
+    old.isClosed = true;
+    f.documents[1] = { ...old, isClosed: false };
+  });
+  const result = await f.service.definition(f.input);
+  assert.equal(result.locations.length, 0);
+  assert.equal(result.omitted, 1);
+});
+
+test("repeated edits at exactly 1000 tracked URIs do not overflow", async () => {
+  const f = fixture();
+  f.result([{ uri: f.target, range: f.full }]);
+  f.onCommand(() => {
+    for (let index = 0; index < 1000; index++) {
+      f.change({
+        ...f.documents[1]!,
+        uri: Uri.parse(`vfs-test:/project/changed-${index}`),
+      });
+    }
+    f.change({
+      ...f.documents[1]!,
+      uri: Uri.parse("vfs-test:/project/changed-999"),
+    });
+  });
+  const result = await f.service.definition(f.input);
+  assert.equal(result.locations.length, 1);
+  assert.equal(result.omitted, 0);
+});
+
+for (const limit of ["count", "bytes"] as const) {
+  test(`navigation change tracking rejects excess ${limit}`, async () => {
+    const f = fixture();
+    f.onCommand(() => {
+      const count = limit === "count" ? 1001 : 1;
+      for (let index = 0; index < count; index++) {
+        f.change({
+          ...f.documents[1]!,
+          uri: Uri.parse(
+            `vfs-test:/project/${limit === "count" ? index : "x".repeat(256 * 1024)}`,
+          ),
+        });
+      }
+    });
+    await assert.rejects(f.service.definition(f.input), {
+      code: "LIMIT_EXCEEDED",
+    });
+    assert.equal(f.listeners.size, 0);
+  });
+}
