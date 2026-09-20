@@ -46,6 +46,7 @@ function fixture(hardDeadlineMs = 25_000) {
     getText: () => "x",
   };
   const listeners = new Set<(event: { uris: Uri[] }) => void>();
+  let registrations = 0;
   const timers = new Map<ReturnType<typeof setTimeout>, number>();
   const emit = (target = uri) =>
     listeners.forEach((listener) => listener({ uris: [target] }));
@@ -71,6 +72,7 @@ function fixture(hardDeadlineMs = 25_000) {
     },
     languages: {
       onDidChangeDiagnostics: (listener: (event: { uris: Uri[] }) => void) => {
+        registrations++;
         listeners.add(listener);
         return { dispose: () => listeners.delete(listener) };
       },
@@ -122,6 +124,7 @@ function fixture(hardDeadlineMs = 25_000) {
     listeners,
     timers,
     opened,
+    registrations: () => registrations,
     setStat: (fn: () => Promise<void>) => {
       onStat = fn;
     },
@@ -331,3 +334,40 @@ for (const termination of ["abort", "deadline"] as const) {
     });
   }
 }
+
+test("cancelled waits retain provider capacity until the pending work actually settles", async () => {
+  const f = fixture();
+  const releases: Array<() => void> = [];
+  f.setStat(() => new Promise<void>((resolve) => releases.push(resolve)));
+  const cancelWait = async () => {
+    const controller = new AbortController();
+    const pending = f.wait(controller.signal);
+    controller.abort();
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.timers.size, 0);
+  };
+  try {
+    for (let index = 0; index < 16; index++) await cancelWait();
+    assert.equal(releases.length, 16);
+    const excessController = new AbortController();
+    const excess = f.wait(excessController.signal);
+    const rejected = assert.rejects(excess, code("LIMIT_EXCEEDED"));
+    // Abort too, so a missing admission limit fails promptly instead of waiting
+    // for the request deadline. Correct admission rejects before any provider.
+    excessController.abort();
+    await rejected;
+    assert.equal(releases.length, 16);
+    assert.equal(f.registrations(), 16);
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.timers.size, 0);
+    releases[0]!();
+    await tick();
+    await cancelWait();
+    assert.equal(releases.length, 17);
+  } finally {
+    releases.forEach((release) => release());
+    await tick();
+    f.clean();
+  }
+});

@@ -156,6 +156,7 @@ export class WorkspaceService implements WorkspaceApi {
 
   private disposed = false;
   private readonly diagnosticWaits = new Set<() => void>();
+  private pendingDiagnosticWork = 0;
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
@@ -1102,6 +1103,11 @@ export class WorkspaceService implements WorkspaceApi {
         fail("UNTRUSTED_WORKSPACE", "Workspace Trust is required.");
     };
     check();
+    if (this.pendingDiagnosticWork >= 16)
+      fail(
+        "LIMIT_EXCEEDED",
+        "Too much diagnostic provider work remains pending.",
+      );
     let wake!: () => void;
     const event = new Promise<"event_observed">((resolve) => {
       wake = () => resolve("event_observed");
@@ -1133,6 +1139,7 @@ export class WorkspaceService implements WorkspaceApi {
       controller.signal.addEventListener("abort", rejectAbort, { once: true });
     });
     try {
+      this.pendingDiagnosticWork++;
       return await Promise.race([
         cancelled,
         (async (): Promise<WaitDiagnosticsResult> => {
@@ -1174,7 +1181,10 @@ export class WorkspaceService implements WorkspaceApi {
             capturedAt: new Date().toISOString(),
             analysisComplete: "unknown",
           };
-        })(),
+        })().finally(() => {
+          // A prompt cancelled response must not release uncancellable provider work.
+          this.pendingDiagnosticWork--;
+        }),
       ]);
     } finally {
       // Wake background work too: a cancelled caller must retain no listener/timer.
