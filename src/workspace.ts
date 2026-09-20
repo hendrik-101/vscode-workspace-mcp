@@ -407,8 +407,7 @@ export class WorkspaceService implements WorkspaceApi {
       changedBytes += Buffer.byteLength(uri);
       if (changed.size >= MAX_LIST_ENTRIES || changedBytes > 256 * 1024) {
         overflow = true;
-        listener.dispose();
-        closeListener.dispose();
+        dispose();
         return;
       }
       changed.add(uri);

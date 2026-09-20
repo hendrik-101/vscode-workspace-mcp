@@ -37,7 +37,10 @@ class Uri {
   }
 }
 
-function loadService(vscode: unknown): WorkspaceService {
+function loadService(
+  vscode: unknown,
+  collections?: Array<Map<unknown, unknown> | Set<unknown>>,
+): WorkspaceService {
   const exports = {} as { WorkspaceService: new () => WorkspaceService };
   const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
     loader: "ts",
@@ -47,6 +50,18 @@ function loadService(vscode: unknown): WorkspaceService {
   runInNewContext(code, {
     module,
     exports,
+    Map: class extends Map<unknown, unknown> {
+      constructor(entries?: Iterable<readonly [unknown, unknown]> | null) {
+        super(entries);
+        collections?.push(this);
+      }
+    },
+    Set: class extends Set<unknown> {
+      constructor(values?: Iterable<unknown> | null) {
+        super(values);
+        collections?.push(this);
+      }
+    },
     require: (id: string) => {
       if (id === "vscode") return vscode;
       if (id === "node:buffer") return { Buffer };
@@ -79,7 +94,7 @@ class Range {
     return !this.start.isAfter(other.start) && !other.end.isAfter(this.end);
   }
 }
-function fixture() {
+function fixture(collections?: Array<Map<unknown, unknown> | Set<unknown>>) {
   const root = Uri.parse("vfs-test://host/project?tenant=one");
   const file = Uri.parse("vfs-test://host/project/main.txt?tenant=one");
   const target = Uri.parse("vfs-test://host/project/target.txt?tenant=one");
@@ -147,7 +162,7 @@ function fixture() {
     },
   };
   return {
-    service: loadService(vscode),
+    service: loadService(vscode, collections),
     vscode,
     documents,
     calls,
@@ -483,4 +498,51 @@ test("target closure during later target authorization invalidates already norma
   assert.equal(result.locations[0]?.uri, third.toString());
   assert.equal(result.omitted, 1);
   assert.equal(f.closeListeners.size, 0);
+});
+
+test("overflow releases observer registration and abort listener before a pending provider settles", async () => {
+  const collections: Array<Map<unknown, unknown> | Set<unknown>> = [];
+  const f = fixture(collections);
+  const controller = new AbortController();
+  let abortListeners = 0;
+  const add = controller.signal.addEventListener.bind(controller.signal);
+  const remove = controller.signal.removeEventListener.bind(controller.signal);
+  controller.signal.addEventListener = (...args: Parameters<typeof add>) => {
+    if (args[0] === "abort") abortListeners++;
+    add(...args);
+  };
+  controller.signal.removeEventListener = (
+    ...args: Parameters<typeof remove>
+  ) => {
+    if (args[0] === "abort") abortListeners--;
+    remove(...args);
+  };
+  let complete!: (value: unknown) => void;
+  f.vscode.commands.executeCommand = () =>
+    new Promise((resolve) => {
+      complete = resolve;
+    });
+  const pending = f.service.definition(f.input, controller.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(abortListeners, 1);
+  const observers = (
+    f.service as unknown as { navigationObservers: Set<unknown> }
+  ).navigationObservers;
+  assert.equal(observers.size, 1);
+  for (let index = 0; index < 1001; index++) {
+    f.change({
+      ...f.documents[1]!,
+      uri: Uri.parse(`vfs-test:/project/changed-${index}`),
+    });
+  }
+  assert.equal(observers.size, 0);
+  assert.ok(
+    collections.every((collection) => collection.size === 0),
+    "all retained maps and sets must be cleared before the provider settles",
+  );
+  assert.equal(abortListeners, 0);
+  assert.equal(f.listeners.size, 0);
+  assert.equal(f.closeListeners.size, 0);
+  complete([]);
+  await assert.rejects(pending, { code: "LIMIT_EXCEEDED" });
 });
