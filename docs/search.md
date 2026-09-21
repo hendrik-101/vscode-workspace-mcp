@@ -1,7 +1,8 @@
 # Workspace search
 
 `search_workspace` finds single-line literal text in live documents, including
-unsaved buffers and virtual URIs. Inputs: `uri`, `query`, `maxResults`, plus:
+unsaved buffers and virtual URIs. Starting URI and traversal stay within current
+workspace roots; traversal paths and symlinks are rejected. Inputs: `uri`, `query`, `maxResults`, plus:
 
 | Input                | Meaning                                                               |
 | -------------------- | --------------------------------------------------------------------- |
@@ -25,7 +26,8 @@ page's examined files, including resumed files. Positions use zero-based UTF-16;
 context lines are clipped to 1,000 characters and match previews are bounded.
 
 Cursors are single-use, option-bound and bridge-local, expiring five minutes after
-the initial search. Restart without a cursor after root changes, bridge stop,
+the initial search. A preflight `LIMIT_EXCEEDED` for active-search capacity does not
+consume an unexpired cursor; retry it when capacity is available. Restart without a cursor after root changes, bridge stop,
 continued-file changes, expiry, replay, option changes or eviction. Every HTTP
 request is authenticated; cancellation discards consumed continuations. Maximum:
 16 idle cursors and 16 active searches, evicting oldest idle cursors first. Expired
