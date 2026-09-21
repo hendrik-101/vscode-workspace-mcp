@@ -132,8 +132,12 @@ function createMcpServer(
   );
   tool(
     "list_directory",
-    "List a workspace directory using its URI.",
-    z.strictObject({ uri }),
+    "List a workspace directory in bounded pages (default 50, maximum 100). Resend URI and page size with nextCursor; inspect incomplete and omittedEntries.",
+    z.strictObject({
+      uri,
+      maxEntries: z.number().int().min(1).max(100).optional(),
+      cursor: z.string().max(100).optional(),
+    }),
     (args) => workspace.list(args),
   );
   tool(
@@ -148,7 +152,7 @@ function createMcpServer(
   );
   tool(
     "search_workspace",
-    "Search live literal text within a workspace URI. Repeat identical options with nextCursor to continue. Results are not an atomic snapshot; inspect incomplete and limits.",
+    "Search live literal text within a workspace URI (default 20 results, maximum 100, bounded output). Repeat identical options with nextCursor to continue. Results are not an atomic snapshot; inspect incomplete and limits.",
     z.strictObject({
       uri,
       query: z.string().min(1).max(4096),

@@ -147,7 +147,7 @@ test("search resumes beyond 100 matches in one live file without duplicate match
   let page = await f.service.search(input);
   assert.ok(page.nextCursor, "bounded search must offer continuation");
   for (let pages = 0; ; pages++) {
-    assert.ok(pages < 10);
+    assert.ok(pages < 30);
     positions.push(...page.matches.map((m) => m.character));
     if (!page.nextCursor) break;
     page = await f.service.search({ ...input, cursor: page.nextCursor });
@@ -156,6 +156,167 @@ test("search resumes beyond 100 matches in one live file without duplicate match
   assert.equal(new Set(positions).size, 251);
   assert.equal(page.incomplete, false);
   assert.equal(f.listings(), 1);
+});
+
+test("listing pages unchanged virtual directories without duplicates and rejects changed listings", async () => {
+  const files = Object.fromEntries(
+    Array.from({ length: 123 }, (_, n) => [`file${n}.txt`, ""]),
+  );
+  const f = fixture(files);
+  let page = await f.service.list({ uri: f.root });
+  assert.equal(page.entries.length, 50);
+  const firstCursor = page.nextCursor;
+  const names = page.entries.map((entry) => entry.name);
+  while (page.nextCursor) {
+    page = await f.service.list({ uri: f.root, cursor: page.nextCursor });
+    names.push(...page.entries.map((entry) => entry.name));
+  }
+  assert.equal(names.length, 123);
+  assert.equal(new Set(names).size, 123);
+  assert.equal(page.incomplete, false);
+  files["changed.txt"] = "";
+  await assert.rejects(
+    f.service.list({ uri: f.root, cursor: firstCursor }),
+    /changed|invalid/i,
+  );
+  delete files["file0.txt"];
+  await assert.rejects(
+    f.service.list({ uri: f.root, cursor: firstCursor }),
+    /changed|invalid/i,
+  );
+});
+
+test("listing bounds serialized pages and distinguishes terminal scan omissions", async () => {
+  const f = fixture(
+    Object.fromEntries(
+      Array.from({ length: 1002 }, (_, n) => [
+        `${n}-${"x".repeat(500)}.txt`,
+        "",
+      ]),
+    ),
+  );
+  const names: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await f.service.list({
+      uri: f.root,
+      maxEntries: 100,
+      ...(cursor ? { cursor } : {}),
+    });
+    assert.ok(JSON.stringify({ result: page }).length <= 16000);
+    assert.equal(page.omittedEntries, 2);
+    assert.equal(page.incomplete, true);
+    assert.ok(page.entries.length > 0);
+    names.push(...page.entries.map((entry) => entry.name));
+    cursor = page.nextCursor;
+  } while (cursor);
+  assert.equal(names.length, 1000);
+  assert.equal(new Set(names).size, 1000);
+});
+
+test("listing validates page sizes and binds continuation to URI, options and roots", async () => {
+  const f = fixture({ "one.txt": "", "two.txt": "" });
+  for (const maxEntries of [0, 101, 1.5])
+    await assert.rejects(f.service.list({ uri: f.root, maxEntries }));
+  const page = await f.service.list({ uri: f.root, maxEntries: 1 });
+  await assert.rejects(
+    f.service.list({ uri: f.root, cursor: page.nextCursor }),
+  );
+  f.workspace.workspaceFolders.push({
+    uri: Uri.parse("vfs-search://host/another"),
+  });
+  await assert.rejects(
+    f.service.list({ uri: f.root, maxEntries: 1, cursor: page.nextCursor }),
+  );
+});
+
+test("listing reports blocked and oversized entries without stalling continuation", async () => {
+  const f = fixture({ "safe.txt": "" });
+  f.workspace.fs.readDirectory = async () => [
+    ["bad/name", 1],
+    ["link", 65],
+    ["x".repeat(9000), 1],
+    ["safe.txt", 1],
+  ];
+  const page = await f.service.list({ uri: f.root, maxEntries: 1 });
+  assert.equal(page.entries[0]?.name, "safe.txt");
+  assert.equal(page.blockedEntries, 2);
+  assert.equal(page.omittedEntries, 1);
+  assert.equal(page.incomplete, true);
+  assert.equal(page.nextCursor, undefined);
+});
+
+test("search defaults to twenty matches while honoring explicit counts", async () => {
+  const f = fixture({ "many.txt": "x\n".repeat(120) });
+  assert.equal(
+    (await f.service.search({ uri: f.root, query: "x" })).matches.length,
+    20,
+  );
+  assert.equal(
+    (await f.service.search({ uri: f.root, query: "x", maxResults: 100 }))
+      .matches.length,
+    100,
+  );
+});
+
+test("search output budget resumes the exact next match with long context and URIs", async () => {
+  const name = `${"a".repeat(7600)}.txt`;
+  const f = fixture({
+    [name]: Array.from({ length: 35 }, () => `needle ${"x".repeat(1200)}`).join(
+      "\n",
+    ),
+  });
+  const input = {
+    uri: f.documents[0]!.uri.toString(),
+    query: "needle",
+    maxResults: 100,
+    contextLines: 5,
+  };
+  const lines: number[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await f.service.search({
+      ...input,
+      ...(cursor ? { cursor } : {}),
+    });
+    assert.ok(JSON.stringify({ result: page }).length <= 24000);
+    assert.ok(page.matches.length > 0, "every continued page must progress");
+    lines.push(...page.matches.map((match) => match.line));
+    cursor = page.nextCursor;
+  } while (cursor);
+  assert.deepEqual(
+    lines,
+    Array.from({ length: 35 }, (_, n) => n),
+  );
+});
+
+test("search skips oversized files while retaining later matches", async () => {
+  const f = fixture({
+    "large.txt": "x".repeat(1024 * 1024 + 1),
+    "small.txt": "needle",
+  });
+  const page = await f.service.search({ uri: f.root, query: "needle" });
+  assert.equal(page.matches.length, 1);
+  assert.equal(page.incomplete, true);
+  assert.equal(page.errors.length, 1);
+});
+
+test("search bounds large provider errors and leaves room for a first match", async () => {
+  const names = Array.from(
+    { length: 4 },
+    (_, n) => `${n}-${"x".repeat(7600)}.txt`,
+  );
+  const f = fixture(Object.fromEntries(names.map((name) => [name, "needle"])));
+  for (const document of f.documents.slice(0, 3)) document.isClosed = true;
+  const page = await f.service.search({
+    uri: f.root,
+    query: "needle",
+    contextLines: 5,
+  });
+  assert.ok(JSON.stringify({ result: page }).length <= 24000);
+  assert.equal(page.matches.length, 1);
+  assert.equal(page.incomplete, true);
+  assert.ok(page.limits?.includes("errors"));
 });
 
 test("search resumes beyond 200 files and keeps file filtering and literal options", async () => {
@@ -324,7 +485,7 @@ test("official MCP pages preserve search state across stateless authenticated HT
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StreamableHTTPClientTransport } =
     await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
-  const f = fixture({ "a.ts": "NEEDLE needle needle" });
+  const f = fixture({ "a.ts": "NEEDLE needle needle", "b.ts": "" });
   const server = await startServer(f.service);
   t.after(() => server.close());
   const client = new Client({
@@ -337,6 +498,24 @@ test("official MCP pages preserve search state across stateless authenticated HT
       requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
     }),
   );
+  const listing = await client.callTool({
+    name: "list_directory",
+    arguments: { uri: f.root, maxEntries: 1 },
+  });
+  const listingResult = (
+    listing.structuredContent as { result: contracts.ListResult }
+  ).result;
+  assert.equal(listingResult.entries[0]?.name, "a.ts");
+  assert.ok(listingResult.nextCursor);
+  const listed = await client.callTool({
+    name: "list_directory",
+    arguments: { uri: f.root, maxEntries: 1, cursor: listingResult.nextCursor },
+  });
+  const listedResult = (
+    listed.structuredContent as { result: contracts.ListResult }
+  ).result;
+  assert.equal(listedResult.entries[0]?.name, "b.ts");
+  assert.equal(listedResult.nextCursor, undefined);
   const input = {
     uri: f.root,
     query: "needle",

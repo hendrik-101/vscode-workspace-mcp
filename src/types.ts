@@ -19,6 +19,11 @@ export interface TextRange {
 export interface UriInput {
   uri: string;
 }
+export interface ListInput extends UriInput {
+  maxEntries?: number;
+  /** Stateless continuation bound to the unchanged directory and workspace roots. */
+  cursor?: string;
+}
 export interface ReadInput extends UriInput {
   startLine?: number;
   /** Exclusive. Defaults to the document's line count. */
@@ -153,6 +158,10 @@ export interface ListResult {
   truncated: boolean;
   /** Count of omitted symbolic links and unsafe provider entry names. */
   blockedEntries: number;
+  /** Omitted entries beyond the scan or response bounds. */
+  omittedEntries?: number;
+  incomplete?: boolean;
+  nextCursor?: string;
 }
 export interface SearchResult {
   uri: string;
@@ -163,6 +172,7 @@ export interface SearchResult {
     character: number;
     text: string;
     context?: Array<{ line: number; text: string }>;
+    previewTruncated?: boolean;
   }>;
   filesSearched: number;
   nextCursor?: string;
@@ -239,7 +249,7 @@ export interface WorkspaceApi {
   ): Promise<Refactoring.ActionsResult>;
   roots(): Promise<RootInfo[]>;
   context(): Promise<ContextResult>;
-  list(input: UriInput): Promise<ListResult>;
+  list(input: ListInput): Promise<ListResult>;
   read(input: ReadInput): Promise<ReadResult>;
   search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
   edit(input: EditInput, signal?: AbortSignal): Promise<DocumentState>;
