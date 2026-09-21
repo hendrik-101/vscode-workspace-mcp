@@ -962,3 +962,74 @@ test("valid hybrid locations retain the exact requested-URI filter", async () =>
     code: "SYMBOL_NOT_FOUND",
   });
 });
+
+test("an unrelated malformed location cannot block a valid name or container match", async () => {
+  for (const selector of ["name", "container"] as const) {
+    const bad = {
+      ...symbol(selector === "name" ? "other" : "method"),
+      location: undefined,
+    };
+    const good =
+      selector === "name"
+        ? symbol()
+        : symbol("Parent", undefined, undefined, [symbol()]);
+    for (const items of [
+      [bad, good],
+      [good, bad],
+    ]) {
+      const f = fixture(source, items);
+      const result = await f.service.readSymbol({
+        ...request(f),
+        ...(selector === "container" ? { containerName: "Parent" } : {}),
+      });
+      assert.equal(result.text, "function method() {\n  work();\n}");
+    }
+  }
+});
+
+test("usable different starts exclude malformed locations for flat and hierarchical symbols", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 12)),
+    range(at(0), at(0, 6)),
+  );
+  for (const flat of [false, true]) {
+    const location = { uri: undefined, range: range(at(1), at(1, 6)) };
+    const bad = flat
+      ? { name: "method", kind: 5, containerName: "", location }
+      : {
+          ...symbol("method", range(at(1), at(1, 13)), range(at(1), at(1, 6))),
+          location,
+        };
+    for (const items of [
+      [bad, good],
+      [good, bad],
+    ]) {
+      const f = fixture("method first\nmethod second", items);
+      const result = await f.service.readSymbol({
+        ...request(f),
+        position: at(0),
+      });
+      assert.equal(result.text, "method first");
+      await assert.rejects(
+        f.service.readSymbol({ ...request(f), position: at(1) }),
+        { code: "SYMBOL_RANGE_UNAVAILABLE" },
+      );
+    }
+  }
+});
+
+test("an unrelated parent's malformed location does not hide matching children", async () => {
+  const f = fixture(source, [
+    {
+      ...symbol("Parent", undefined, undefined, [symbol()]),
+      location: undefined,
+    },
+  ]);
+  const result = await f.service.readSymbol({
+    ...request(f),
+    containerName: "Parent",
+  });
+  assert.equal(result.text, "function method() {\n  work();\n}");
+  assert.equal(result.symbol.containerName, "Parent");
+});

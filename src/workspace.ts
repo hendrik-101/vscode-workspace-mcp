@@ -1768,6 +1768,7 @@ export class WorkspaceService implements WorkspaceApi {
       if (!item || typeof item !== "object") continue;
       // The native command may return hybrid DocumentSymbol/SymbolInformation objects.
       // A location alone is never evidence of a full body.
+      let locationAvailable = true;
       if ("location" in item) {
         try {
           const target = item.location?.uri?.toString();
@@ -1776,8 +1777,7 @@ export class WorkspaceService implements WorkspaceApi {
           parseUri(target);
           if (target !== uri.toString()) continue;
         } catch {
-          unavailable = true;
-          continue;
+          locationAvailable = false;
         }
       }
       const hierarchical = "selectionRange" in item || "children" in item;
@@ -1822,7 +1822,7 @@ export class WorkspaceService implements WorkspaceApi {
             input.position.character !== selectionStart.character)
         )
           continue;
-        if (!hierarchical || !containerKnown) {
+        if (!hierarchical || !containerKnown || !locationAvailable) {
           unavailable = true;
           continue;
         }
