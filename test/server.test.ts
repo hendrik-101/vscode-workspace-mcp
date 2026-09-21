@@ -887,6 +887,75 @@ test("discovery documents tool roles, URI/position conventions and search contin
     }).valid,
     false,
   );
+  type Schema = {
+    type?: string;
+    properties?: Record<string, Schema>;
+    required?: string[];
+    items?: Schema;
+  };
+  const resultSchema = (name: string) =>
+    (find(name).outputSchema as Schema).properties!.result!;
+  const readSchema = resultSchema("read_document");
+  for (const field of ["requestedRange", "returnedRange", "truncated"]) {
+    assert.ok(readSchema.properties![field], `${field} is discoverable`);
+    assert.ok(readSchema.required!.includes(field), `${field} is required`);
+  }
+  assert.equal(readSchema.properties!.nextPosition!.type, "object");
+  assert.equal(readSchema.required!.includes("nextPosition"), false);
+  const listSchema = resultSchema("list_directory");
+  for (const [field, type] of [
+    ["omittedEntries", "number"],
+    ["incomplete", "boolean"],
+    ["nextCursor", "string"],
+  ]) {
+    assert.equal(listSchema.properties![field!]!.type, type);
+    assert.equal(listSchema.required!.includes(field!), false);
+  }
+  const matchSchema =
+    resultSchema("search_workspace").properties!.matches!.items!;
+  assert.equal(matchSchema.properties!.previewTruncated!.type, "boolean");
+  assert.equal(matchSchema.required!.includes("previewTruncated"), false);
+  const formatSchema = resultSchema("format_document");
+  assert.equal(formatSchema.properties!.editCount!.type, "number");
+  assert.ok(formatSchema.required!.includes("editCount"));
+  assert.equal(formatSchema.required!.includes("edits"), false);
+  for (const name of ["workspace_symbols", "document_symbols"]) {
+    const schema = resultSchema(name);
+    for (const field of [
+      "version",
+      "consistency",
+      "nextOffset",
+      "scanned",
+      "scanLimitReached",
+    ]) {
+      assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
+      assert.equal(schema.required!.includes(field), false);
+    }
+    const item = schema.properties!.symbols!.items!;
+    for (const field of ["type", "selectionRange", "fullRangeKnown"]) {
+      assert.ok(item.properties![field]);
+      assert.equal(item.required!.includes(field), false);
+    }
+  }
+  for (const name of ["get_diagnostics", "wait_for_diagnostics"]) {
+    const schema = resultSchema(name);
+    for (const field of [
+      "counts",
+      "total",
+      "inspected",
+      "matching",
+      "incomplete",
+      "snapshotId",
+      "nextOffset",
+    ]) {
+      assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
+      assert.equal(schema.required!.includes(field), false);
+    }
+    assert.equal(
+      schema.properties!.diagnostics!.items!.properties!.messageTruncated!.type,
+      "boolean",
+    );
+  }
   assert.match(find("workspace_symbols").description!, /name/i);
   assert.match(find("document_symbols").description!, /outline/i);
   assert.match(find("search_workspace").description!, /literal/i);
@@ -909,6 +978,15 @@ test("MCP output contracts validate success, cursor round-trips and structured e
       return {
         ...(await workspace.search(input)),
         nextCursor: input.cursor ? undefined : cursor,
+        matches: [
+          {
+            uri: input.uri,
+            line: 0,
+            character: 0,
+            text: "literal",
+            previewTruncated: true,
+          },
+        ],
       };
     },
     context: async () => ({
@@ -936,6 +1014,9 @@ test("MCP output contracts validate success, cursor round-trips and structured e
       ...(await workspace.list(input)),
       nextOffset: 20,
       totalEntries: 30,
+      omittedEntries: 2,
+      incomplete: true,
+      nextCursor: cursor,
     }),
     format: async ({ uri, version }) =>
       ({ uri, version, dirty: false, applied: true, editCount: 1 }) as never,
@@ -966,6 +1047,14 @@ test("MCP output contracts validate success, cursor round-trips and structured e
     arguments: { ...args, cursor },
   });
   assert.equal(second.isError, undefined);
+  assert.equal(
+    (
+      second.structuredContent as {
+        result: { matches: Array<{ previewTruncated: boolean }> };
+      }
+    ).result.matches[0]!.previewTruncated,
+    true,
+  );
   assert.equal(seenCursor, cursor);
   const wrongKey = await client.callTool({
     name: "search_workspace",
@@ -993,6 +1082,19 @@ test("MCP output contracts validate success, cursor round-trips and structured e
       .nextOffset,
     20,
   );
+  assert.deepEqual(listing.structuredContent, {
+    result: {
+      uri: "vfs:/project",
+      entries: [],
+      truncated: false,
+      blockedEntries: 0,
+      nextOffset: 20,
+      totalEntries: 30,
+      omittedEntries: 2,
+      incomplete: true,
+      nextCursor: cursor,
+    },
+  });
   const context = await client.callTool({
     name: "editor_context",
     arguments: {},

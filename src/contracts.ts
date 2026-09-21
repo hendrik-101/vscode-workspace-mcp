@@ -15,11 +15,54 @@ const root = z.looseObject({ uri: text, name: text, index: number });
 const symbol = z.looseObject({
   name: text,
   kind: number,
+  type: z
+    .enum([
+      "file",
+      "module",
+      "namespace",
+      "package",
+      "class",
+      "method",
+      "property",
+      "field",
+      "constructor",
+      "enum",
+      "interface",
+      "function",
+      "variable",
+      "constant",
+      "string",
+      "number",
+      "boolean",
+      "array",
+      "object",
+      "key",
+      "null",
+      "enummember",
+      "struct",
+      "event",
+      "operator",
+      "typeparameter",
+      "unknown",
+    ])
+    .optional(),
+  selectionRange: range.optional(),
+  fullRangeKnown: boolean.optional(),
   uri: text,
   range,
   containerName: text.optional(),
 });
-const symbols = z.looseObject({ symbols: z.array(symbol), ...bounded });
+// Optional metadata supports independent symbol/diagnostic rollout while making
+// continuation and completeness fields visible to clients before integration.
+const symbols = z.looseObject({
+  symbols: z.array(symbol),
+  ...bounded,
+  version: number.optional(),
+  consistency: z.enum(["document-version", "live"]).optional(),
+  nextOffset: number.optional(),
+  scanned: number.optional(),
+  scanLimitReached: boolean.optional(),
+});
 const navigation = z.looseObject({
   ...state,
   locations: z.array(z.looseObject({ ...state, range })),
@@ -32,11 +75,28 @@ const diagnosticFields = {
       range,
       severity: z.enum(["error", "warning", "information", "hint"]),
       message: text,
+      messageTruncated: boolean.optional(),
       source: text.optional(),
+      sourceTruncated: boolean.optional(),
       code: z.union([text, number]).optional(),
+      codeTruncated: boolean.optional(),
     }),
   ),
   truncated: boolean,
+  counts: z
+    .looseObject({
+      error: number,
+      warning: number,
+      information: number,
+      hint: number,
+    })
+    .optional(),
+  total: number.optional(),
+  inspected: number.optional(),
+  matching: number.optional(),
+  incomplete: boolean.optional(),
+  snapshotId: text.optional(),
+  nextOffset: number.optional(),
 };
 const preview = {
   previewAvailable: boolean.describe(
@@ -66,6 +126,10 @@ const readFields = {
   startLine: number,
   endLine: number,
   text,
+  requestedRange: range,
+  returnedRange: range,
+  truncated: boolean,
+  nextPosition: position.optional(),
 };
 
 export const results = {
@@ -97,14 +161,13 @@ export const results = {
     ),
     truncated: boolean,
     blockedEntries: number,
+    omittedEntries: number.optional(),
+    incomplete: boolean.optional(),
+    nextCursor: text.optional(),
   }),
   read_document: z.looseObject(readFields),
   read_symbol: z.looseObject({
     ...readFields,
-    requestedRange: range,
-    returnedRange: range,
-    truncated: boolean,
-    nextPosition: position.optional(),
     symbol: z.looseObject({
       name: text,
       kind: number,
@@ -123,6 +186,7 @@ export const results = {
         character: number,
         text,
         context: z.array(z.looseObject({ line: number, text })).optional(),
+        previewTruncated: boolean.optional(),
       }),
     ),
     filesSearched: number,
@@ -162,6 +226,7 @@ export const results = {
   format_document: z.looseObject({
     ...state,
     edits: z.array(edit).optional(),
+    editCount: number,
     applied: boolean,
   }),
   preview_rename: z.looseObject({
