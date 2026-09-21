@@ -1537,13 +1537,19 @@ export class WorkspaceService implements WorkspaceApi {
       let selection: vscode.Range;
       try {
         const symbol = item as vscode.DocumentSymbol;
-        selection = this.exactRange(document, symbol.selectionRange);
+        // A usable start can exclude an overload even when its end is malformed.
+        // An unusable start cannot prove exclusion and still fails closed below.
+        const selectionStart = this.exactPosition(
+          document,
+          symbol.selectionRange.start,
+        );
         if (
           input.position &&
-          (input.position.line !== selection.start.line ||
-            input.position.character !== selection.start.character)
+          (input.position.line !== selectionStart.line ||
+            input.position.character !== selectionStart.character)
         )
           continue;
+        selection = this.exactRange(document, symbol.selectionRange);
         full = this.exactRange(document, symbol.range);
         if (
           full.start.isAfter(selection.start) ||

@@ -486,3 +486,67 @@ test("matching uses full names while returned symbol metadata remains bounded", 
     { code: "SYMBOL_NOT_FOUND" },
   );
 });
+
+test("exact position excludes an overload with a valid different start and malformed selection end", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 12)),
+    range(at(0), at(0, 6)),
+  );
+  for (const end of [at(99), at(0), undefined]) {
+    const bad = {
+      ...symbol("method", range(at(1), at(1, 13))),
+      selectionRange: { start: at(1), end },
+    };
+    for (const children of [
+      [good, bad],
+      [bad, good],
+    ]) {
+      const f = fixture("method first\nmethod second", [
+        symbol(
+          "Parent",
+          range(at(0), at(1, 13)),
+          range(at(0), at(0, 6)),
+          children,
+        ),
+      ]);
+      const result = await f.service.readSymbol({
+        ...request(f),
+        containerName: "Parent",
+        position: at(0),
+      });
+      assert.equal(result.text, "method first");
+      await assert.rejects(
+        f.service.readSymbol({
+          ...request(f),
+          containerName: "Parent",
+          position: at(1),
+        }),
+        { code: "SYMBOL_RANGE_UNAVAILABLE" },
+      );
+    }
+  }
+});
+
+test("unusable overload selection starts still prevent a false unique match", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 12)),
+    range(at(0), at(0, 6)),
+  );
+  for (const start of [undefined, at(-1), at(99), at(1, NaN)]) {
+    const f = fixture("method first\nmethod second", [
+      good,
+      {
+        ...symbol("method", range(at(1), at(1, 13))),
+        selectionRange: { start, end: at(1, 6) },
+      },
+    ]);
+    await assert.rejects(
+      f.service.readSymbol({ ...request(f), position: at(0) }),
+      {
+        code: "SYMBOL_RANGE_UNAVAILABLE",
+      },
+    );
+  }
+});
