@@ -1,4 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
@@ -21,6 +27,7 @@ import {
   type WaitDiagnosticsResult,
   type DocumentState,
   type EditInput,
+  type ListInput,
   type ListResult,
   type Position,
   type ReadInput,
@@ -37,6 +44,8 @@ import {
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LIST_ENTRIES = 1000;
 const MAX_DIAGNOSTIC_CHARACTERS = 1024 * 1024;
+const MAX_LIST_OUTPUT = 16_000;
+const MAX_SEARCH_OUTPUT = 24_000;
 const MAX_SEARCH_FILES = 200;
 const MAX_SEARCH_ENTRIES = 2000;
 const MAX_SEARCH_DEPTH = 12;
@@ -253,6 +262,7 @@ export class WorkspaceService implements WorkspaceApi {
   private readonly navigationObservers = new Set<vscode.Disposable>();
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
   private readonly searchCursors = new Map<string, SearchContinuation>();
+  private listCursorKey: Buffer | undefined;
   private searchRoots: vscode.Disposable | undefined;
   private searchGeneration = 0;
   private activeSearches = 0;
@@ -812,7 +822,12 @@ export class WorkspaceService implements WorkspaceApi {
           signal,
         )
       : state(document);
-    return { ...final, edits, applied };
+    return {
+      ...final,
+      applied,
+      editCount: edits.length,
+      ...((input.includeEdits ?? !input.apply) ? { edits } : {}),
+    };
   }
 
   /** Preview only: public WorkspaceEdit.entries() cannot enumerate file/notebook operations. */
@@ -1279,26 +1294,90 @@ export class WorkspaceService implements WorkspaceApi {
     return result;
   }
 
-  /**
-   * Lists a workspace directory without following symbolic links.
-   * The result counts blocked entries and reports whether the entry limit was reached.
-   */
-  async list({ uri: value }: UriInput): Promise<ListResult> {
+  /** Stateless pages over a bounded, fingerprinted provider listing. */
+  async list({
+    uri: value,
+    maxEntries = 50,
+    cursor,
+  }: ListInput): Promise<ListResult> {
+    integer(maxEntries, "maxEntries", 1);
+    if (maxEntries > MAX_RESULTS)
+      fail("INVALID_ARGUMENT", "maxEntries must be at most 100.");
     const uri = parseUri(value);
+    const roots = () =>
+      JSON.stringify(
+        (vscode.workspace.workspaceFolders ?? []).map((root) =>
+          root.uri.toString(),
+        ),
+      );
+    const rootContext = roots();
     const stat = await this.authorize(uri);
     if ((stat.type & vscode.FileType.Directory) === 0)
       fail("NOT_A_DIRECTORY", "URI must identify a directory.");
     const children = await vscode.workspace.fs.readDirectory(uri);
     this.currentRoot(uri);
+    if (roots() !== rootContext)
+      fail("INVALID_ARGUMENT", "Workspace roots changed; restart the listing.");
+    const scanned = children.slice(0, MAX_LIST_ENTRIES);
+    const listingHash = createHash("sha256").update(
+      JSON.stringify([
+        uri.toString(),
+        maxEntries,
+        rootContext,
+        children.length,
+      ]),
+    );
+    // Hash one bounded representation at a time, never stringify provider arrays.
+    // Always-omitted oversized names are represented by length/type/position only.
+    for (const [name, type] of scanned)
+      listingHash.update(
+        JSON.stringify([
+          name.length > MAX_SEARCH_URI ? null : name,
+          name.length,
+          type,
+        ]),
+      );
+    const fingerprint = listingHash.digest("hex");
+    const key = (this.listCursorKey ??= randomBytes(32));
+    const tag = (position: string) =>
+      createHmac("sha256", key).update(`${fingerprint}:${position}`).digest();
+    let offset = 0;
+    if (cursor !== undefined) {
+      const parts =
+        typeof cursor === "string" && /^(\d{1,4}):([a-f0-9]{64})$/.exec(cursor);
+      if (
+        !parts ||
+        !timingSafeEqual(Buffer.from(parts[2]!, "hex"), tag(parts[1]!)) ||
+        Number(parts[1]) >= scanned.length
+      )
+        fail(
+          "INVALID_ARGUMENT",
+          "Listing cursor is invalid or the directory changed; restart the listing.",
+        );
+      offset = Number(parts[1]);
+    }
     const result: ListResult = {
       uri: uri.toString(),
       entries: [],
-      truncated: children.length > MAX_LIST_ENTRIES,
+      truncated: false,
       blockedEntries: 0,
+      omittedEntries: children.length - scanned.length,
+      incomplete: false,
     };
-    for (const [name, type] of children.slice(0, MAX_LIST_ENTRIES)) {
+    // Reserve cursor and count metadata before selecting entries.
+    const budget = MAX_LIST_OUTPUT - JSON.stringify({ result }).length - 200;
+    if (budget < 0)
+      fail("LIMIT_EXCEEDED", "Directory URI exceeds the response budget.");
+    let used = 0;
+    let next: number | undefined;
+    for (let index = 0; index < scanned.length; index++) {
+      const [name, type] = scanned[index]!;
       if ((type & vscode.FileType.SymbolicLink) !== 0) {
         result.blockedEntries++;
+        continue;
+      }
+      if (name.length > MAX_SEARCH_URI) {
+        result.omittedEntries!++;
         continue;
       }
       let child: vscode.Uri;
@@ -1313,7 +1392,7 @@ export class WorkspaceService implements WorkspaceApi {
         result.blockedEntries++;
         continue;
       }
-      result.entries.push({
+      const entry: ListResult["entries"][number] = {
         name,
         uri: child.toString(),
         kind:
@@ -1322,8 +1401,24 @@ export class WorkspaceService implements WorkspaceApi {
             : (type & vscode.FileType.File) !== 0
               ? "file"
               : "unknown",
-      });
+      };
+      const size = JSON.stringify(entry).length + 1;
+      if (size > budget) {
+        result.omittedEntries!++;
+        continue;
+      }
+      if (index < offset || next !== undefined) continue;
+      if (result.entries.length >= maxEntries || used + size > budget) {
+        next = index;
+        continue;
+      }
+      result.entries.push(entry);
+      used += size;
     }
+    if (next !== undefined)
+      result.nextCursor = `${next}:${tag(String(next)).toString("hex")}`;
+    result.truncated = next !== undefined || result.omittedEntries! > 0;
+    result.incomplete = result.truncated || result.blockedEntries > 0;
     return result;
   }
 
@@ -1345,37 +1440,100 @@ export class WorkspaceService implements WorkspaceApi {
     return uri;
   }
 
-  /**
-   * Reads a zero-based, half-open line range from the current live document.
-   * Unsaved buffer content takes precedence over the provider's stored bytes.
-   */
-  async read({
-    uri: value,
-    startLine = 0,
-    endLine,
-  }: ReadInput): Promise<ReadResult> {
-    integer(startLine, "startLine");
+  /** Read an exact, bounded page from the live buffer, retaining residual positions. */
+  async read(input: ReadInput): Promise<ReadResult> {
+    const {
+      uri: value,
+      range: requested,
+      version: expectedVersion,
+      maxLines = 200,
+      maxChars = 16000,
+    } = input;
+    integer(maxLines, "maxLines", 1);
+    integer(maxChars, "maxChars", 2);
+    if (maxLines > 1000 || maxChars > 64000)
+      fail(
+        "INVALID_ARGUMENT",
+        "Read budgets exceed 1000 lines or 64000 UTF-16 code units.",
+      );
+    if (
+      requested !== undefined &&
+      (input.startLine !== undefined || input.endLine !== undefined)
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "range is mutually exclusive with startLine/endLine.",
+      );
     const document = await this.document(parseUri(value));
-    this.text(document);
-    const end = endLine ?? document.lineCount;
-    integer(end, "endLine");
-    if (startLine > end || end > document.lineCount)
-      fail("INVALID_ARGUMENT", "Line range is outside the document.");
-    const start =
-      startLine === document.lineCount
-        ? document.lineAt(document.lineCount - 1).range.end
-        : new vscode.Position(startLine, 0);
-    const finish =
-      end === document.lineCount
-        ? document.lineAt(document.lineCount - 1).range.end
-        : new vscode.Position(end, 0);
+    if (expectedVersion !== undefined) this.expected(document, expectedVersion);
+    const version = document.version;
+    const original = this.text(document);
+    let startLine: number;
+    let endLine: number;
+    let wanted: vscode.Range;
+    if (requested !== undefined) {
+      if (!requested || typeof requested !== "object")
+        fail("INVALID_ARGUMENT", "A read range is required.");
+      wanted = this.exactRange(document, requested);
+      startLine = wanted.start.line;
+      endLine =
+        document.offsetAt(wanted.start) === document.offsetAt(wanted.end)
+          ? startLine
+          : wanted.end.line + (wanted.end.character > 0 ? 1 : 0);
+    } else {
+      startLine = input.startLine ?? 0;
+      endLine = input.endLine ?? document.lineCount;
+      integer(startLine, "startLine");
+      integer(endLine, "endLine");
+      if (startLine > endLine || endLine > document.lineCount)
+        fail("INVALID_ARGUMENT", "Line range is outside the document.");
+      const lineStart = (line: number) =>
+        line === document.lineCount
+          ? document.lineAt(document.lineCount - 1).range.end
+          : new vscode.Position(line, 0);
+      wanted = new vscode.Range(lineStart(startLine), lineStart(endLine));
+    }
+    const start = document.offsetAt(wanted.start);
+    const end = document.offsetAt(wanted.end);
+    const splitsSurrogate = (offset: number) =>
+      /[\ud800-\udbff]/.test(original.charAt(offset - 1)) &&
+      /[\udc00-\udfff]/.test(original.charAt(offset));
+    if (splitsSurrogate(start) || splitsSurrogate(end))
+      fail(
+        "INVALID_ARGUMENT",
+        "Read positions must not split a surrogate pair.",
+      );
+    const lineLimit = wanted.start.line + maxLines;
+    let finish = Math.min(
+      end,
+      start + maxChars,
+      lineLimit < document.lineCount
+        ? document.offsetAt(new vscode.Position(lineLimit, 0))
+        : original.length,
+    );
+    // VS Code positions cannot represent the middle of CRLF; keep both units together.
+    if (
+      splitsSurrogate(finish) ||
+      (original[finish - 1] === "\r" && original[finish] === "\n")
+    )
+      finish--;
+    const returnedRange = range(
+      new vscode.Range(wanted.start, document.positionAt(finish)),
+    );
+    const truncated = finish < end;
+    this.currentRoot(document.uri);
+    this.expected(document, version);
     return {
       ...state(document),
       languageId: document.languageId,
       lineCount: document.lineCount,
       startLine,
-      endLine: end,
-      text: document.getText(new vscode.Range(start, finish)),
+      endLine,
+      text: original.slice(start, finish),
+      requestedRange: range(wanted),
+      returnedRange,
+      truncated,
+      ...(truncated ? { nextPosition: returnedRange.end } : {}),
     };
   }
 
@@ -1389,7 +1547,7 @@ export class WorkspaceService implements WorkspaceApi {
     const {
       uri: value,
       query,
-      maxResults = MAX_RESULTS,
+      maxResults = 20,
       cursor,
       include = [],
       exclude = [],
@@ -1537,6 +1695,26 @@ export class WorkspaceService implements WorkspaceApi {
         consistency: "live",
         limits: [],
       };
+      // Reserve final cursor/limit metadata; all variable text is measured as JSON.
+      const outputFits = () =>
+        JSON.stringify({ result }).length <= MAX_SEARCH_OUTPUT - 512;
+      if (!outputFits())
+        fail(
+          "LIMIT_EXCEEDED",
+          "URI and query exceed the search response budget.",
+        );
+      const addError = (error: SearchResult["errors"][number]) => {
+        result.errors.push(error);
+        if (result.errors.length > MAX_RESULTS || !outputFits()) {
+          result.errors.pop();
+          state.limits.add("errors");
+        }
+      };
+      const outputError = new WorkspaceError(
+        "LIMIT_EXCEEDED",
+        "URI and query leave no room for a search match.",
+      );
+      let outputFull = false;
       let bytes = 0;
       let entries = 0;
       let files = 0;
@@ -1553,6 +1731,7 @@ export class WorkspaceService implements WorkspaceApi {
           break;
         }
         if (
+          outputFull ||
           entries >= MAX_SEARCH_ENTRIES ||
           files >= MAX_SEARCH_FILES ||
           bytes >= MAX_SEARCH_BYTES ||
@@ -1588,11 +1767,10 @@ export class WorkspaceService implements WorkspaceApi {
                 enqueue({ uri: child, depth: item.depth + 1, type });
               } catch {
                 state.incomplete = true;
-                if (result.errors.length < MAX_RESULTS)
-                  result.errors.push({
-                    uri: item.uri.toString(),
-                    message: "Unsafe provider entry name skipped.",
-                  });
+                addError({
+                  uri: item.uri.toString(),
+                  message: "Unsafe provider entry name skipped.",
+                });
               }
             }
           } else if ((item.type & vscode.FileType.File) !== 0) {
@@ -1666,7 +1844,7 @@ export class WorkspaceService implements WorkspaceApi {
                     text: document.lineAt(line).text.slice(0, MAX_PREVIEW),
                   });
               }
-              result.matches.push({
+              const candidate: SearchResult["matches"][number] = {
                 uri: item.uri.toString(),
                 line: at.line,
                 character: at.character,
@@ -1677,7 +1855,39 @@ export class WorkspaceService implements WorkspaceApi {
                     at.character + MAX_PREVIEW,
                   ),
                 ...(contextLines ? { context } : {}),
-              });
+              };
+              result.matches.push(candidate);
+              if (!outputFits() && result.matches.length === 1) {
+                while (!outputFits() && result.errors.length) {
+                  result.errors.pop();
+                  state.limits.add("errors");
+                }
+                // Keep a full URI and position even for long paths: trim optional previews.
+                while (
+                  !outputFits() &&
+                  (candidate.text.length || candidate.context?.length)
+                ) {
+                  candidate.previewTruncated = true;
+                  if (candidate.context?.length) candidate.context.pop();
+                  else
+                    candidate.text = candidate.text.slice(
+                      0,
+                      Math.floor(candidate.text.length / 2),
+                    );
+                }
+                if (!outputFits()) throw outputError;
+              }
+              if (!outputFits()) {
+                result.matches.pop();
+                enqueue({
+                  ...item,
+                  offset,
+                  version: document.version,
+                  contentHash,
+                });
+                outputFull = true;
+                break;
+              }
             }
           } else fail("NOT_A_FILE", "Entry has an unsupported file type.");
         } catch (error) {
@@ -1688,20 +1898,19 @@ export class WorkspaceService implements WorkspaceApi {
             break;
           }
           if (
-            error instanceof WorkspaceError &&
-            error.code === "SEARCH_INVALIDATED"
+            error === outputError ||
+            (error instanceof WorkspaceError &&
+              error.code === "SEARCH_INVALIDATED")
           )
             throw error;
           state.incomplete = true;
-          if (result.errors.length < MAX_RESULTS)
-            result.errors.push({
-              uri: item.uri.toString(),
-              message:
-                error instanceof WorkspaceError
-                  ? error.message
-                  : "Entry could not be read by the workspace filesystem provider.",
-            });
-          else state.limits.add("errors");
+          addError({
+            uri: item.uri.toString(),
+            message:
+              error instanceof WorkspaceError
+                ? error.message
+                : "Entry could not be read by the workspace filesystem provider.",
+          });
         }
       }
       checkpoint();

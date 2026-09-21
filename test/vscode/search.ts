@@ -11,6 +11,7 @@ export async function progressiveSearch(
   const root = vscode.Uri.joinPath(parent, "progressive-search");
   provider.seed(root, "", vscode.FileType.Directory);
   const many = vscode.Uri.joinPath(root, "many.ts");
+  const matchCount = 251;
   provider.seed(many, "stored text");
   for (let i = 0; i < 251; i++)
     provider.seed(vscode.Uri.joinPath(root, `file${i}.txt`), "absent");
@@ -22,16 +23,26 @@ export async function progressiveSearch(
       document.positionAt(0),
       document.positionAt(document.getText().length),
     ),
-    "needle\n".repeat(251),
+    "needle\n".repeat(matchCount),
   );
   assert.equal(await vscode.workspace.applyEdit(edit), true);
   const service = new WorkspaceService();
   try {
     const input = { uri: root.toString(), query: "needle", include: ["*.ts"] };
+    const defaultPageSize = 20;
+    const expectedPages = Math.ceil(matchCount / defaultPageSize);
     let page = await service.search(input);
     const lines: number[] = [];
     for (let pages = 0; ; pages++) {
-      assert.ok(pages < 10);
+      assert.ok(
+        pages < expectedPages,
+        "search must finish within its expected pages",
+      );
+      assert.equal(
+        page.matches.length,
+        Math.min(defaultPageSize, matchCount - lines.length),
+        "short matches must use the default page size until the final page",
+      );
       lines.push(
         ...page.matches.map((match) => {
           assert.equal(match.uri, many.toString());
@@ -41,8 +52,10 @@ export async function progressiveSearch(
       if (!page.nextCursor) break;
       page = await service.search({ ...input, cursor: page.nextCursor });
     }
-    assert.equal(lines.length, 251);
-    assert.equal(new Set(lines).size, 251);
+    assert.deepEqual(
+      lines,
+      Array.from({ length: matchCount }, (_, line) => line),
+    );
     assert.equal(page.incomplete, false);
     assert.equal(provider.stored(many), "stored text");
     const filesInput = { uri: root.toString(), query: "not-present" };
