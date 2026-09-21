@@ -51,25 +51,24 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 
 ## Tools
 
-| Tool                | Behavior                                                              |
-| ------------------- | --------------------------------------------------------------------- |
-| `workspace_roots`   | Full workspace-folder URIs                                            |
-| `editor_context`    | Scoped active editor, selection and open text tabs                    |
-| `list_directory`    | Entries through `workspace.fs.readDirectory`                          |
-| `read_document`     | Live text, version and dirty state; optional line range               |
-| `search_workspace`  | Bounded literal search with filters and continuation cursors          |
-| `edit_document`     | Version-checked text edits; leaves the buffer unsaved                 |
-| `save_document`     | Separate version-checked save; may trigger provider dialogs           |
-| `get_diagnostics`   | Diagnostics already available in VS Code                              |
-| `show_document`     | Reveal a document and optional selection; preserve focus by default   |
-| `workspace_symbols` | Query installed workspace symbol providers; only admitted targets     |
-| `document_symbols`  | Bounded document structure through installed language providers       |
-| `show_diff`         | Compare two workspace documents or a versioned proposed text snapshot |
-| `format_document`   | Preview provider formatting edits; optionally apply without saving    |
-
-| `wait_for_diagnostics` | Wait for a diagnostic event or timeout; no analysis-completion guarantee |
-| `get_definition`, `get_references`, `get_hover` | Query installed language providers |
-| `preview_rename`, `preview_code_actions` | Preview provider text edits; no automatic application |
+| Tool                                            | Behavior                                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------ |
+| `workspace_roots`                               | Full workspace-folder URIs                                               |
+| `editor_context`                                | Scoped active editor, selection and open text tabs                       |
+| `list_directory`                                | Entries through `workspace.fs.readDirectory`                             |
+| `read_document`                                 | Live text, version and dirty state; optional line range                  |
+| `search_workspace`                              | Bounded literal search with filters and continuation cursors             |
+| `edit_document`                                 | Version-checked text edits; leaves the buffer unsaved                    |
+| `save_document`                                 | Separate version-checked save; may trigger provider dialogs              |
+| `get_diagnostics`                               | Diagnostics already available in VS Code                                 |
+| `show_document`                                 | Reveal a document and optional selection; preserve focus by default      |
+| `workspace_symbols`                             | Query installed workspace symbol providers; only admitted targets        |
+| `document_symbols`                              | Bounded document structure through installed language providers          |
+| `show_diff`                                     | Compare two workspace documents or a versioned proposed text snapshot    |
+| `format_document`                               | Preview provider formatting edits; optionally apply without saving       |
+| `wait_for_diagnostics`                          | Wait for a diagnostic event or timeout; no analysis-completion guarantee |
+| `get_definition`, `get_references`, `get_hover` | Query installed language providers                                       |
+| `preview_rename`, `preview_code_actions`        | Preview provider text edits; no automatic application                    |
 
 Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are required.
 No file creation/deletion/renaming, arbitrary commands, activation or terminal tools.
