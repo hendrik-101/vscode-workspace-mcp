@@ -2,7 +2,8 @@
 
 `search_workspace` finds single-line literal text in live documents, including
 unsaved buffers and virtual URIs. Starting URI and traversal stay within current
-workspace roots; traversal paths and symlinks are rejected. Inputs: `uri`, `query`, `maxResults`, plus:
+workspace roots; traversal paths and symlinks are rejected. Inputs: `uri`,
+`query` (1–4,096 UTF-16 code units), optional `maxResults` (integer 1–100, default 100), plus:
 
 | Input                | Meaning                                                               |
 | -------------------- | --------------------------------------------------------------------- |
