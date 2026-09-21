@@ -23,6 +23,8 @@ import {
   type FormatInput,
   type FormatResult,
   type ContextResult,
+  type DiagnosticsInput,
+  type DiagnosticSeverity,
   type DiagnosticsResult,
   type WaitDiagnosticsInput,
   type WaitDiagnosticsResult,
@@ -44,6 +46,7 @@ import {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LIST_ENTRIES = 1000;
+const MAX_DIAGNOSTIC_CHARACTERS = 1024 * 1024;
 const MAX_LIST_OUTPUT = 16_000;
 const MAX_SEARCH_OUTPUT = 24_000;
 const MAX_SEARCH_FILES = 200;
@@ -2231,16 +2234,17 @@ export class WorkspaceService implements WorkspaceApi {
 
   /** Observe a change event, never infer a language server's analysis version. */
   async waitForDiagnostics(
-    { uri: value, version, timeoutMs = 1000 }: WaitDiagnosticsInput,
+    input: WaitDiagnosticsInput,
     signal?: AbortSignal,
   ): Promise<WaitDiagnosticsResult> {
+    const { version, timeoutMs = 1000 } = input;
     signal?.throwIfAborted();
     this.active();
+    const uri = this.validateDiagnosticInput(input);
     integer(version, "version", 1);
     integer(timeoutMs, "timeoutMs", 1);
     if (timeoutMs > 20_000)
       fail("INVALID_ARGUMENT", "timeoutMs must be <= 20000.");
-    const uri = parseUri(value);
     const root = this.currentRoot(uri);
     const controller = new AbortController();
     const stop = () =>
@@ -2342,7 +2346,7 @@ export class WorkspaceService implements WorkspaceApi {
             );
           this.expected(document, version);
           return {
-            ...this.diagnosticSnapshot(uri),
+            ...this.diagnosticSnapshot(uri, input),
             outcome,
             documentVersion: document.version,
             capturedAt: new Date().toISOString(),
@@ -2368,31 +2372,176 @@ export class WorkspaceService implements WorkspaceApi {
   }
 
   /** Returns bounded editor diagnostics for an admitted workspace URI. */
-  async diagnostics({ uri: value }: UriInput): Promise<DiagnosticsResult> {
-    const uri = parseUri(value);
+  async diagnostics(input: DiagnosticsInput): Promise<DiagnosticsResult> {
+    const uri = this.validateDiagnosticInput(input);
     await this.authorize(uri);
-    return this.diagnosticSnapshot(uri);
+    return this.diagnosticSnapshot(uri, input);
   }
 
-  private diagnosticSnapshot(uri: vscode.Uri): DiagnosticsResult {
-    const diagnostics = vscode.languages.getDiagnostics(uri);
-    const severity = ["error", "warning", "information", "hint"] as const;
-    return {
+  private validateDiagnosticInput(input: DiagnosticsInput): vscode.Uri {
+    const { maxResults = 20, offset = 0, snapshotId, severity } = input;
+    integer(maxResults, "maxResults", 1);
+    integer(offset, "offset");
+    if (
+      maxResults > 100 ||
+      offset > MAX_LIST_ENTRIES ||
+      offset > 0 !== (snapshotId !== undefined) ||
+      (snapshotId !== undefined &&
+        (typeof snapshotId !== "string" ||
+          !/^[a-f0-9]{64}$/.test(snapshotId))) ||
+      (severity !== undefined &&
+        !["error", "warning", "information", "hint"].includes(severity))
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "Invalid diagnostic page options; snapshotId and a positive offset must be supplied together.",
+      );
+    const uri = parseUri(input.uri);
+    if (JSON.stringify(uri.toString()).length > 8192)
+      fail("INVALID_ARGUMENT", "Diagnostic URI exceeds its output budget.");
+    return uri;
+  }
+
+  private diagnosticSnapshot(
+    uri: vscode.Uri,
+    input: DiagnosticsInput,
+  ): DiagnosticsResult {
+    const { maxResults = 20, offset = 0, severity: filter } = input;
+    const source = vscode.languages.getDiagnostics(uri);
+    const inspected = source.slice(0, MAX_LIST_ENTRIES);
+    const severities = ["error", "warning", "information", "hint"] as const;
+    const counts: Record<DiagnosticSeverity, number> = {
+      error: 0,
+      warning: 0,
+      information: 0,
+      hint: 0,
+    };
+    const matching: vscode.Diagnostic[] = [];
+    const hash = createHash("sha256").update(
+      JSON.stringify([
+        this.snapshotScheme,
+        uri.toString(),
+        maxResults,
+        filter ?? null,
+        vscode.workspace.workspaceFolders?.map((folder) =>
+          folder.uri.toString(),
+        ),
+        vscode.workspace.textDocuments.find(
+          (document) =>
+            !document.isClosed && document.uri.toString() === uri.toString(),
+        )?.version ?? null,
+        source.length,
+      ]),
+    );
+    let remainingCharacters = MAX_DIAGNOSTIC_CHARACTERS;
+    for (const item of inspected) {
+      const code = typeof item.code === "object" ? item.code.value : item.code;
+      // Check lengths before serialization: timers cannot interrupt this work.
+      remainingCharacters -=
+        item.message.length +
+        (item.source?.length ?? 0) +
+        (typeof code === "string" ? code.length : 0);
+      if (remainingCharacters < 0)
+        fail(
+          "LIMIT_EXCEEDED",
+          "Diagnostic text exceeds the snapshot input budget.",
+        );
+      const severity = severities[item.severity] ?? "information";
+      counts[severity]++;
+      // Hash complete exposed fields, including text omitted from the page.
+      hash.update(
+        JSON.stringify([
+          range(item.range),
+          severity,
+          item.message,
+          item.source ?? null,
+          code ?? null,
+        ]),
+      );
+      if (filter === undefined || filter === severity) matching.push(item);
+    }
+    const snapshotId = hash.digest("hex");
+    if (input.snapshotId !== undefined && input.snapshotId !== snapshotId)
+      fail(
+        "DIAGNOSTICS_CHANGED",
+        "Diagnostics or page bindings changed; restart at offset zero.",
+      );
+    if (offset > matching.length)
+      fail(
+        "INVALID_ARGUMENT",
+        "Diagnostic offset exceeds the matching inspected source.",
+      );
+    const result: DiagnosticsResult = {
       uri: uri.toString(),
-      truncated: diagnostics.length > MAX_LIST_ENTRIES,
-      diagnostics: diagnostics.slice(0, MAX_LIST_ENTRIES).map((item) => ({
+      diagnostics: [],
+      counts,
+      total: source.length,
+      inspected: inspected.length,
+      matching: matching.length,
+      incomplete: source.length > inspected.length,
+      snapshotId,
+      // Conservative placeholders make the budget include pagination metadata.
+      nextOffset: MAX_LIST_ENTRIES,
+      truncated: false,
+    };
+    // Reserve space for wait outcome, version, timestamp and unknown completion.
+    const outputBudget = 15_744;
+    for (const item of matching.slice(offset, offset + maxResults)) {
+      const code = typeof item.code === "object" ? item.code.value : item.code;
+      const entry: DiagnosticsResult["diagnostics"][number] = {
         range: range(item.range),
-        severity: severity[item.severity] ?? "information",
+        severity: severities[item.severity] ?? "information",
         message: item.message.slice(0, MAX_SELECTION),
+        messageTruncated: item.message.length > MAX_SELECTION,
         ...(item.source !== undefined
-          ? { source: item.source.slice(0, MAX_PREVIEW) }
-          : {}),
-        ...(item.code !== undefined
           ? {
-              code: typeof item.code === "object" ? item.code.value : item.code,
+              source: item.source.slice(0, 256),
+              sourceTruncated: item.source.length > 256,
             }
           : {}),
-      })),
-    };
+        ...(code !== undefined
+          ? {
+              code: typeof code === "string" ? code.slice(0, 256) : code,
+              ...(typeof code === "string"
+                ? { codeTruncated: code.length > 256 }
+                : {}),
+            }
+          : {}),
+      };
+      result.diagnostics.push(entry);
+      if (
+        JSON.stringify(result).length > outputBudget &&
+        result.diagnostics.length > 1
+      ) {
+        result.diagnostics.pop();
+        break;
+      }
+      // Always return at least one matching entry, even for escaped huge text.
+      while (JSON.stringify(result).length > outputBudget) {
+        if (!entry.message.length)
+          fail(
+            "LIMIT_EXCEEDED",
+            "Diagnostic metadata exceeds the output budget.",
+          );
+        entry.message = entry.message.slice(
+          0,
+          Math.floor(entry.message.length / 2),
+        );
+        entry.messageTruncated = true;
+      }
+    }
+    const nextOffset = offset + result.diagnostics.length;
+    if (nextOffset < matching.length) result.nextOffset = nextOffset;
+    else delete result.nextOffset;
+    result.truncated =
+      result.incomplete ||
+      result.nextOffset !== undefined ||
+      result.diagnostics.some(
+        (entry) =>
+          entry.messageTruncated ||
+          entry.sourceTruncated ||
+          entry.codeTruncated,
+      );
+    return result;
   }
 }

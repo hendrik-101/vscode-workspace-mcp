@@ -8,6 +8,16 @@ import { startServer } from "../src/server.js";
 import { outputSchema } from "../src/contracts.js";
 import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 
+const emptyDiagnostics = {
+  diagnostics: [],
+  counts: { error: 0, warning: 0, information: 0, hint: 0 },
+  total: 0,
+  inspected: 0,
+  matching: 0,
+  incomplete: false,
+  snapshotId: "a".repeat(64),
+  truncated: false,
+};
 const workspace: WorkspaceApi = {
   show: async ({ uri }) => ({ uri, version: 1, dirty: false }),
   workspaceSymbols: async () => ({
@@ -127,14 +137,13 @@ const workspace: WorkspaceApi = {
   save: async ({ uri, version }) => ({ uri, version, dirty: false }),
   waitForDiagnostics: async ({ uri, version }) => ({
     uri,
-    diagnostics: [],
-    truncated: false,
+    ...emptyDiagnostics,
     outcome: "timeout",
     documentVersion: version,
     capturedAt: new Date().toISOString(),
     analysisComplete: "unknown",
   }),
-  diagnostics: async ({ uri }) => ({ uri, diagnostics: [], truncated: false }),
+  diagnostics: async ({ uri }) => ({ uri, ...emptyDiagnostics }),
 };
 
 async function http(
@@ -267,6 +276,28 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 1 },
     ],
     [
+      "get_diagnostics",
+      {
+        uri: "memfs:/project/a.abap",
+        maxResults: 100,
+        severity: "error",
+        offset: 20,
+        snapshotId: "a".repeat(64),
+      },
+    ],
+    [
+      "wait_for_diagnostics",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        maxResults: 1,
+        severity: "hint",
+        offset: 1,
+        snapshotId: "a".repeat(64),
+      },
+    ],
+    ["workspace_symbols", { query: "class" }],
+    [
       "workspace_symbols",
       { query: "class", name: "Class", kind: 4, offset: 1, maxResults: 100 },
     ],
@@ -359,6 +390,14 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 20001 },
     ],
     ["wait_for_diagnostics", { uri: "memfs:/project/a.abap" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.abap", maxResults: 101 }],
+    ["get_diagnostics", { uri: "memfs:/project/a.abap", severity: "fatal" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.abap", offset: -1 }],
+    ["get_diagnostics", { uri: "memfs:/project/a.abap", snapshotId: "bad" }],
+    [
+      "wait_for_diagnostics",
+      { uri: "memfs:/project/a.abap", version: 4, maxResults: 0 },
+    ],
   ] as const) {
     assert.equal(
       (await client.callTool({ name, arguments: args })).isError,
