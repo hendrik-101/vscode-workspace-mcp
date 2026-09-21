@@ -38,7 +38,7 @@ class Uri {
   }
 }
 
-function fixture(files: Record<string, string>) {
+function fixture(files: Record<string, string>, json?: typeof JSON) {
   const root = Uri.parse("vfs-search://host/project");
   let onRoots: (() => void) | undefined;
   let now = 1;
@@ -108,6 +108,7 @@ function fixture(files: Record<string, string>) {
   runInNewContext(code, {
     module,
     exports: module.exports,
+    ...(json ? { JSON: json } : {}),
     Date: class extends Date {
       static now() {
         return now;
@@ -227,6 +228,67 @@ test("listing validates page sizes and binds continuation to URI, options and ro
   });
   await assert.rejects(
     f.service.list({ uri: f.root, maxEntries: 1, cursor: page.nextCursor }),
+  );
+});
+
+test("listing rejects altered offsets and cursors issued by another service", async () => {
+  const files = { "one.txt": "", "two.txt": "", "three.txt": "" };
+  const f = fixture(files);
+  const input = { uri: f.root, maxEntries: 1 };
+  const first = await f.service.list(input);
+  assert.ok(first.nextCursor);
+  for (const offset of ["0", "2", "01"])
+    await assert.rejects(
+      f.service.list({
+        ...input,
+        cursor: first.nextCursor.replace(/^\d+/, offset),
+      }),
+      /invalid/i,
+    );
+  await assert.rejects(
+    fixture(files).service.list({ ...input, cursor: first.nextCursor }),
+    /invalid/i,
+  );
+  const second = await f.service.list({ ...input, cursor: first.nextCursor });
+  assert.equal(second.entries[0]?.name, "two.txt");
+});
+
+test("listing bounds fingerprint serialization before handling giant provider names", async () => {
+  const boundedJson = Object.create(JSON) as typeof JSON;
+  boundedJson.stringify = (value: unknown) =>
+    JSON.stringify(value, (_key, item: unknown) => {
+      assert.ok(
+        typeof item !== "string" || item.length <= 8192,
+        "oversized provider names must not reach JSON serialization",
+      );
+      return item;
+    });
+  const f = fixture({}, boundedJson);
+  let giantName = "x".repeat(1024 * 1024);
+  f.workspace.fs.readDirectory = async () => [
+    ["first.txt", 1],
+    [giantName, 1],
+    ["last.txt", 1],
+  ];
+  const input = { uri: f.root, maxEntries: 1 };
+  const first = await f.service.list(input);
+  assert.equal(first.entries[0]?.name, "first.txt");
+  assert.equal(first.omittedEntries, 1);
+  assert.ok(first.nextCursor);
+  const last = await f.service.list({ ...input, cursor: first.nextCursor });
+  assert.equal(last.entries[0]?.name, "last.txt");
+  assert.equal(last.omittedEntries, 1);
+  assert.equal(last.incomplete, true);
+  assert.equal(last.nextCursor, undefined);
+  giantName += "y";
+  await assert.rejects(
+    f.service.list({ ...input, cursor: first.nextCursor }),
+    /invalid/i,
+  );
+  giantName = "returnable.txt";
+  await assert.rejects(
+    f.service.list({ ...input, cursor: first.nextCursor }),
+    /invalid/i,
   );
 });
 
@@ -497,6 +559,25 @@ test("official MCP pages preserve search state across stateless authenticated HT
     new StreamableHTTPClientTransport(new URL(server.url), {
       requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
     }),
+  );
+  const advertised = (await client.listTools()).tools;
+  const listingSchema = advertised.find(
+    (tool) => tool.name === "list_directory",
+  )!.inputSchema.properties!;
+  const searchSchema = advertised.find(
+    (tool) => tool.name === "search_workspace",
+  )!.inputSchema.properties!;
+  assert.match(
+    (listingSchema.maxEntries as { description: string }).description ?? "",
+    /default 50/,
+  );
+  assert.match(
+    (listingSchema.cursor as { description: string }).description ?? "",
+    /nextCursor/,
+  );
+  assert.match(
+    (searchSchema.maxResults as { description: string }).description ?? "",
+    /default 20/,
   );
   const listing = await client.callTool({
     name: "list_directory",

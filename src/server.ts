@@ -132,11 +132,21 @@ function createMcpServer(
   );
   tool(
     "list_directory",
-    "List a workspace directory in bounded pages (default 50, maximum 100). Resend URI and page size with nextCursor; inspect incomplete and omittedEntries.",
+    "List a workspace directory in bounded pages (default 50, maximum 100). Pass nextCursor as cursor with unchanged URI and maxEntries to continue; inspect incomplete and omittedEntries.",
     z.strictObject({
       uri,
-      maxEntries: z.number().int().min(1).max(100).optional(),
-      cursor: z.string().max(100).optional(),
+      maxEntries: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Maximum entries per page; default 50, maximum 100."),
+      cursor: z
+        .string()
+        .max(100)
+        .optional()
+        .describe("Previous nextCursor; resend unchanged URI and maxEntries."),
     }),
     (args) => workspace.list(args),
   );
@@ -152,11 +162,17 @@ function createMcpServer(
   );
   tool(
     "search_workspace",
-    "Search live literal text within a workspace URI (default 20 results, maximum 100, bounded output). Repeat identical options with nextCursor to continue. Results are not an atomic snapshot; inspect incomplete and limits.",
+    "Search live literal text within a workspace URI (default 20 results, maximum 100, bounded output). Pass nextCursor as cursor with identical options to continue. Results are not an atomic snapshot; inspect incomplete and limits.",
     z.strictObject({
       uri,
       query: z.string().min(1).max(4096),
-      maxResults: z.number().int().min(1).max(100).optional(),
+      maxResults: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Maximum matches per page; default 20."),
       cursor: z.string().uuid().optional(),
       include: z.array(z.string().min(1).max(256)).max(20).optional(),
       exclude: z.array(z.string().min(1).max(256)).max(20).optional(),

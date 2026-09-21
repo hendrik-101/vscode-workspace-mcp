@@ -1,4 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
@@ -253,6 +259,7 @@ export class WorkspaceService implements WorkspaceApi {
   private readonly navigationObservers = new Set<vscode.Disposable>();
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
   private readonly searchCursors = new Map<string, SearchContinuation>();
+  private listCursorKey: Buffer | undefined;
   private searchRoots: vscode.Disposable | undefined;
   private searchGeneration = 0;
   private activeSearches = 0;
@@ -1304,24 +1311,35 @@ export class WorkspaceService implements WorkspaceApi {
     if (roots() !== rootContext)
       fail("INVALID_ARGUMENT", "Workspace roots changed; restart the listing.");
     const scanned = children.slice(0, MAX_LIST_ENTRIES);
-    const fingerprint = createHash("sha256")
-      .update(
+    const listingHash = createHash("sha256").update(
+      JSON.stringify([
+        uri.toString(),
+        maxEntries,
+        rootContext,
+        children.length,
+      ]),
+    );
+    // Hash one bounded representation at a time, never stringify provider arrays.
+    // Always-omitted oversized names are represented by length/type/position only.
+    for (const [name, type] of scanned)
+      listingHash.update(
         JSON.stringify([
-          uri.toString(),
-          maxEntries,
-          rootContext,
-          children.length,
-          scanned,
+          name.length > MAX_SEARCH_URI ? null : name,
+          name.length,
+          type,
         ]),
-      )
-      .digest("hex");
+      );
+    const fingerprint = listingHash.digest("hex");
+    const key = (this.listCursorKey ??= randomBytes(32));
+    const tag = (position: string) =>
+      createHmac("sha256", key).update(`${fingerprint}:${position}`).digest();
     let offset = 0;
     if (cursor !== undefined) {
       const parts =
         typeof cursor === "string" && /^(\d{1,4}):([a-f0-9]{64})$/.exec(cursor);
       if (
         !parts ||
-        parts[2] !== fingerprint ||
+        !timingSafeEqual(Buffer.from(parts[2]!, "hex"), tag(parts[1]!)) ||
         Number(parts[1]) >= scanned.length
       )
         fail(
@@ -1389,7 +1407,8 @@ export class WorkspaceService implements WorkspaceApi {
       result.entries.push(entry);
       used += size;
     }
-    if (next !== undefined) result.nextCursor = `${next}:${fingerprint}`;
+    if (next !== undefined)
+      result.nextCursor = `${next}:${tag(String(next)).toString("hex")}`;
     result.truncated = next !== undefined || result.omittedEntries! > 0;
     result.incomplete = result.truncated || result.blockedEntries > 0;
     return result;
