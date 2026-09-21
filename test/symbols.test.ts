@@ -403,9 +403,14 @@ function symbolFixture() {
     version: 7,
     isClosed: false,
     lineCount: 5,
-    lineAt: () => ({ range: full }),
-    offsetAt: () => 25,
-    getText: () => "class A {\n method() {}\n}",
+    lineAt: (line: number) => ({
+      range: {
+        start: { line, character: 0 },
+        end: { line, character: [9, 12, 0, 0, 1][line]! },
+      },
+    }),
+    offsetAt: () => 26,
+    getText: () => "class A {\n method() {}\n\n\n}",
   };
   const makeSymbol = (name: string, kind = 5) => ({
     name,
@@ -731,6 +736,74 @@ for (const selection of [
         uri: f.file.toString(),
       });
       assert.equal(result.symbols[0]?.fullRangeKnown, false);
+    } finally {
+      f.service.dispose();
+    }
+  });
+}
+
+for (const invalid of [
+  "body-line",
+  "body-character",
+  "selection-character",
+] as const) {
+  test(`document bounds reject known full range for ${invalid}`, async () => {
+    const f = symbolFixture();
+    const symbol = f.makeSymbol("outside-buffer");
+    if (invalid === "body-line")
+      symbol.range = { ...f.full, end: { line: 5, character: 0 } };
+    if (invalid === "body-character")
+      symbol.range = { ...f.full, end: { line: 4, character: 2 } };
+    if (invalid === "selection-character")
+      symbol.selectionRange = {
+        ...f.selection,
+        end: { line: 0, character: 100 },
+      };
+    f.setItems([symbol]);
+    try {
+      const result = await f.service.documentSymbols({
+        uri: f.file.toString(),
+      });
+      assert.equal(result.symbols[0]?.fullRangeKnown, false);
+    } finally {
+      f.service.dispose();
+    }
+  });
+}
+
+for (const operation of ["documentSymbols", "workspaceSymbols"] as const) {
+  test(`${operation} omits malformed names without losing subsequent symbols`, async () => {
+    const f = symbolFixture();
+    const child = f.makeSymbol("valid-child");
+    f.setItems([
+      {
+        name: undefined,
+        kind: 5,
+        location: { uri: f.file, range: f.selection },
+      },
+      { ...f.makeSymbol("invalid-parent"), name: 42, children: [child] },
+      {
+        name: "valid-last",
+        kind: 5,
+        location: { uri: f.file, range: f.selection },
+      },
+    ]);
+    try {
+      const result =
+        operation === "documentSymbols"
+          ? await f.service.documentSymbols({
+              uri: f.file.toString(),
+              name: "valid",
+            })
+          : await f.service.workspaceSymbols({ query: "valid", name: "valid" });
+      assert.equal(result.omitted, operation === "documentSymbols" ? 2 : 3);
+      assert.equal(
+        result.symbols.map((s) => s.name).join(","),
+        operation === "documentSymbols"
+          ? "valid-child,valid-last"
+          : "valid-last",
+      );
+      assert.equal(result.scanned, 4);
     } finally {
       f.service.dispose();
     }

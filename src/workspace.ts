@@ -337,7 +337,10 @@ export class WorkspaceService implements WorkspaceApi {
     return { maxResults, offset, kind, name: input.name?.toLowerCase() };
   }
 
-  private symbolFullRangeKnown(item: vscode.DocumentSymbol): boolean {
+  private symbolFullRangeKnown(
+    item: vscode.DocumentSymbol,
+    document: vscode.TextDocument,
+  ): boolean {
     const points = [
       item.range.start,
       item.selectionRange.start,
@@ -355,6 +358,8 @@ export class WorkspaceService implements WorkspaceApi {
           point.line >= 0 &&
           Number.isSafeInteger(point.character) &&
           point.character >= 0 &&
+          point.line < document.lineCount &&
+          point.character <= document.lineAt(point.line).range.end.character &&
           (index === 0 || compare(points[index - 1]!, point) <= 0),
       ) &&
       (compare(points[0]!, points[1]!) !== 0 ||
@@ -365,7 +370,7 @@ export class WorkspaceService implements WorkspaceApi {
   private async symbols(
     items: readonly (vscode.DocumentSymbol | vscode.SymbolInformation)[],
     options: ReturnType<WorkspaceService["symbolOptions"]>,
-    source?: vscode.Uri,
+    source?: vscode.TextDocument,
     signal?: AbortSignal,
   ): Promise<SymbolResult> {
     const result: SymbolResult = {
@@ -394,23 +399,31 @@ export class WorkspaceService implements WorkspaceApi {
       result.scanned++;
       signal?.throwIfAborted();
       this.active();
-      const hierarchical = "children" in item;
-      if (hierarchical && item.children.length)
-        stack.push({
-          items: item.children,
-          index: 0,
-          container: item.name.slice(0, MAX_PREVIEW),
-        });
-      // Bound all identifier work before case conversion or URI parsing.
-      const name = item.name.slice(0, MAX_PREVIEW);
-      if (
-        (options.name !== undefined &&
-          !name.toLowerCase().includes(options.name)) ||
-        (options.kind !== undefined && item.kind !== options.kind)
-      )
-        continue;
       try {
-        const target = hierarchical ? source : item.location.uri;
+        const hierarchical = "children" in item;
+        // Keep traversing valid children even when their parent's name is invalid.
+        if (hierarchical && item.children.length)
+          stack.push({
+            items: item.children,
+            index: 0,
+            container:
+              typeof item.name === "string"
+                ? item.name.slice(0, MAX_PREVIEW)
+                : "",
+          });
+        if (typeof item.name !== "string") {
+          result.omitted++;
+          continue;
+        }
+        // Bound identifier work before case conversion or URI parsing.
+        const name = item.name.slice(0, MAX_PREVIEW);
+        if (
+          (options.name !== undefined &&
+            !name.toLowerCase().includes(options.name)) ||
+          (options.kind !== undefined && item.kind !== options.kind)
+        )
+          continue;
+        const target = hierarchical ? source?.uri : item.location.uri;
         if (!target) {
           result.omitted++;
           continue;
@@ -438,7 +451,8 @@ export class WorkspaceService implements WorkspaceApi {
           type: SYMBOL_TYPES[item.kind] ?? "unknown",
           uri: key,
           range: range(hierarchical ? item.range : item.location.range),
-          fullRangeKnown: hierarchical && this.symbolFullRangeKnown(item),
+          fullRangeKnown:
+            hierarchical && !!source && this.symbolFullRangeKnown(item, source),
           ...(hierarchical
             ? { selectionRange: range(item.selectionRange) }
             : {}),
@@ -534,7 +548,7 @@ export class WorkspaceService implements WorkspaceApi {
       Array<vscode.DocumentSymbol | vscode.SymbolInformation>
     >("vscode.executeDocumentSymbolProvider", uri);
     complete();
-    const result = await this.symbols(items ?? [], options, uri, signal);
+    const result = await this.symbols(items ?? [], options, document, signal);
     complete();
     return { ...result, version };
   }
