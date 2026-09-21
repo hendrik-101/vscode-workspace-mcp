@@ -34,5 +34,9 @@ loopback, no outgoing product requests, no secrets in logs or checked-in files.
 
 ### Honest results
 
+Before declaring a PR ready, follow the completion-evidence checklist in
+docs/development.md. Green checks and `mergeable: true` are insufficient:
+verify formal review blockers and GitHub's actual merge gate after all reviews.
+
 Report partial search, save refusal and validation failures as such. Do not claim
 SAP backend, cloud-client or Security-scan validation from a synthetic test.
