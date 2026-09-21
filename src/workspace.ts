@@ -6,6 +6,9 @@ import {
   type ShowInput,
   type SymbolsInput,
   type SymbolResult,
+  type NavigationInput,
+  type NavigationResult,
+  type HoverResult,
   type DiffInput,
   type FormatInput,
   type FormatResult,
@@ -156,6 +159,7 @@ export class WorkspaceService implements WorkspaceApi {
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
+  private readonly navigationObservers = new Set<vscode.Disposable>();
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
 
   /** Releases in-memory diff snapshots and their content provider. */
@@ -164,6 +168,7 @@ export class WorkspaceService implements WorkspaceApi {
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
+    for (const observer of this.navigationObservers) observer.dispose();
     this.pendingSnapshots.clear();
   }
 
@@ -327,6 +332,249 @@ export class WorkspaceService implements WorkspaceApi {
       omittedChildren ||
       !!stack.length ||
       (items?.length ?? 0) > MAX_LIST_ENTRIES;
+    return result;
+  }
+
+  private async navigationSource(input: NavigationInput, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const document = await this.document(parseUri(input.uri), signal);
+    this.text(document);
+    if (input.version !== undefined) this.expected(document, input.version);
+    const position = this.exactPosition(document, input.position);
+    signal?.throwIfAborted();
+    this.currentRoot(document.uri);
+    return { document, position, version: document.version };
+  }
+
+  private navigationComplete(
+    document: vscode.TextDocument,
+    version: number,
+    signal?: AbortSignal,
+  ): void {
+    signal?.throwIfAborted();
+    this.currentRoot(document.uri);
+    this.expected(document, version);
+    if (document.isClosed)
+      fail("VERSION_CONFLICT", "The queried document was closed.");
+  }
+
+  async definition(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    return this.navigation("vscode.executeDefinitionProvider", input, signal);
+  }
+
+  async references(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    return this.navigation("vscode.executeReferenceProvider", input, signal);
+  }
+
+  private async navigation(
+    command:
+      "vscode.executeDefinitionProvider" | "vscode.executeReferenceProvider",
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    const source = await this.navigationSource(input, signal);
+    this.navigationComplete(source.document, source.version, signal);
+    // Snapshot open targets before dispatch; also observe documents opened and
+    // edited while the command runs. Never label old ranges with a new version.
+    const openDocuments = vscode.workspace.textDocuments;
+    if (openDocuments.length > MAX_LIST_ENTRIES)
+      fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 1000 documents.");
+    const initialDocuments = new Map<
+      string,
+      { document: vscode.TextDocument; version: number }
+    >();
+    let snapshotBytes = 0;
+    for (const document of openDocuments) {
+      const uri = document.uri.toString();
+      snapshotBytes += Buffer.byteLength(uri);
+      if (snapshotBytes > 256 * 1024)
+        fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 256 KiB of URIs.");
+      initialDocuments.set(uri, { document, version: document.version });
+    }
+    const changed = new Set<string>();
+    let overflow = false;
+    let changedBytes = 0;
+    const markChanged = (document: vscode.TextDocument) => {
+      if (overflow) return;
+      const uri = document.uri.toString();
+      if (changed.has(uri)) return;
+      changedBytes += Buffer.byteLength(uri);
+      if (changed.size >= MAX_LIST_ENTRIES || changedBytes > 256 * 1024) {
+        overflow = true;
+        dispose();
+        return;
+      }
+      changed.add(uri);
+    };
+    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.contentChanges.length) markChanged(event.document);
+    });
+    // A close invalidates ranges even for targets first opened after dispatch.
+    const closeListener = vscode.workspace.onDidCloseTextDocument(markChanged);
+    const dispose = () => {
+      listener.dispose();
+      closeListener.dispose();
+      signal?.removeEventListener("abort", dispose);
+      this.navigationObservers.delete(observer);
+      initialDocuments.clear();
+      changed.clear();
+    };
+    const observer = { dispose };
+    this.navigationObservers.add(observer);
+    signal?.addEventListener("abort", dispose, { once: true });
+    try {
+      const items = await vscode.commands.executeCommand<
+        Array<vscode.Location | vscode.LocationLink>
+      >(command, source.document.uri, source.position);
+      this.navigationComplete(source.document, source.version, signal);
+      const result: NavigationResult = {
+        ...state(source.document),
+        locations: [],
+        truncated: (items?.length ?? 0) > MAX_LIST_ENTRIES,
+        omitted: 0,
+      };
+      const documents = new Map<string, Promise<vscode.TextDocument>>();
+      const resolved = new Map<string, vscode.TextDocument>();
+      const validated = new Map<string, number>();
+      for (const item of (items ?? []).slice(0, MAX_LIST_ENTRIES)) {
+        signal?.throwIfAborted();
+        this.active();
+        if (result.locations.length >= MAX_RESULTS) {
+          result.truncated = true;
+          break;
+        }
+        try {
+          const uri = parseUri(
+            ("targetUri" in item ? item.targetUri : item.uri).toString(),
+          );
+          const key = uri.toString();
+          let pending = documents.get(key);
+          if (!pending) {
+            pending = this.document(uri, signal);
+            documents.set(key, pending);
+          }
+          const document = await pending;
+          resolved.set(key, document);
+          const initial = initialDocuments.get(key);
+          if (
+            changed.has(key) ||
+            (initial &&
+              (initial.document !== document ||
+                initial.version !== document.version))
+          )
+            fail(
+              "VERSION_CONFLICT",
+              "Target changed during the provider query.",
+            );
+          if (validated.get(key) !== document.version) {
+            this.text(document);
+            validated.set(key, document.version);
+          }
+          this.currentRoot(uri);
+          const target = this.exactRange(
+            document,
+            "targetUri" in item
+              ? (item.targetSelectionRange ?? item.targetRange)
+              : item.range,
+          );
+          if (
+            "targetUri" in item &&
+            !this.exactRange(document, item.targetRange).contains(target)
+          )
+            fail(
+              "INVALID_ARGUMENT",
+              "Target selection must be inside its target range.",
+            );
+          result.locations.push({ ...state(document), range: range(target) });
+        } catch {
+          result.omitted++;
+        }
+      }
+      this.navigationComplete(source.document, source.version, signal);
+      // Recheck targets after asynchronous authorization of later locations.
+      const retained: NavigationResult["locations"] = [];
+      for (const location of result.locations) {
+        try {
+          const document = resolved.get(location.uri)!;
+          this.navigationComplete(document, location.version, signal);
+          if (changed.has(location.uri))
+            fail(
+              "VERSION_CONFLICT",
+              "Target changed during the provider query.",
+            );
+          retained.push({ ...state(document), range: location.range });
+        } catch {
+          result.omitted++;
+        }
+      }
+      this.navigationComplete(source.document, source.version, signal);
+      if (overflow)
+        fail("LIMIT_EXCEEDED", "Too many documents changed during navigation.");
+      result.locations = retained;
+      return { ...result, ...state(source.document) };
+    } finally {
+      dispose();
+    }
+  }
+
+  async hover(
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<HoverResult> {
+    const source = await this.navigationSource(input, signal);
+    this.navigationComplete(source.document, source.version, signal);
+    const items = await vscode.commands.executeCommand<vscode.Hover[]>(
+      "vscode.executeHoverProvider",
+      source.document.uri,
+      source.position,
+    );
+    this.navigationComplete(source.document, source.version, signal);
+    const result: HoverResult = {
+      ...state(source.document),
+      untrusted: true,
+      hovers: [],
+      truncated: (items?.length ?? 0) > MAX_RESULTS,
+      omitted: 0,
+    };
+    let remaining = MAX_SELECTION * 4;
+    for (const item of (items ?? []).slice(0, MAX_RESULTS)) {
+      if (!remaining) {
+        result.truncated = true;
+        break;
+      }
+      try {
+        const hoverRange = item.range
+          ? range(this.exactRange(source.document, item.range))
+          : undefined;
+        const contents: string[] = [];
+        for (const content of item.contents.slice(0, MAX_RESULTS)) {
+          const value = typeof content === "string" ? content : content.value;
+          if (typeof value !== "string") {
+            result.omitted++;
+            continue;
+          }
+          const text = value.slice(0, remaining);
+          result.truncated ||= value.length > remaining;
+          remaining -= text.length;
+          contents.push(text);
+          if (!remaining) break;
+        }
+        result.truncated ||= item.contents.length > contents.length;
+        result.hovers.push({
+          contents,
+          ...(hoverRange ? { range: hoverRange } : {}),
+        });
+      } catch {
+        result.omitted++;
+      }
+    }
+    this.navigationComplete(source.document, source.version, signal);
     return result;
   }
 
@@ -497,7 +745,11 @@ export class WorkspaceService implements WorkspaceApi {
     }
   }
 
-  private async authorize(uri: vscode.Uri): Promise<vscode.FileStat> {
+  private async authorize(
+    uri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<vscode.FileStat> {
+    signal?.throwIfAborted();
     const root = this.currentRoot(uri);
     const base = root.path;
     const target = uri.path;
@@ -507,6 +759,7 @@ export class WorkspaceService implements WorkspaceApi {
         : target.slice(base.length).replace(/^\//, "").split("/");
     let current = root;
     let stat = await vscode.workspace.fs.stat(current);
+    signal?.throwIfAborted();
     this.stillAllowed(uri, root);
     if (isLink(stat)) fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
     for (const [index, segment] of remainder.entries()) {
@@ -519,6 +772,7 @@ export class WorkspaceService implements WorkspaceApi {
           ? uri
           : current.with({ path: `${childPrefix(current.path)}${segment}` });
       stat = await vscode.workspace.fs.stat(current);
+      signal?.throwIfAborted();
       this.stillAllowed(uri, root);
       if (isLink(stat))
         fail("SYMLINK_DENIED", "Symbolic links are not allowed.");
@@ -526,8 +780,12 @@ export class WorkspaceService implements WorkspaceApi {
     return stat;
   }
 
-  private async document(uri: vscode.Uri): Promise<vscode.TextDocument> {
-    const stat = await this.authorize(uri);
+  private async document(
+    uri: vscode.Uri,
+    signal?: AbortSignal,
+  ): Promise<vscode.TextDocument> {
+    const stat = await this.authorize(uri, signal);
+    signal?.throwIfAborted();
     if ((stat.type & vscode.FileType.File) === 0)
       fail("NOT_A_FILE", "URI must identify a workspace file.");
     const open = vscode.workspace.textDocuments.find(
@@ -541,6 +799,7 @@ export class WorkspaceService implements WorkspaceApi {
     if (stat.size > MAX_FILE_BYTES)
       fail("LIMIT_EXCEEDED", "File exceeds the 1 MiB limit.");
     const document = await vscode.workspace.openTextDocument(uri);
+    signal?.throwIfAborted();
     this.currentRoot(uri);
     if (document.uri.toString() !== uri.toString()) {
       fail(

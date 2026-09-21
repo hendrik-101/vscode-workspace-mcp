@@ -6,6 +6,7 @@ import {
   type WorkspaceErrorCode,
   type EditInput,
 } from "../../src/types";
+import { navigationTools } from "./navigation";
 import { MemoryProvider } from "./memory-provider";
 
 const uri = (value: string): vscode.Uri => vscode.Uri.parse(value);
@@ -221,6 +222,7 @@ export async function run(): Promise<void> {
     }
 
     await ideTools(provider, first, outside, linkedFile);
+    await navigationTools(provider, first, outside);
     const initial = await service.read({ uri: file.toString() });
     await rejectsCode(
       service.edit({
