@@ -155,22 +155,69 @@ function createMcpServer(
   );
   tool(
     "list_directory",
-    "Browse immediate children of a known workspace directory; use workspace_symbols to locate a named symbol.",
-    z.strictObject({ uri }),
+    "Browse immediate children of a known workspace directory in bounded pages (default 50, maximum 100). Pass nextCursor as cursor with unchanged URI and maxEntries to continue; inspect incomplete and omittedEntries.",
+    z.strictObject({
+      uri,
+      maxEntries: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Maximum entries per page; default 50, maximum 100."),
+      cursor: z
+        .string()
+        .max(100)
+        .optional()
+        .describe("Previous nextCursor; resend unchanged URI and maxEntries."),
+    }),
     (args) => workspace.list(args),
   );
   tool(
     "read_document",
-    "Read live text and version from a known URI, optionally by line range. Prefer a small relevant range for large files.",
-    z.strictObject({
-      uri,
-      startLine: index
-        .optional()
-        .describe("First line, zero-based; default 0."),
-      endLine: index
-        .optional()
-        .describe("Exclusive end line; default document line count."),
-    }),
+    "Read bounded live text and version from a known URI. Use zero-based startLine/endLine (exclusive) OR exact half-open UTF-16 range. Both budgets apply: 200 lines and 16000 UTF-16 code units by default. returnedRange describes actual text; legacy startLine/endLine describe the request. If truncated, resume with range {start: nextPosition, end: requestedRange.end} and returned version. Surrogate pairs and CRLF are never split.",
+    z
+      .strictObject({
+        uri,
+        startLine: index
+          .optional()
+          .describe("First line, zero-based; default 0. Excludes range."),
+        endLine: index
+          .optional()
+          .describe(
+            "Exclusive end line; default document line count. Excludes range.",
+          ),
+        range: z
+          .strictObject({ start: position, end: position })
+          .optional()
+          .describe(
+            "Exact half-open UTF-16 range; excludes startLine and endLine.",
+          ),
+        version: index
+          .min(1)
+          .optional()
+          .describe("Expected live document version; rejects stale ranges."),
+        maxLines: index
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe(
+            "Source lines per page, including a partial first line; default 200, maximum 1000.",
+          ),
+        maxChars: index
+          .min(2)
+          .max(64000)
+          .optional()
+          .describe(
+            "UTF-16 code units per page including line endings; default 16000, maximum 64000, minimum 2 for atomic CRLF/surrogate pairs.",
+          ),
+      })
+      .refine(
+        (input) =>
+          input.range === undefined ||
+          (input.startLine === undefined && input.endLine === undefined),
+        "range is mutually exclusive with startLine/endLine",
+      ),
     (args) => workspace.read(args),
   );
   tool(
@@ -189,7 +236,7 @@ function createMcpServer(
         .min(1)
         .max(100)
         .optional()
-        .describe("Maximum matches per page; default 100."),
+        .describe("Maximum matches per page; default 20."),
       cursor: z
         .string()
         .uuid()
@@ -367,7 +414,7 @@ function createMcpServer(
   );
   tool(
     "format_document",
-    "Compute formatting edits through the installed language provider. Optional apply uses guarded buffer edits without saving. Empty edits may mean no provider or no changes.",
+    "Compute formatting edits through the installed language provider. Optional apply uses guarded buffer edits without saving and omits edits by default. includeEdits overrides edit inclusion; editCount always reports the complete count. Empty edits may mean no provider or no changes.",
     z.strictObject({
       uri,
       version,
@@ -396,6 +443,12 @@ function createMcpServer(
         .optional()
         .describe(
           "Apply guarded buffer edits without saving; default false (preview only).",
+        ),
+      includeEdits: z
+        .boolean()
+        .optional()
+        .describe(
+          "Include provider edits; defaults to true for preview and false after apply.",
         ),
     }),
     (args) => workspace.format(args, signal),
