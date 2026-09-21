@@ -24,6 +24,7 @@ current-head review and actual merge-gate checklist before handoff.
 | [Security](SECURITY.md)                     | Threat model, credentials and reporting       |
 | [Clients](docs/clients.md)                  | Connection and optional plugin setup          |
 | [Acceptance](docs/acceptance.md)            | Automated scope and manual SAP/client checks  |
+| [Tools](docs/tools.md)                      | Display, symbols, diffs and formatting        |
 | [Navigation](docs/navigation.md)            | Definitions, references and hover             |
 | [Diagnostics](docs/diagnostics.md)          | Waiting semantics and limits                  |
 | [Refactoring](docs/refactoring.md)          | Rename/action previews and application limits |

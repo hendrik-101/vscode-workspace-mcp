@@ -2,12 +2,41 @@
 
 Install the VSIX, open the intended workspace and run **Workspace MCP: Start**,
 then **Workspace MCP: Show Connection Details**. Copy the generated stdio settings
-for `workspace_mcp`. The client needs Node.js 24+ and launches the bundled
-`dist/stdio.cjs` using its generated absolute path.
+for `workspace_mcp`. The client needs Node.js 24+ and launches the bundled adapter
+with `node` using its generated absolute path. Start installs it in VS Code's
+extension storage, so the path survives extension upgrades.
 
 The adapter connects only to the local extension over authenticated TLS, trusting
 only its supplied public certificate. No endpoint discovery or redirects;
 credentials travel in environment variables, never command arguments.
+
+## Adapter upgrades and storage
+
+After upgrading the extension, run Start and restart the client connection to load
+the updated adapter. If client settings still point inside a versioned extension
+installation, copy connection details once to switch to the stable path;
+credentials stay the same.
+
+The path belongs to the current VS Code storage location and extension host.
+Changing profiles, user-data directories or hosts may require new connection
+details. The client needs access to that file and the host's loopback interface;
+a stable path provides no remote access. Unavailable or non-local storage makes
+Start fail visibly.
+
+Only the packaged adapter and third-party notices are installed, without downloads
+or credentials. Each Start retains a copy (about 1.7 MB), even for the same version,
+so updates cannot remove code another client is loading. Only committed copies are
+selected; cancelled preparation stays unused even if cleanup fails. Nothing is
+automatically pruned. To reclaim space, stop every bridge and client using this
+storage, remove only its `adapter-v1` directory, then Start to recreate the same path.
+
+Windows sharing storage use the most recently published compatible protocol-v1
+adapter. Cancelling Start before installation commits preserves the selected
+adapter; stopping after commit leaves the completed adapter available. Concurrent
+installations select one committed generation deterministically. Starting an older
+extension later can select its older compatible adapter; restart the upgraded
+bridge to select its bundle again. An incompatible future protocol requires a new
+path and updated client settings.
 
 ## Connection and write policy
 
@@ -19,8 +48,8 @@ Set these in **User** settings; workspace overrides are ignored:
 | `workspaceMcp.writePolicy` | `ask` (default), `allow` or `deny`; Workspace Trust remains required.                                          |
 
 Token and server identity persist in SecretStorage. Refresh client settings after
-port changes, explicit credential/identity rotation or extension upgrades that
-change the adapter path. Windows sharing SecretStorage share credentials: inspect
+port changes or explicit credential/identity rotation. Windows sharing
+SecretStorage share credentials: inspect
 returned roots before working. Stop closes the connection without deleting the token.
 Keep settings private and outside version control; never paste tokens into chats,
 issues or plugins.
@@ -30,8 +59,8 @@ With `ask`, each start offers **Allow for this session**, **Deny for this sessio
 choices persist `allow`/`deny`. **Enable Writes for This Session** reopens the choices
 unless policy is `deny`; change that user setting first.
 
-Turn **Files: Auto Save** off before agent edits. Editing and saving are separate
-bridge operations, but VS Code Auto Save could otherwise persist buffer changes.
+Turn **Files: Auto Save** off before agent edits; the bridge refuses edits while
+it is enabled. Editing and saving remain separate operations.
 
 **Workspace MCP: Rotate Token** stops the bridge before requesting confirmation.
 Confirm, restart and refresh client settings; other windows sharing the secret

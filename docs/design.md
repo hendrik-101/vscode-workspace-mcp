@@ -13,6 +13,7 @@ private sources or proprietary extension code.
 | `server.ts`     | Official MCP SDK, schemas, request bounds and authenticated loopback HTTPS |
 | `tls.ts`        | SecretStorage identity, native WebCrypto and pinned certificate library    |
 | `stdio.ts`      | Client adapter; dedicated certificate trust, loopback only, no redirects   |
+| `adapter.ts`    | Stable extension-owned adapter installation; no workspace resources        |
 | `extension.ts`  | Explicit start/stop, window lifecycle, connection details and write policy |
 | Client packages | Shared workflow, thin Claude/Codex manifests and stdio settings            |
 

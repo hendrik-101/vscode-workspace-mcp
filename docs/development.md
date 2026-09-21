@@ -9,13 +9,29 @@
   branch without owner agreement or commit customer code/secrets.
 - Keep runtime code small; use the official MCP SDK and standard operations where
   they preserve safety. Pin dependencies and commit the lockfile.
-- Run Prettier and a separate simplification review. Required verification:
-  `npm run check`, `npm run format:check`, `npm test`, `npm run test:vscode`,
-  `npm run package` and a production dependency audit.
+- Run Prettier, a separate simplification review and all [local checks](#run-checks-locally).
 - Record results and limitations; unrun checks remain pending. Synthetic tests
   cannot establish SAP-backend/native-client acceptance.
 - Isolated VS Code/SAP ADT test profiles may use Microsoft/SAP downloads and
   telemetry. Product runtime must emit none.
+
+## Run checks locally
+
+After `npm ci`, run:
+
+```sh
+npm run check
+npm run format:check
+npm test
+npm run test:vscode
+npm run package
+npm audit --omit=dev --audit-level=high
+```
+
+On headless Linux, use `xvfb-run -a npm run test:vscode`. Add `-- --adt` for
+SAP ADT coexistence checks without a backend. The runner downloads VS Code
+1.137.0; set `VSCODE_VERSION` to test another supported release. Node.js types
+and the bundle target use 24; VS Code API types match the minimum supported version.
 
 ## Review and handoff
 
