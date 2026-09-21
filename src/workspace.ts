@@ -23,6 +23,8 @@ import {
   type Position,
   type ReadInput,
   type ReadResult,
+  type ReadSymbolInput,
+  type ReadSymbolResult,
   type RootInfo,
   type SaveInput,
   type SearchInput,
@@ -1437,6 +1439,176 @@ export class WorkspaceService implements WorkspaceApi {
       truncated,
       ...(truncated ? { nextPosition: returnedRange.end } : {}),
     };
+  }
+
+  /** Resolve a complete provider body before delegating bounded text pagination. */
+  async readSymbol(
+    input: ReadSymbolInput,
+    signal?: AbortSignal,
+  ): Promise<ReadSymbolResult> {
+    signal?.throwIfAborted();
+    this.active();
+    integer(input.version, "version", 1);
+    for (const name of [input.name, input.containerName]) {
+      if (
+        name !== undefined &&
+        (typeof name !== "string" || name.length > MAX_SELECTION)
+      )
+        fail(
+          "INVALID_ARGUMENT",
+          "Symbol selectors must contain at most 4096 characters.",
+        );
+    }
+    if (!input.name)
+      fail("INVALID_ARGUMENT", "An exact symbol name is required.");
+    const uri = parseUri(input.uri);
+    const document = await this.document(uri, signal);
+    this.expected(document, input.version);
+    if (input.position !== undefined)
+      this.exactPosition(document, input.position);
+    const current = () => {
+      signal?.throwIfAborted();
+      this.currentRoot(uri);
+      this.expected(document, input.version);
+      if (
+        document.isClosed ||
+        !vscode.workspace.textDocuments.includes(document)
+      )
+        fail(
+          "VERSION_CONFLICT",
+          "The symbol source was closed or replaced. Read it again.",
+        );
+    };
+    current();
+    type ProviderSymbol = vscode.DocumentSymbol | vscode.SymbolInformation;
+    const items = await vscode.commands.executeCommand<ProviderSymbol[]>(
+      "vscode.executeDocumentSymbolProvider",
+      uri,
+    );
+    current();
+    const stack: Array<{
+      items: ProviderSymbol[];
+      index: number;
+      container?: string;
+    }> = [{ items: items ?? [], index: 0 }];
+    let visited = 0;
+    let matches = 0;
+    let unavailable = false;
+    let selected: ReadSymbolResult["symbol"] | undefined;
+    while (stack.length) {
+      const frame = stack[stack.length - 1]!;
+      if (frame.index === frame.items.length) {
+        stack.pop();
+        continue;
+      }
+      if (++visited > MAX_LIST_ENTRIES)
+        fail(
+          "SYMBOL_RESOLUTION_INCOMPLETE",
+          "Symbol traversal exceeded 1000 nodes; use an explicit document range.",
+        );
+      const item = frame.items[frame.index++]!;
+      // The native command may return hybrid DocumentSymbol/SymbolInformation objects.
+      // A location alone is never evidence of a full body.
+      if ("location" in item && item.location.uri.toString() !== uri.toString())
+        continue;
+      const hierarchical = "selectionRange" in item || "children" in item;
+      const container = hierarchical
+        ? frame.container
+        : (item as vscode.SymbolInformation).containerName || undefined;
+      if ("children" in item && item.children?.length)
+        stack.push({ items: item.children, index: 0, container: item.name });
+      if (
+        item.name !== input.name ||
+        (input.containerName !== undefined &&
+          input.containerName !== (container ?? ""))
+      )
+        continue;
+      if (!hierarchical) {
+        const start = (item as vscode.SymbolInformation).location.range.start;
+        if (
+          !input.position ||
+          (input.position.line === start.line &&
+            input.position.character === start.character)
+        )
+          unavailable = true;
+        continue;
+      }
+      let full: vscode.Range;
+      let selection: vscode.Range;
+      try {
+        const symbol = item as vscode.DocumentSymbol;
+        selection = this.exactRange(document, symbol.selectionRange);
+        if (
+          input.position &&
+          (input.position.line !== selection.start.line ||
+            input.position.character !== selection.start.character)
+        )
+          continue;
+        full = this.exactRange(document, symbol.range);
+        if (
+          full.start.isAfter(selection.start) ||
+          selection.end.isAfter(full.end)
+        )
+          throw new Error("Selection outside full range");
+        // VS Code synthesizes equal ranges for legacy flat provider results.
+        // Reject that indistinguishable shape, including genuine equal-range symbols.
+        if (
+          document.offsetAt(full.start) ===
+            document.offsetAt(selection.start) &&
+          document.offsetAt(full.end) === document.offsetAt(selection.end)
+        )
+          throw new Error("Full range provenance unavailable");
+      } catch {
+        unavailable = true;
+        continue;
+      }
+      matches++;
+      selected = {
+        name: item.name.slice(0, MAX_PREVIEW),
+        kind: item.kind,
+        ...(container
+          ? { containerName: container.slice(0, MAX_PREVIEW) }
+          : {}),
+        range: range(full),
+        selectionRange: range(selection),
+      };
+    }
+    if (unavailable)
+      fail(
+        "SYMBOL_RANGE_UNAVAILABLE",
+        "The provider did not establish a full symbol range. Use an explicit document range.",
+      );
+    if (matches > 1)
+      fail(
+        "SYMBOL_AMBIGUOUS",
+        "Multiple symbols match. Specify the immediate parent or exact identifier start.",
+      );
+    if (!selected)
+      fail(
+        "SYMBOL_NOT_FOUND",
+        "No provider symbol matches. Check the exact name and selector; provider availability is unknown.",
+      );
+    const start = this.exactPosition(
+      document,
+      input.startPosition ?? selected.range.start,
+    );
+    const full = this.exactRange(document, selected.range);
+    if (full.start.isAfter(start) || start.isAfter(full.end))
+      fail(
+        "INVALID_ARGUMENT",
+        "startPosition must be inside the selected symbol range.",
+      );
+    current();
+    const result = await this.read({
+      uri: input.uri,
+      version: input.version,
+      range: { start: position(start), end: selected.range.end },
+      maxLines: input.maxLines,
+      maxChars: input.maxChars,
+    });
+    // read() loads asynchronously: reject a same-version replacement document too.
+    current();
+    return { ...result, symbol: selected };
   }
 
   /** Progressive live search. Cursors retain traversal positions, never source text. */
