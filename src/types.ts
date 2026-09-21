@@ -20,9 +20,18 @@ export interface UriInput {
   uri: string;
 }
 export interface ReadInput extends UriInput {
+  /** Line selectors are mutually exclusive with range. */
   startLine?: number;
   /** Exclusive. Defaults to the document's line count. */
   endLine?: number;
+  /** Exact half-open UTF-16 positions; never clamped or split inside surrogate pairs. */
+  range?: TextRange;
+  /** Reject positions from a different live document version. */
+  version?: number;
+  /** Maximum source lines per page: 1–1000, default 200. */
+  maxLines?: number;
+  /** Maximum UTF-16 code units including line endings: 2–64000, default 16000. */
+  maxChars?: number;
 }
 export interface SearchInput extends UriInput {
   query: string;
@@ -141,9 +150,15 @@ export interface DocumentState {
 export interface ReadResult extends DocumentState {
   languageId: string;
   lineCount: number;
+  /** Requested line envelope, retained for compatibility; see returnedRange for actual text. */
   startLine: number;
   endLine: number;
   text: string;
+  requestedRange: TextRange;
+  returnedRange: TextRange;
+  truncated: boolean;
+  /** Present only when truncated. Resume with this start, requestedRange.end and version. */
+  nextPosition?: Position;
 }
 export interface ListResult {
   uri: string;

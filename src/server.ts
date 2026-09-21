@@ -138,12 +138,49 @@ function createMcpServer(
   );
   tool(
     "read_document",
-    "Read live document text and version. Lines are zero-based; endLine is exclusive.",
-    z.strictObject({
-      uri,
-      startLine: index.optional(),
-      endLine: index.optional(),
-    }),
+    "Read bounded live text and version. Use zero-based startLine/endLine (exclusive) OR exact half-open UTF-16 range. Both budgets apply: 200 lines and 16000 UTF-16 code units by default. returnedRange describes actual text; legacy startLine/endLine describe the request. If truncated, resume with range {start: nextPosition, end: requestedRange.end} and returned version. Surrogate pairs and CRLF are never split.",
+    z
+      .strictObject({
+        uri,
+        startLine: index
+          .optional()
+          .describe("First line, zero-based; default 0. Excludes range."),
+        endLine: index
+          .optional()
+          .describe(
+            "Exclusive end line; default document line count. Excludes range.",
+          ),
+        range: z
+          .strictObject({ start: position, end: position })
+          .optional()
+          .describe(
+            "Exact half-open UTF-16 range; excludes startLine and endLine.",
+          ),
+        version: index
+          .min(1)
+          .optional()
+          .describe("Expected live document version; rejects stale ranges."),
+        maxLines: index
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe(
+            "Source lines per page, including a partial first line; default 200, maximum 1000.",
+          ),
+        maxChars: index
+          .min(2)
+          .max(64000)
+          .optional()
+          .describe(
+            "UTF-16 code units per page including line endings; default 16000, maximum 64000, minimum 2 for atomic CRLF/surrogate pairs.",
+          ),
+      })
+      .refine(
+        (input) =>
+          input.range === undefined ||
+          (input.startLine === undefined && input.endLine === undefined),
+        "range is mutually exclusive with startLine/endLine",
+      ),
     (args) => workspace.read(args),
   );
   tool(

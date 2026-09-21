@@ -262,6 +262,23 @@ export async function run(): Promise<void> {
         .text,
       "second needle\n",
     );
+    const page = await service.read({
+      uri: file.toString(),
+      version: live.version,
+      range: live.requestedRange,
+      maxChars: 3,
+    });
+    assert.equal(page.text, "uns");
+    assert.equal(page.truncated, true);
+    assert.deepEqual(page.nextPosition, { line: 0, character: 3 });
+    const residual = await service.read({
+      uri: file.toString(),
+      version: page.version,
+      range: { start: page.nextPosition!, end: page.requestedRange.end },
+    });
+    assert.equal(page.text + residual.text, live.text);
+    assert.equal(residual.truncated, false);
+    assert.equal(residual.nextPosition, undefined);
     const context = await service.context();
     assert.equal(context.activeEditor?.uri, file.toString());
     assert.equal(context.activeEditor?.selectedText, "unsaved");

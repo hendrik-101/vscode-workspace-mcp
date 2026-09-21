@@ -117,6 +117,32 @@ export async function refactoringTools(
       (error: unknown) =>
         error instanceof WorkspaceError && error.code === "VERSION_CONFLICT",
     );
+    // applyEdit opens the previously hidden dirty buffer asynchronously. Wait
+    // for this fixture's tab before later tests snapshot the editor UI.
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        subscription.dispose();
+        reject(new Error("Timed out waiting for the refactoring dirty tab"));
+      }, 10_000);
+      const check = () => {
+        if (
+          vscode.window.tabGroups.all.some((group) =>
+            group.tabs.some(
+              (tab) =>
+                tab.isDirty &&
+                tab.input instanceof vscode.TabInputText &&
+                tab.input.uri.toString() === other.toString(),
+            ),
+          )
+        ) {
+          clearTimeout(timeout);
+          subscription.dispose();
+          resolve();
+        }
+      };
+      const subscription = vscode.window.tabGroups.onDidChangeTabs(check);
+      check();
+    });
     assert.equal(provider.writes, beforeWrites);
   } finally {
     registrations.forEach((registration) => registration.dispose());
