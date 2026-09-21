@@ -270,7 +270,12 @@ function createMcpServer(
       tabSize: z.number().int().min(1).max(32).optional(),
       insertSpaces: z.boolean().optional(),
       apply: z.boolean().optional(),
-      includeEdits: z.boolean().optional(),
+      includeEdits: z
+        .boolean()
+        .optional()
+        .describe(
+          "Include provider edits; defaults to true for preview and false after apply.",
+        ),
     }),
     (args) => workspace.format(args, signal),
     false,
