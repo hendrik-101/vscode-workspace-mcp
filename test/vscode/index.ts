@@ -910,7 +910,9 @@ async function ideTools(
     const preview = await service.format({ uri: file.toString(), version });
     assert.equal(preview.applied, false);
     assert.ok(preview.edits);
-    assert.equal(preview.editCount, 1);
+    // VS Code minimizes provider replacements, which may split or remove edits.
+    assert.equal(preview.editCount, preview.edits.length);
+    assert.ok(preview.editCount > 0);
     assert.equal(formattedText(document, preview.edits), "tidy!");
     assert.equal(document.getText(), "messy");
     await rejectsCode(
@@ -981,7 +983,7 @@ async function ideTools(
       apply: true,
     });
     assert.equal(applied.applied, true);
-    assert.equal(applied.editCount, 1);
+    assert.equal(applied.editCount, preview.edits.length);
     assert.equal("edits" in applied, false);
     assert.equal(document.getText(), "tidy!");
     assert.equal(document.isDirty, true);
@@ -998,7 +1000,9 @@ async function ideTools(
       apply: true,
     });
     assert.equal(document.getText(), replacement);
-    assert.equal(compact.editCount, 1);
+    assert.ok(largePreview.edits);
+    assert.equal(largePreview.editCount, largePreview.edits.length);
+    assert.equal(compact.editCount, largePreview.edits.length);
     assert.equal("edits" in compact, false);
     assert.ok(JSON.stringify(compact).length < 1000);
     assert.ok(JSON.stringify(largePreview).length > 100_000);
@@ -1011,13 +1015,21 @@ async function ideTools(
     });
     assert.ok(included.edits);
     assert.equal(included.editCount, included.edits.length);
+    const unchangedPreview = await service.format({
+      uri: file.toString(),
+      version: document.version,
+    });
+    assert.ok(unchangedPreview.edits);
+    assert.equal(formattedText(document, unchangedPreview.edits), "tidy!");
     const summary = await service.format({
       uri: file.toString(),
       version: document.version,
       includeEdits: false,
     });
     assert.equal("edits" in summary, false);
-    assert.equal(summary.editCount, 1);
+    assert.equal(summary.editCount, unchangedPreview.edits.length);
+    assert.equal(summary.applied, false);
+    assert.equal(document.getText(), "tidy!");
     assert.equal(provider.writes, writesBefore);
     formatMode = "change";
     await rejectsCode(
