@@ -31,9 +31,11 @@ const position = z
 const range = z
   .strictObject({ start: position, end: position })
   .describe("Zero-based UTF-16 range; end is exclusive.");
-const version = index.describe(
-  "Current document version returned by a live read; rejects stale edits or positions.",
-);
+const version = index
+  .min(1)
+  .describe(
+    "Current document version returned by a live read; rejects stale edits or positions.",
+  );
 const preserveFocus = z
   .boolean()
   .optional()

@@ -843,6 +843,13 @@ test("discovery documents tool roles, URI/position conventions and search contin
         (property as { description?: string }).description,
         `${tool.name}.${name} has guidance`,
       );
+      if (name === "version") {
+        assert.equal(
+          (property as { minimum: number }).minimum,
+          1,
+          `${tool.name} requires positive versions`,
+        );
+      }
     }
   }
   const validateRoots = new AjvJsonSchemaValidator().getValidator(
@@ -1033,4 +1040,35 @@ test("symbol-read contract validates bounded source and preserves additive metad
     }).success,
     false,
   );
+});
+
+test("MCP rejects version zero before dispatching a version-checked operation", async (t) => {
+  let called = 0;
+  const server = await startServer({
+    ...workspace,
+    save: async (input) => {
+      called++;
+      return workspace.save(input);
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "version-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const zero = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: 0 },
+  });
+  assert.equal(zero.isError, true);
+  assert.equal(called, 0);
+  const one = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: 1 },
+  });
+  assert.equal(one.isError, undefined);
+  assert.equal(called, 1);
 });
