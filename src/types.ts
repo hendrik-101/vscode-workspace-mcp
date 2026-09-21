@@ -61,17 +61,65 @@ export interface ShowInput extends UriInput {
   selection?: TextRange;
   preserveFocus?: boolean;
 }
-export interface SymbolsInput {
+export const SYMBOL_TYPES = [
+  "file",
+  "module",
+  "namespace",
+  "package",
+  "class",
+  "method",
+  "property",
+  "field",
+  "constructor",
+  "enum",
+  "interface",
+  "function",
+  "variable",
+  "constant",
+  "string",
+  "number",
+  "boolean",
+  "array",
+  "object",
+  "key",
+  "null",
+  "enummember",
+  "struct",
+  "event",
+  "operator",
+  "typeparameter",
+] as const;
+export interface SymbolOptions {
+  name?: string;
+  kind?: number | (typeof SYMBOL_TYPES)[number];
+  maxResults?: number;
+  /** Offset into admitted, filtered results; resend the same filters. */
+  offset?: number;
+}
+export interface SymbolsInput extends SymbolOptions {
   query: string;
+}
+export interface DocumentSymbolsInput extends UriInput, SymbolOptions {
+  /** Required for a nonzero offset. */
+  version?: number;
 }
 export interface SymbolResult {
   symbols: Array<{
     name: string;
     kind: number;
+    type: (typeof SYMBOL_TYPES)[number] | "unknown";
     uri: string;
+    /** Full range only when fullRangeKnown; otherwise a provider location. */
     range: TextRange;
+    selectionRange?: TextRange;
+    fullRangeKnown: boolean;
     containerName?: string;
   }>;
+  version?: number;
+  consistency: "document-version" | "live";
+  nextOffset?: number;
+  scanned: number;
+  scanLimitReached: boolean;
   truncated: boolean;
   omitted: number;
 }
@@ -261,7 +309,10 @@ export interface WorkspaceApi {
     input: SymbolsInput,
     signal?: AbortSignal,
   ): Promise<SymbolResult>;
-  documentSymbols(input: UriInput, signal?: AbortSignal): Promise<SymbolResult>;
+  documentSymbols(
+    input: DocumentSymbolsInput,
+    signal?: AbortSignal,
+  ): Promise<SymbolResult>;
   definition(
     input: NavigationInput,
     signal?: AbortSignal,
