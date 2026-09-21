@@ -750,6 +750,11 @@ async function ideTools(
   // requests for its opened document (decorations, dirty checks, and diff UI).
   const symbolTarget = vscode.Uri.joinPath(root, "symbol-target.txt");
   provider.seed(symbolTarget, "target");
+  const legacySymbolTarget = vscode.Uri.joinPath(
+    root,
+    "legacy-symbol-target.txt",
+  );
+  provider.seed(legacySymbolTarget, "target");
   let writes = false;
   const service = new WorkspaceService(() => writes);
   const document = await vscode.workspace.openTextDocument(file);
@@ -833,6 +838,22 @@ async function ideTools(
           ),
       },
     ),
+    vscode.languages.registerDocumentSymbolProvider(
+      { scheme: file.scheme, pattern: "**/legacy-symbol-target.txt" },
+      {
+        provideDocumentSymbols: () => [
+          new vscode.SymbolInformation(
+            "legacy-method",
+            vscode.SymbolKind.Method,
+            "",
+            new vscode.Location(
+              legacySymbolTarget,
+              new vscode.Range(0, 0, 0, 2),
+            ),
+          ),
+        ],
+      },
+    ),
     vscode.languages.registerDocumentFormattingEditProvider(selector, {
       provideDocumentFormattingEdits: async (doc) => {
         if (formatMode === "change") {
@@ -893,6 +914,7 @@ async function ideTools(
     try {
       const repeated = await service.workspaceSymbols({
         query: "mcp-repeated-symbol",
+        maxResults: 100,
       });
       assert.equal(repeated.symbols.length, 100);
       assert.equal(repeated.truncated, false);
@@ -918,10 +940,22 @@ async function ideTools(
     );
     const bounded = await service.documentSymbols({
       uri: symbolTarget.toString(),
+      maxResults: 100,
     });
     assert.equal(bounded.symbols.length, 100);
     assert.equal(bounded.omitted, 0);
     assert.equal(bounded.truncated, true);
+    // The real execute-provider command normalizes flat symbols to tree-shaped
+    // objects. Presence of children/range does not prove a complete body range.
+    const legacy = await service.documentSymbols({
+      uri: legacySymbolTarget.toString(),
+    });
+    assert.equal(legacy.symbols.length, 1);
+    assert.equal(legacy.symbols[0]?.fullRangeKnown, false);
+    assert.deepEqual(legacy.symbols[0]?.range, {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 2 },
+    });
     await disposedUiOperations(provider, file, document.version);
     const version = document.version;
     const preview = await service.format({ uri: file.toString(), version });
