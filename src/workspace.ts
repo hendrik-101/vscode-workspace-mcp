@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
   WorkspaceError,
+  type Refactoring,
   type ShowInput,
   type SymbolsInput,
   type SymbolResult,
@@ -157,6 +158,7 @@ export class WorkspaceService implements WorkspaceApi {
    */
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
+  private readonly refactoringCleanups = new Set<() => void>();
   private disposed = false;
   private readonly diagnosticWaits = new Set<() => void>();
   private pendingDiagnosticWork = 0;
@@ -173,6 +175,7 @@ export class WorkspaceService implements WorkspaceApi {
     this.diagnosticWaits.clear();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
+    for (const cleanup of this.refactoringCleanups) cleanup();
     this.snapshots.clear();
     for (const observer of this.navigationObservers) observer.dispose();
     this.pendingSnapshots.clear();
@@ -719,6 +722,253 @@ export class WorkspaceService implements WorkspaceApi {
         )
       : state(document);
     return { ...final, edits, applied };
+  }
+
+  /** Preview only: public WorkspaceEdit.entries() cannot enumerate file/notebook operations. */
+  async rename(
+    input: Refactoring.RenameInput,
+    signal?: AbortSignal,
+  ): Promise<Refactoring.RenameResult> {
+    if (
+      typeof input.newName !== "string" ||
+      !input.newName.trim() ||
+      input.newName.length > 4096
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "Provide a nonempty new name of at most 4096 characters.",
+      );
+    return this.refactoringQuery(input, signal, async (document, preview) => {
+      const supplied =
+        await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+          "vscode.executeDocumentRenameProvider",
+          document.uri,
+          this.exactPosition(document, input.position),
+          input.newName,
+        );
+      return {
+        ...state(document),
+        providerResult: !!supplied,
+        preview: await preview(supplied),
+      };
+    });
+  }
+
+  /** Resolve a bounded number of provider actions without executing their commands. */
+  async codeActions(
+    input: Refactoring.ActionsInput,
+    signal?: AbortSignal,
+  ): Promise<Refactoring.ActionsResult> {
+    if (input.kind !== "quickfix" && input.kind !== "refactor")
+      fail("INVALID_ARGUMENT", "Action kind must be quickfix or refactor.");
+    return this.refactoringQuery(input, signal, async (document, preview) => {
+      const selected = this.exactRange(document, input.range);
+      const supplied = await vscode.commands.executeCommand<
+        Array<vscode.CodeAction | vscode.Command>
+      >(
+        "vscode.executeCodeActionProvider",
+        document.uri,
+        new vscode.Selection(selected.start, selected.end),
+        input.kind,
+        20,
+      );
+      const actions: Refactoring.ActionsResult["actions"] = [];
+      for (const action of (supplied ?? []).slice(0, 20)) {
+        const codeAction =
+          typeof action.command !== "string"
+            ? (action as vscode.CodeAction)
+            : undefined;
+        const result = await preview(codeAction?.edit);
+        if (action.command) result.reasons.push("COMMAND_REQUIRED");
+        if (codeAction?.disabled) result.reasons.push("DISABLED");
+        actions.push({
+          ...result,
+          title: action.title.slice(0, 512),
+          ...(codeAction?.kind
+            ? { kind: codeAction.kind.value.slice(0, 256) }
+            : {}),
+          preferred: codeAction?.isPreferred === true,
+        });
+      }
+      return {
+        ...state(document),
+        actions,
+        truncated: (supplied?.length ?? 0) > 20,
+      };
+    });
+  }
+
+  /** Validate all visible targets as one operation; never filter an unsafe edit into a safe-looking plan. */
+  private async refactoringQuery<
+    T extends Refactoring.RenameResult | Refactoring.ActionsResult,
+  >(
+    input: SaveInput,
+    signal: AbortSignal | undefined,
+    query: (
+      document: vscode.TextDocument,
+      preview: (
+        edit: vscode.WorkspaceEdit | undefined,
+      ) => Promise<Refactoring.Preview>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    const source = await this.document(parseUri(input.uri), signal);
+    this.text(source);
+    this.expected(source, input.version);
+    const observed = new Map<
+      string,
+      { document: vscode.TextDocument; version: number }
+    >();
+    const openDocuments = vscode.workspace.textDocuments;
+    if (openDocuments.length > 1000)
+      fail("LIMIT_EXCEEDED", "Provider snapshot exceeds 1000 open documents.");
+    const initial = new Map<
+      string,
+      { document: vscode.TextDocument; version: number }
+    >();
+    let initialBytes = 0;
+    for (const document of openDocuments) {
+      const uri = document.uri.toString();
+      initialBytes += Buffer.byteLength(uri);
+      if (initialBytes > 256 * 1024)
+        fail("LIMIT_EXCEEDED", "Provider snapshot URI text exceeds 256 KiB.");
+      initial.set(uri, { document, version: document.version });
+    }
+    const changed = new Set<string>();
+    let changedBytes = 0;
+    let trackingOverflow = false;
+    const recordChange = (document: vscode.TextDocument) => {
+      if (trackingOverflow) return;
+      const uri = document.uri.toString();
+      if (changed.has(uri)) return;
+      changedBytes += Buffer.byteLength(uri);
+      if (changed.size >= 1000 || changedBytes > 256 * 1024) {
+        trackingOverflow = true;
+        listener.dispose();
+        closeListener.dispose();
+        return;
+      }
+      changed.add(uri);
+    };
+    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.contentChanges?.length !== 0) recordChange(event.document);
+    });
+    const closeListener = vscode.workspace.onDidCloseTextDocument(recordChange);
+    // Provider commands have no cancellation token and can remain pending forever.
+    // Release observers and retained document snapshots independently of settlement.
+    const cleanup = () => {
+      listener.dispose();
+      closeListener.dispose();
+      signal?.removeEventListener("abort", cleanup);
+      this.refactoringCleanups.delete(cleanup);
+      changed.clear();
+      initial.clear();
+      observed.clear();
+    };
+    this.refactoringCleanups.add(cleanup);
+    signal?.addEventListener("abort", cleanup, { once: true });
+    let editCount = 0;
+    let documentCount = 0;
+    let bytes = 0;
+    observed.set(source.uri.toString(), {
+      document: source,
+      version: input.version,
+    });
+    try {
+      signal?.throwIfAborted();
+      this.active();
+      const result = await query(source, async (edit) => {
+        signal?.throwIfAborted();
+        this.active();
+        const preview: Refactoring.Preview = {
+          supported: false,
+          applicable: false,
+          complete: false,
+          reasons: [edit ? "OPAQUE_WORKSPACE_EDIT" : "NO_EDIT"],
+          documents: [],
+        };
+        if (!edit) return preview;
+        const entries = edit.entries();
+        documentCount += entries.length;
+        if (documentCount > 20)
+          fail(
+            "LIMIT_EXCEEDED",
+            "Provider previews exceed 20 document entries.",
+          );
+        for (const [target, edits] of entries) {
+          signal?.throwIfAborted();
+          bytes += Buffer.byteLength(target.toString());
+          if (bytes > 256 * 1024)
+            fail("LIMIT_EXCEEDED", "Provider previews exceed 256 KiB.");
+          const document = await this.document(
+            parseUri(target.toString()),
+            signal,
+          );
+          signal?.throwIfAborted();
+          this.active();
+          const previous =
+            observed.get(target.toString()) ?? initial.get(target.toString());
+          if (previous && previous.document !== document)
+            fail(
+              "VERSION_CONFLICT",
+              "A provider target was closed and reopened during preview.",
+            );
+          const version = previous?.version ?? document.version;
+          this.expected(document, version);
+          observed.set(target.toString(), { document, version });
+          editCount += edits.length;
+          if (editCount > 100)
+            fail("LIMIT_EXCEEDED", "Provider previews exceed 100 text edits.");
+          const textEdits = edits.map((edit) => {
+            if (typeof edit.newText !== "string")
+              fail(
+                "INVALID_ARGUMENT",
+                "Provider edit is not a plain text edit.",
+              );
+            bytes +=
+              Buffer.byteLength(edit.newText) +
+              Buffer.byteLength(target.toString());
+            if (bytes > 256 * 1024)
+              fail("LIMIT_EXCEEDED", "Provider previews exceed 256 KiB.");
+            return { range: range(edit.range), text: edit.newText };
+          });
+          this.checkedEdits(document, textEdits);
+          preview.documents.push({ ...state(document), edits: textEdits });
+        }
+        return preview;
+      });
+      // Reauthorize every target after provider work, then check all versions without awaits.
+      signal?.throwIfAborted();
+      this.active();
+      for (const { document } of observed.values())
+        await this.authorize(document.uri, signal);
+      signal?.throwIfAborted();
+      this.active();
+      if (trackingOverflow)
+        fail(
+          "LIMIT_EXCEEDED",
+          "Too many document changes during provider preview.",
+        );
+      for (const [uri, { document, version }] of observed) {
+        this.currentRoot(document.uri);
+        if (changed.has(uri) || document.isClosed)
+          fail(
+            "VERSION_CONFLICT",
+            "A provider target changed during preview. Request a fresh preview.",
+          );
+        this.expected(document, version);
+      }
+      // Saves can change dirty state without changing content or document versions.
+      // Refresh every returned state after all asynchronous authorization has ended.
+      Object.assign(result, state(source));
+      const previews = "preview" in result ? [result.preview] : result.actions;
+      for (const preview of previews)
+        for (const snapshot of preview.documents)
+          Object.assign(snapshot, state(observed.get(snapshot.uri)!.document));
+      return result;
+    } finally {
+      cleanup();
+    }
   }
 
   private currentRoot(uri: vscode.Uri): vscode.Uri {

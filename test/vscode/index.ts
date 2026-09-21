@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { refactoringTools } from "./refactoring";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
 import {
@@ -221,6 +222,7 @@ export async function run(): Promise<void> {
       provider.readDirectory = originalReadDirectory;
     }
 
+    await refactoringTools(provider, first, second, outside, linkedFile);
     await ideTools(provider, first, outside, linkedFile);
     await navigationTools(provider, first, outside);
     const initial = await service.read({ uri: file.toString() });

@@ -43,6 +43,26 @@ const workspace: WorkspaceApi = {
     edits: [],
     applied: false,
   }),
+  rename: async ({ uri, version }) => ({
+    uri,
+    version,
+    dirty: false,
+    providerResult: false,
+    preview: {
+      supported: false,
+      applicable: false,
+      complete: false,
+      reasons: ["NO_EDIT"],
+      documents: [],
+    },
+  }),
+  codeActions: async ({ uri, version }) => ({
+    uri,
+    version,
+    dirty: false,
+    actions: [],
+    truncated: false,
+  }),
   roots: async () => [{ uri: "memfs:/project", name: "project", index: 0 }],
   context: async () => ({ roots: [], tabs: [], truncated: false }),
   list: async ({ uri }) => ({
@@ -169,6 +189,8 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "get_hover",
     "get_references",
     "list_directory",
+    "preview_code_actions",
+    "preview_rename",
     "read_document",
     "save_document",
     "search_workspace",
@@ -206,6 +228,27 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       "format_document",
       { uri: "memfs:/project/a.abap", version: 4, apply: false },
     ],
+    [
+      "preview_rename",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        position: { line: 0, character: 0 },
+        newName: "renamed",
+      },
+    ],
+    [
+      "preview_code_actions",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        kind: "quickfix",
+      },
+    ],
   ] as const) {
     assert.equal(
       (await client.callTool({ name, arguments: args })).isError,
@@ -213,6 +256,28 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     );
   }
   for (const [name, args] of [
+    [
+      "preview_rename",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        position: { line: 0, character: 0 },
+        newName: "renamed",
+        apply: true,
+      },
+    ],
+    [
+      "preview_code_actions",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        kind: "source",
+      },
+    ],
     ["show_document", { uri: "memfs:/project/a.abap", command: "unsafe" }],
     [
       "format_document",
