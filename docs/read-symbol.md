@@ -35,7 +35,11 @@ workspace admission and bridge activity before dispatch and before responding.
 
 Optional `startPosition` resumes within the selected full range, including its
 end for an empty final page. It cannot precede the body, extend beyond its end, or
-split a surrogate pair; invalid caller positions return `INVALID_ARGUMENT`.
+split a surrogate pair. Supplied `position` and `startPosition` are checked against
+the live document and surrogate boundaries before provider dispatch; invalid
+caller positions return `INVALID_ARGUMENT` regardless of provider availability or
+ambiguity. Continuation containment within the selected body is checked after
+symbol resolution.
 `maxLines` and `maxChars` use the same limits and defaults as
 [bounded document reads](reading.md). The implementation calls
 `WorkspaceService.read` with the selected residual range, expected version and

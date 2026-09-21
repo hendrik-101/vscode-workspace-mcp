@@ -10,8 +10,10 @@ an editor.
 
 `workspace_symbols({query})` and `document_symbols({uri})` call VS Code's fixed
 public provider commands, supporting both native extensions and LSP-backed
-providers. Results contain at most 100 symbols, inspect at most 1,000 nodes, and
-report `truncated` and `omitted`. Names are capped at 1,000 characters. External,
+providers. Results default to 20 symbols (maximum 100), inspect at most 1,000
+nodes, and report pagination and scan completeness. See
+[symbol ranges, filters and paging](symbols.md). Names are capped at 1,000
+characters. External,
 unsafe, inaccessible and symlink targets are omitted. Empty results can mean no
 matching symbols or no applicable provider; no ADT capability is assumed.
 

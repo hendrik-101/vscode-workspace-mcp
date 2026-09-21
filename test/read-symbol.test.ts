@@ -845,3 +845,51 @@ test("unknown flat container metadata cannot rule out a named-container match", 
     }
   }
 });
+
+test("invalid caller continuation positions fail before no-match, ambiguous or unavailable providers", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 8)),
+    range(at(0, 3), at(0, 5)),
+  );
+  const unknown = symbol(
+    "method",
+    range(at(0, 3), at(0, 5)),
+    range(at(0, 3), at(0, 5)),
+  );
+  for (const items of [[], [good, good], [unknown]]) {
+    const f = fixture("a😀bc😀d", items);
+    for (const startPosition of [
+      at(-1),
+      at(1),
+      at(0, 9),
+      at(0, 0.5),
+      at(0, 2),
+      at(0, 6),
+    ]) {
+      await assert.rejects(
+        f.service.readSymbol({ ...request(f), startPosition }),
+        {
+          code: "INVALID_ARGUMENT",
+        },
+      );
+    }
+    assert.equal(f.calls(), 0);
+  }
+});
+
+test("caller identifier positions cannot split surrogate pairs before provider dispatch", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 8)),
+    range(at(0, 3), at(0, 5)),
+  );
+  for (const items of [[], [good], [good, good]]) {
+    const f = fixture("a😀bc😀d", items);
+    for (const position of [at(0, 2), at(0, 6)])
+      await assert.rejects(f.service.readSymbol({ ...request(f), position }), {
+        code: "INVALID_ARGUMENT",
+      });
+    assert.equal(f.calls(), 0);
+  }
+});

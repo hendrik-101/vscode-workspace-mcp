@@ -11,6 +11,9 @@ import {
   WorkspaceError,
   type Refactoring,
   type ShowInput,
+  SYMBOL_TYPES,
+  type SymbolOptions,
+  type DocumentSymbolsInput,
   type SymbolsInput,
   type SymbolResult,
   type NavigationInput,
@@ -323,41 +326,186 @@ export class WorkspaceService implements WorkspaceApi {
     return state(document);
   }
 
+  private symbolOptions(input: SymbolOptions) {
+    const maxResults = input.maxResults ?? 20;
+    const offset = input.offset ?? 0;
+    integer(maxResults, "maxResults", 1);
+    integer(offset, "offset");
+    if (maxResults > MAX_RESULTS || offset > MAX_LIST_ENTRIES)
+      fail(
+        "INVALID_ARGUMENT",
+        "Symbol page exceeds its result or offset limit.",
+      );
+    if (
+      input.name !== undefined &&
+      (!input.name || input.name.length > MAX_PREVIEW)
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "Symbol name filter must contain 1 to 1000 characters.",
+      );
+    const kind =
+      typeof input.kind === "string"
+        ? SYMBOL_TYPES.indexOf(input.kind)
+        : input.kind;
+    if (kind !== undefined) {
+      integer(kind, "kind");
+      if (kind >= SYMBOL_TYPES.length)
+        fail("INVALID_ARGUMENT", "Unknown symbol kind.");
+    }
+    return { maxResults, offset, kind, name: input.name?.toLowerCase() };
+  }
+
+  private symbolRangeValid(value: vscode.Range): boolean {
+    return (
+      [value.start, value.end].every(
+        (point) =>
+          Number.isSafeInteger(point.line) &&
+          point.line >= 0 &&
+          Number.isSafeInteger(point.character) &&
+          point.character >= 0,
+      ) &&
+      (value.start.line < value.end.line ||
+        (value.start.line === value.end.line &&
+          value.start.character <= value.end.character))
+    );
+  }
+
+  private symbolFullRangeKnown(
+    item: vscode.DocumentSymbol,
+    document: vscode.TextDocument,
+  ): boolean {
+    const points = [
+      item.range.start,
+      item.selectionRange.start,
+      item.selectionRange.end,
+      item.range.end,
+    ];
+    const compare = (a: Position, b: Position) =>
+      a.line - b.line || a.character - b.character;
+    // VS Code normalizes legacy locations to identical range/selectionRange.
+    // Only a distinct, valid containing range demonstrates body information.
+    return (
+      points.every(
+        (point, index) =>
+          Number.isSafeInteger(point.line) &&
+          point.line >= 0 &&
+          Number.isSafeInteger(point.character) &&
+          point.character >= 0 &&
+          point.line < document.lineCount &&
+          point.character <= document.lineAt(point.line).range.end.character &&
+          (index === 0 || compare(points[index - 1]!, point) <= 0),
+      ) &&
+      (compare(points[0]!, points[1]!) !== 0 ||
+        compare(points[2]!, points[3]!) !== 0)
+    );
+  }
+
   private async symbols(
-    items: readonly vscode.SymbolInformation[],
+    items: readonly (vscode.DocumentSymbol | vscode.SymbolInformation)[],
+    options: ReturnType<WorkspaceService["symbolOptions"]>,
+    source?: vscode.TextDocument,
     signal?: AbortSignal,
   ): Promise<SymbolResult> {
     const result: SymbolResult = {
       symbols: [],
-      truncated: items.length > MAX_LIST_ENTRIES,
+      consistency: source ? "document-version" : "live",
+      scanned: 0,
+      scanLimitReached: false,
+      truncated: false,
       omitted: 0,
     };
-    // Cache only within this result, including failures. Many symbols share a file.
     const authorized = new Map<string, Promise<vscode.FileStat>>();
-    for (const item of items.slice(0, MAX_LIST_ENTRIES)) {
-      signal?.throwIfAborted();
-      this.active();
-      if (result.symbols.length >= MAX_RESULTS) {
-        result.truncated = true;
+    const matches: SymbolResult["symbols"] = [];
+    // Iterator frames preserve provider depth-first order without copying wide trees.
+    const stack = [{ items, index: 0, container: "" }];
+    while (stack.length) {
+      const frame = stack[stack.length - 1]!;
+      if (frame.index >= frame.items.length) {
+        stack.pop();
+        continue;
+      }
+      if (result.scanned >= MAX_LIST_ENTRIES) {
+        result.scanLimitReached = true;
         break;
       }
+      const item = frame.items[frame.index++]!;
+      result.scanned++;
+      signal?.throwIfAborted();
+      this.active();
       try {
-        const uri = parseUri(item.location.uri.toString());
+        const hierarchical = "children" in item;
+        // Keep traversing valid children even when their parent is invalid.
+        if (hierarchical && item.children.length)
+          stack.push({
+            items: item.children,
+            index: 0,
+            container:
+              typeof item.name === "string"
+                ? item.name.slice(0, MAX_PREVIEW)
+                : "",
+          });
+        if (
+          typeof item.name !== "string" ||
+          typeof item.kind !== "number" ||
+          !Number.isSafeInteger(item.kind) ||
+          item.kind < 0
+        ) {
+          result.omitted++;
+          continue;
+        }
+        const bodyRange = hierarchical ? item.range : item.location.range;
+        const containerName = hierarchical
+          ? frame.container
+          : item.containerName;
+        if (
+          !this.symbolRangeValid(bodyRange) ||
+          (hierarchical && !this.symbolRangeValid(item.selectionRange)) ||
+          (containerName !== undefined && typeof containerName !== "string")
+        ) {
+          result.omitted++;
+          continue;
+        }
+        // Bound identifier work before case conversion or URI parsing.
+        const name = item.name.slice(0, MAX_PREVIEW);
+        if (
+          (options.name !== undefined &&
+            !name.toLowerCase().includes(options.name)) ||
+          (options.kind !== undefined && item.kind !== options.kind)
+        )
+          continue;
+        const target = hierarchical ? source?.uri : item.location.uri;
+        if (!target) {
+          result.omitted++;
+          continue;
+        }
+        const value = target.toString();
+        if (value.length > 8192) {
+          result.omitted++;
+          continue;
+        }
+        const uri = parseUri(value);
         const key = uri.toString();
         let check = authorized.get(key);
         if (!check) {
-          check = this.authorize(uri);
+          check = this.authorize(uri, signal);
           authorized.set(key, check);
         }
         await check;
         this.currentRoot(uri);
-        result.symbols.push({
-          name: item.name.slice(0, MAX_PREVIEW),
+        matches.push({
+          name,
           kind: item.kind,
-          uri: uri.toString(),
-          range: range(item.location.range),
-          ...(item.containerName
-            ? { containerName: item.containerName.slice(0, MAX_PREVIEW) }
+          type: SYMBOL_TYPES[item.kind] ?? "unknown",
+          uri: key,
+          range: range(bodyRange),
+          fullRangeKnown:
+            hierarchical && !!source && this.symbolFullRangeKnown(item, source),
+          ...(hierarchical
+            ? { selectionRange: range(item.selectionRange) }
+            : {}),
+          ...(containerName
+            ? { containerName: containerName.slice(0, MAX_PREVIEW) }
             : {}),
         });
       } catch {
@@ -366,8 +514,8 @@ export class WorkspaceService implements WorkspaceApi {
     }
     signal?.throwIfAborted();
     this.active();
-    // Roots can change while other symbol targets are being authorized.
-    result.symbols = result.symbols.filter((item) => {
+    // Roots may change while other targets are being admitted. Paginate only survivors.
+    const admitted = matches.filter((item) => {
       try {
         this.currentRoot(parseUri(item.uri));
         return true;
@@ -376,79 +524,81 @@ export class WorkspaceService implements WorkspaceApi {
         return false;
       }
     });
+    let characters = 0;
+    for (const item of admitted.slice(
+      options.offset,
+      options.offset + options.maxResults,
+    )) {
+      const size =
+        item.name.length + item.uri.length + (item.containerName?.length ?? 0);
+      if (characters + size > 32 * 1024) break;
+      result.symbols.push(item);
+      characters += size;
+    }
+    if (options.offset + result.symbols.length < admitted.length)
+      result.nextOffset = options.offset + result.symbols.length;
+    result.truncated =
+      result.scanLimitReached || result.nextOffset !== undefined;
     return result;
   }
 
-  /** Queries registered language providers; empty results do not prove provider availability. */
+  /** Every page is a fresh provider observation, not a workspace snapshot. */
   async workspaceSymbols(
-    { query }: SymbolsInput,
+    input: SymbolsInput,
     signal?: AbortSignal,
   ): Promise<SymbolResult> {
     signal?.throwIfAborted();
     this.active();
-    if (!query || query.length > MAX_SELECTION)
+    const options = this.symbolOptions(input);
+    if (!input.query || input.query.length > MAX_SELECTION)
       fail("INVALID_ARGUMENT", "Provide a query of 1 to 4096 characters.");
     const items = await vscode.commands.executeCommand<
       vscode.SymbolInformation[]
-    >("vscode.executeWorkspaceSymbolProvider", query);
+    >("vscode.executeWorkspaceSymbolProvider", input.query);
     signal?.throwIfAborted();
-    return this.symbols(items ?? [], signal);
+    return this.symbols(items ?? [], options, undefined, signal);
   }
 
-  /** Returns bounded symbol locations from a document's registered provider. */
+  /** Preserve full provider ranges and reject source changes during the request. */
   async documentSymbols(
-    { uri: value }: UriInput,
+    input: DocumentSymbolsInput,
     signal?: AbortSignal,
   ): Promise<SymbolResult> {
     signal?.throwIfAborted();
-    const uri = parseUri(value);
-    const document = await this.document(uri);
+    this.active();
+    const options = this.symbolOptions(input);
+    if (options.offset && input.version === undefined)
+      fail(
+        "INVALID_ARGUMENT",
+        "Document symbol continuation requires version.",
+      );
+    const uri = parseUri(input.uri);
+    const document = await this.document(uri, signal);
     this.text(document);
+    if (input.version !== undefined) this.expected(document, input.version);
+    const version = document.version;
+    const complete = () => {
+      signal?.throwIfAborted();
+      this.currentRoot(uri);
+      this.expected(document, version);
+      if (
+        document.isClosed ||
+        !vscode.workspace.textDocuments.includes(document)
+      )
+        fail(
+          "VERSION_CONFLICT",
+          "The queried document was closed or replaced.",
+        );
+    };
     signal?.throwIfAborted();
     this.active();
     const items = await vscode.commands.executeCommand<
       Array<vscode.DocumentSymbol | vscode.SymbolInformation>
     >("vscode.executeDocumentSymbolProvider", uri);
-    signal?.throwIfAborted();
-    this.currentRoot(uri);
-    const flat: vscode.SymbolInformation[] = [];
-    let omittedChildren = false;
-    // An iterative depth-first traversal bounds both work and nesting depth.
-    const stack = (items ?? [])
-      .slice(0, MAX_LIST_ENTRIES)
-      .map((item) => ({ item, container: "" }))
-      .reverse();
-    while (stack.length && flat.length < MAX_LIST_ENTRIES) {
-      const { item, container } = stack.pop()!;
-      if (!("children" in item)) flat.push(item);
-      else {
-        flat.push(
-          new vscode.SymbolInformation(
-            item.name,
-            item.kind,
-            container,
-            new vscode.Location(uri, item.selectionRange),
-          ),
-        );
-        const room = MAX_LIST_ENTRIES - flat.length - stack.length;
-        omittedChildren ||= item.children.length > Math.max(0, room);
-        stack.push(
-          ...item.children
-            .slice(0, Math.max(0, room))
-            .map((child) => ({
-              item: child,
-              container: item.name.slice(0, MAX_PREVIEW),
-            }))
-            .reverse(),
-        );
-      }
-    }
-    const result = await this.symbols(flat, signal);
-    result.truncated ||=
-      omittedChildren ||
-      !!stack.length ||
-      (items?.length ?? 0) > MAX_LIST_ENTRIES;
-    return result;
+    complete();
+    const result = await this.symbols(items ?? [], options, document, signal);
+    complete();
+    return { ...result, version };
   }
 
   private async navigationSource(input: NavigationInput, signal?: AbortSignal) {
@@ -1564,8 +1714,15 @@ export class WorkspaceService implements WorkspaceApi {
     const document = await this.document(uri, signal);
     this.expected(document, input.version);
     const original = this.text(document);
-    if (input.position !== undefined)
-      this.exactPosition(document, input.position);
+    for (const value of [input.position, input.startPosition]) {
+      if (value === undefined) continue;
+      const checked = this.exactPosition(document, value);
+      if (splitsSurrogate(original, document.offsetAt(checked)))
+        fail(
+          "INVALID_ARGUMENT",
+          "Read positions must not split a surrogate pair.",
+        );
+    }
     const current = () => {
       signal?.throwIfAborted();
       this.currentRoot(uri);
