@@ -19,10 +19,24 @@ export interface TextRange {
 export interface UriInput {
   uri: string;
 }
+export interface ListInput extends UriInput {
+  maxEntries?: number;
+  /** Stateless continuation bound to the unchanged directory and workspace roots. */
+  cursor?: string;
+}
 export interface ReadInput extends UriInput {
+  /** Line selectors are mutually exclusive with range. */
   startLine?: number;
   /** Exclusive. Defaults to the document's line count. */
   endLine?: number;
+  /** Exact half-open UTF-16 positions; never clamped or split inside surrogate pairs. */
+  range?: TextRange;
+  /** Reject positions from a different live document version. */
+  version?: number;
+  /** Maximum source lines per page: 1–1000, default 200. */
+  maxLines?: number;
+  /** Maximum UTF-16 code units including line endings: 2–64000, default 16000. */
+  maxChars?: number;
 }
 export interface SearchInput extends UriInput {
   query: string;
@@ -138,9 +152,11 @@ export interface FormatInput extends UriInput {
   tabSize?: number;
   insertSpaces?: boolean;
   apply?: boolean;
+  includeEdits?: boolean;
 }
 export interface FormatResult extends DocumentState {
-  edits: EditInput["edits"];
+  edits?: EditInput["edits"];
+  editCount: number;
   applied: boolean;
 }
 
@@ -187,9 +203,15 @@ export interface DocumentState {
 export interface ReadResult extends DocumentState {
   languageId: string;
   lineCount: number;
+  /** Requested line envelope, retained for compatibility; see returnedRange for actual text. */
   startLine: number;
   endLine: number;
   text: string;
+  requestedRange: TextRange;
+  returnedRange: TextRange;
+  truncated: boolean;
+  /** Present only when truncated. Resume with this start, requestedRange.end and version. */
+  nextPosition?: Position;
 }
 export interface ListResult {
   uri: string;
@@ -201,6 +223,10 @@ export interface ListResult {
   truncated: boolean;
   /** Count of omitted symbolic links and unsafe provider entry names. */
   blockedEntries: number;
+  /** Omitted entries beyond the scan or response bounds. */
+  omittedEntries?: number;
+  incomplete?: boolean;
+  nextCursor?: string;
 }
 export interface SearchResult {
   uri: string;
@@ -211,6 +237,7 @@ export interface SearchResult {
     character: number;
     text: string;
     context?: Array<{ line: number; text: string }>;
+    previewTruncated?: boolean;
   }>;
   filesSearched: number;
   nextCursor?: string;
@@ -290,7 +317,7 @@ export interface WorkspaceApi {
   ): Promise<Refactoring.ActionsResult>;
   roots(): Promise<RootInfo[]>;
   context(): Promise<ContextResult>;
-  list(input: UriInput): Promise<ListResult>;
+  list(input: ListInput): Promise<ListResult>;
   read(input: ReadInput): Promise<ReadResult>;
   search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
   edit(input: EditInput, signal?: AbortSignal): Promise<DocumentState>;

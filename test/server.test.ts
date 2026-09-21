@@ -56,6 +56,7 @@ const workspace: WorkspaceApi = {
     version,
     dirty: false,
     edits: [],
+    editCount: 0,
     applied: false,
   }),
   rename: async ({ uri, version }) => ({
@@ -95,6 +96,15 @@ const workspace: WorkspaceApi = {
     lineCount: 1,
     startLine: 0,
     endLine: 1,
+    requestedRange: {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 14 },
+    },
+    returnedRange: {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 14 },
+    },
+    truncated: false,
   }),
   search: async ({ uri, query }) => ({
     uri,
@@ -254,7 +264,12 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ],
     [
       "format_document",
-      { uri: "memfs:/project/a.abap", version: 4, apply: false },
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        apply: false,
+        includeEdits: true,
+      },
     ],
     [
       "preview_rename",
@@ -340,6 +355,15 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       lineCount: 1,
       startLine: 0,
       endLine: 1,
+      requestedRange: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 14 },
+      },
+      returnedRange: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 14 },
+      },
+      truncated: false,
     },
   });
   assert.equal(read.isError, undefined);
@@ -814,3 +838,55 @@ for (const toolName of ["edit_document", "save_document"]) {
     assert.notEqual(roots.isError, true);
   });
 }
+
+test("read_document exposes exact ranges and budgets and forwards them without mutation", async (t) => {
+  const calls: unknown[] = [];
+  const server = await startServer({
+    ...workspace,
+    read: async (input) => {
+      calls.push(input);
+      return workspace.read(input);
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "read-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const input = {
+    uri: "memfs:/project/a.abap",
+    range: { start: { line: 0, character: 1 }, end: { line: 1, character: 0 } },
+    version: 4,
+    maxLines: 1,
+    maxChars: 2,
+  };
+  assert.equal(
+    (await client.callTool({ name: "read_document", arguments: input }))
+      .isError,
+    undefined,
+  );
+  assert.deepEqual(calls, [input]);
+  for (const invalid of [
+    { maxLines: 0 },
+    { maxLines: 1001 },
+    { maxChars: 1 },
+    { maxChars: 64001 },
+    { version: 0 },
+    { startLine: 0 },
+    { endLine: 1 },
+  ]) {
+    assert.equal(
+      (
+        await client.callTool({
+          name: "read_document",
+          arguments: { ...input, ...invalid },
+        })
+      ).isError,
+      true,
+    );
+  }
+  assert.equal(calls.length, 1);
+});
