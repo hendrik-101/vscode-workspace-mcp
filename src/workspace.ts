@@ -1523,16 +1523,6 @@ export class WorkspaceService implements WorkspaceApi {
           input.containerName !== (container ?? ""))
       )
         continue;
-      if (!hierarchical) {
-        const start = (item as vscode.SymbolInformation).location.range.start;
-        if (
-          !input.position ||
-          (input.position.line === start.line &&
-            input.position.character === start.character)
-        )
-          unavailable = true;
-        continue;
-      }
       let full: vscode.Range;
       let selection: vscode.Range;
       try {
@@ -1541,7 +1531,9 @@ export class WorkspaceService implements WorkspaceApi {
         // An unusable start cannot prove exclusion and still fails closed below.
         const selectionStart = this.exactPosition(
           document,
-          symbol.selectionRange.start,
+          hierarchical
+            ? symbol.selectionRange.start
+            : (item as vscode.SymbolInformation).location.range.start,
         );
         if (
           input.position &&
@@ -1549,6 +1541,13 @@ export class WorkspaceService implements WorkspaceApi {
             input.position.character !== selectionStart.character)
         )
           continue;
+        if (!hierarchical) {
+          unavailable = true;
+          continue;
+        }
+        if (container !== undefined && typeof container !== "string")
+          throw new Error("Invalid immediate parent name");
+        integer(symbol.kind, "symbol kind");
         selection = this.exactRange(document, symbol.selectionRange);
         full = this.exactRange(document, symbol.range);
         if (

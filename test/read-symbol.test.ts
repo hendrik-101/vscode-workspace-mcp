@@ -550,3 +550,141 @@ test("unusable overload selection starts still prevent a false unique match", as
     );
   }
 });
+
+test("unusable flat starts cannot hide a possible same-name overload in either provider order", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 12)),
+    range(at(0), at(0, 6)),
+  );
+  const parent = symbol(
+    "Parent",
+    range(at(0), at(1, 13)),
+    range(at(0), at(0, 6)),
+    [good],
+  );
+  for (const start of [
+    at(99),
+    undefined,
+    null,
+    at(-1),
+    at(1, 99),
+    at(1, NaN),
+    at(0.5),
+  ]) {
+    for (const reverse of [false, true]) {
+      const f = fixture("method first\nmethod second");
+      const flat = {
+        name: "method",
+        kind: 5,
+        containerName: "Parent",
+        location: { uri: f.document.uri, range: { start, end: at(1, 6) } },
+      };
+      f.provider(async () => (reverse ? [flat, parent] : [parent, flat]));
+      await assert.rejects(
+        f.service.readSymbol({
+          ...request(f),
+          containerName: "Parent",
+          position: at(0),
+        }),
+        { code: "SYMBOL_RANGE_UNAVAILABLE" },
+      );
+    }
+  }
+});
+
+test("valid different flat starts are excluded while potentially selected flats remain unavailable", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 12)),
+    range(at(0), at(0, 6)),
+  );
+  const parent = symbol(
+    "Parent",
+    range(at(0), at(1, 13)),
+    range(at(0), at(0, 6)),
+    [good],
+  );
+  for (const reverse of [false, true]) {
+    const f = fixture("method first\nmethod second");
+    const flat = {
+      name: "method",
+      kind: 5,
+      containerName: "Parent",
+      location: { uri: f.document.uri, range: range(at(1), at(1, 6)) },
+    };
+    f.provider(async () => (reverse ? [flat, parent] : [parent, flat]));
+    const result = await f.service.readSymbol({
+      ...request(f),
+      containerName: "Parent",
+      position: at(0),
+    });
+    assert.equal(result.text, "method first");
+    for (const position of [undefined, at(1)])
+      await assert.rejects(
+        f.service.readSymbol({
+          ...request(f),
+          containerName: "Parent",
+          position,
+        }),
+        {
+          code: "SYMBOL_RANGE_UNAVAILABLE",
+        },
+      );
+  }
+});
+
+test("unusable selected symbol kinds cannot hide behind another same-selector candidate", async () => {
+  const good = symbol();
+  for (const kind of [
+    undefined,
+    "method",
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    const bad = { ...good, kind };
+    for (const items of [[bad], [bad, good], [good, bad]]) {
+      const f = fixture(source, items);
+      await assert.rejects(
+        f.service.readSymbol({ ...request(f), position: at(0, 9) }),
+        {
+          code: "SYMBOL_RANGE_UNAVAILABLE",
+        },
+      );
+    }
+  }
+});
+
+test("unknown nonnegative integer kinds remain readable and excluded candidates need no kind", async () => {
+  const f = fixture("method first\nmethod second", [
+    {
+      ...symbol("method", range(at(0), at(0, 12)), range(at(0), at(0, 6))),
+      kind: 9999,
+    },
+    {
+      ...symbol("method", range(at(1), at(1, 13)), range(at(1), at(1, 6))),
+      kind: undefined,
+    },
+  ]);
+  const result = await f.service.readSymbol({ ...request(f), position: at(0) });
+  assert.equal(result.symbol.kind, 9999);
+  assert.equal(result.text, "method first");
+});
+
+test("malformed immediate parent names cannot become selected container metadata", async () => {
+  for (const name of [["Parent"], { name: "Parent" }, 42, null]) {
+    const parent = {
+      ...symbol("Parent", undefined, undefined, [symbol()]),
+      name,
+    };
+    for (const items of [[parent], [parent, symbol()], [symbol(), parent]]) {
+      const f = fixture(source, items);
+      await assert.rejects(f.service.readSymbol(request(f)), {
+        code: "SYMBOL_RANGE_UNAVAILABLE",
+      });
+    }
+  }
+});
