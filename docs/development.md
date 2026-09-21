@@ -9,6 +9,24 @@
 - Keep a PR focused. Use descriptive commits; never rewrite a shared branch
   without the owner's explicit agreement. Never include customer code or secrets.
 
+## Run checks locally
+
+After `npm ci`, run:
+
+```sh
+npm run check
+npm run format:check
+npm test
+npm run test:vscode
+npm run package
+npm audit --omit=dev --audit-level=high
+```
+
+On headless Linux, use `xvfb-run -a npm run test:vscode`. Add `-- --adt` for
+SAP ADT coexistence checks without a backend. The runner downloads VS Code
+1.137.0; set `VSCODE_VERSION` to test another supported release. Node.js types
+and the bundle target use 24; VS Code API types match the minimum supported version.
+
 ## Checks and code quality
 
 - Keep runtime code small and focused. Use the official MCP SDK rather than a
