@@ -1,23 +1,20 @@
-# Initial bridge implementation plan
+# Initial delivery plan (historical)
 
-Goal: provide a small, safe VFS bridge with installable client configurations.
-Architecture and constraints: see [design](design.md), the binding design brief.
-Stack: TypeScript, VS Code API, official MCP SDK, Node HTTP, Node test runner.
+Scope: a small VFS bridge and installable client configurations. Stack: TypeScript,
+VS Code API, official MCP SDK, Node HTTP and Node test runner.
+Current architecture and gates: [design](design.md), [development](development.md).
 
-1. Establish the feature branch, MIT license, repository rules and CI. Main is
-   seeded only with GitHub's initial repository metadata; all development uses PRs.
-2. Implement WorkspaceService with roots/context/list/read/search/edit/save/
-   diagnostics. Verify scheme, authority and root containment, dirty documents,
-   stale edits, invalid ranges, bounded search and failed save handling.
-3. Implement authenticated internal loopback TLS transport, stdio adapter and schemas. Exercise unauthenticated
-   requests, bad tokens, hostile Host/Origin, invalid payloads and an actual MCP
-   initialization/tools-call round trip before declaring transport complete.
-4. Connect explicit extension commands and user-controlled write approval. Add thin
-   client bundles and document local-host versus hosted ChatGPT deployment.
-5. Build a VSIX, run strict checks and tests, review code and dependency audit.
-   Request a separate Codex Security scan; record blockers honestly if unavailable.
-6. Open a PR, enable repository protection and hosted Codex review where account
-   access permits, and provide the exact manual SAP acceptance steps.
+1. Establish MIT licensing, repository rules, feature branch and CI.
+2. Implement roots/context/list/read/search/edit/save/diagnostics. Test URI identity,
+   containment, dirty buffers, stale versions, exact ranges, bounds and save refusal.
+3. Add authenticated loopback TLS and stdio. Test invalid tokens, Host/Origin and
+   payloads, plus a real MCP initialization/tools-call round trip.
+4. Add explicit lifecycle commands, write approval and thin client bundles;
+   distinguish local from hosted deployment.
+5. Build the VSIX; run checks, tests, dependency review and a separate Codex Security
+   scan. Record unavailable checks as blockers.
+6. Open a PR, configure protection/cloud reviews where account access permits,
+   and supply [manual SAP checks](acceptance.md).
 
-Review focus: URI aliases and traversal; provider errors and symlinks; concurrent
-human edits; resource exhaustion; tokens accidentally entering logs/config commits.
+Review URI aliases, traversal, symlinks, provider errors, concurrent edits,
+resource exhaustion and credential leakage.

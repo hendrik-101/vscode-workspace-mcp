@@ -1,65 +1,59 @@
-# Provider rename and code action previews
+# Rename and code action previews
 
-`preview_rename` calls the fixed `vscode.executeDocumentRenameProvider` API with
-an admitted document URI, current version, zero-based UTF-16 position and new
-name. `preview_code_actions` calls `vscode.executeCodeActionProvider` with the
-URI, version, selection and `quickfix` or `refactor` kind. Up to 20 actions are
-resolved. Neither tool edits, saves, activates backend objects or executes a
-command returned by a provider. They work while bridge writes are disabled.
+| Tool                   | Fixed VS Code command                  | Inputs                                                              |
+| ---------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| `preview_rename`       | `vscode.executeDocumentRenameProvider` | Admitted URI, current version, zero-based UTF-16 position, new name |
+| `preview_code_actions` | `vscode.executeCodeActionProvider`     | URI, version, selection, `quickfix` or `refactor` kind              |
 
-The result reports provider-derived text edits across multiple admitted files,
-including each live buffer's URI, version and dirty state. All visible targets
-must pass containment, symlink, size, exact-range and overlap validation; one
-unsafe target rejects the whole request. A rename is never filtered into a
-smaller edit. Changes to any observed target during the request reject the
-preview, including changes during the provider call and same-version document
-replacement after close/reopen, even when the provider first opened the target
-during the query. Dirty-state-only changes are allowed; returned
-dirty states are refreshed after all authorization finishes. Roots and versions are
-checked again after all asynchronous work. Cancellation and stopped sessions
-also discard pending results. Change observers are released immediately on
-cancellation or session stop, even when a provider never settles. Tracking is
-capped at 1000 changed or closed document URIs and 256 KiB of URI text; overflow rejects
-the preview. The initial version snapshot is also bounded to 1000 open documents
-and 256 KiB of URI text, checked before dispatching a provider.
+Resolve at most 20 actions. Both tools work with writes disabled: neither edits,
+saves, activates objects nor executes commands returned by providers.
 
-## Application limitation
+## Validation
+
+Previews include visible text edits with each buffer's URI, version and dirty
+state. Every visible target must pass containment, symlink, size, exact-range and
+overlap checks; one unsafe target rejects the request. Never filter a rename into
+a smaller edit.
+
+Reject observed target changes during the request, including provider calls,
+close/reopen replacements and targets first opened during querying. Refresh dirty
+states after authorization; dirty-only changes are allowed. Recheck roots/versions
+after asynchronous work. Cancellation/stop discards results and immediately removes
+observers even if providers never settle.
+
+Initial snapshots and change/closure tracking each allow 1,000 document URIs and
+256 KiB URI text. Snapshot overflow rejects before provider dispatch; tracking
+overflow rejects the preview.
+
+## Application is unsupported
 
 Every preview reports `supported: false`, `applicable: false`, `complete: false`
-and a reason. These fields describe **automatic application of the provider
-operation**, not whether text can be previewed. `OPAQUE_WORKSPACE_EDIT` means
-public `WorkspaceEdit.entries()` exposes only text edits, while file, notebook,
-snippet or metadata operations may also exist. `size`, `get` and `has` cannot
-prove their absence. Even apparently text-only, single-document operations
-cannot safely be certified as complete through these public APIs. We neither
-inspect private VS Code fields nor apply a reconstructed text-only projection.
+and a reason. These describe automatic application, not text-preview availability:
 
-`COMMAND_REQUIRED` additionally marks a legacy command or code action with a
-command; its identifier and arguments are never returned or executed. `DISABLED`
-marks a disabled action. `NO_EDIT` means no resolved edit was returned; the action
-may be unresolved, command-only, unavailable or have no changes. Empty rename or
-action results do not establish whether a provider is installed. Provider error
-messages are redacted by the ordinary MCP error boundary.
+| Reason                  | Meaning                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPAQUE_WORKSPACE_EDIT` | Public `WorkspaceEdit.entries()` reveals only text edits; file, notebook, snippet or metadata operations may remain hidden. `size`, `get` and `has` cannot prove absence. |
+| `COMMAND_REQUIRED`      | Legacy command or action requires a command; identifiers/arguments are neither exposed nor executed.                                                                      |
+| `DISABLED`              | Provider disabled the action.                                                                                                                                             |
+| `NO_EDIT`               | No resolved edit; unresolved, command-only, unavailable or unchanged operations are possible.                                                                             |
 
-To perform a rename or action, use VS Code's native Rename or Quick Fix/Refactor
-UI and inspect its complete changes there. Do not copy these incomplete previews
-into `edit_document` as a substitute for applying the complete provider operation.
-No application tool or `apply` parameter is offered, so there is no path around
-write approval, Trust or Auto Save policy. Native UI handoff is not automated.
+Even single-document, apparently text-only operations cannot be certified complete.
+Do not inspect private fields or apply reconstructed text-only projections. Use
+VS Code's native Rename/Quick Fix/Refactor UI and inspect the complete operation;
+never copy an incomplete preview into `edit_document` as a substitute.
+There is no apply tool/parameter, automated UI handoff or write/Trust/Auto Save bypass.
 
-## Bounds and scope
+Empty results do not prove provider availability. Provider errors use the normal
+redacted MCP boundary. Previews have no proposal IDs/apply tokens; request again
+after changes. Providers may leave actions unresolved without edits.
 
-One request returns at most 20 actions, 20 document entries across all actions, 100 text edits
-across all returned actions, and 256 KiB of replacement text and repeated edit
-URIs. Titles are capped at 512 characters and kinds at 256. Excess action count
-sets `truncated`; other overflow rejects the request instead of returning a
-partial operation. Text target documents retain the ordinary 1 MiB limit.
-Previews are immediate observations with no cached proposal IDs or apply tokens.
-Re-request after any change. Provider implementations control resolution and
-may return no edit for an unresolved action.
+## Limits
 
-These are generic provider APIs, with synthetic non-file integration tests.
-No SAP backend, transports, locks or activation behavior is claimed as verified.
+Per request: 20 actions, 20 document entries, 100 text edits, 256 KiB replacement
+text plus repeated edit URIs; titles 512 characters, kinds 256, target text 1 MiB.
+Only excess action count sets `truncated`; other overflow rejects the request.
 
-References: [VS Code built-in provider commands](https://code.visualstudio.com/api/references/commands)
-and [public WorkspaceEdit API](https://code.visualstudio.com/api/references/vscode-api#WorkspaceEdit).
+Synthetic non-file provider tests do not verify SAP backends, transports, locks
+or activation; see [acceptance](acceptance.md).
+API references: [provider commands](https://code.visualstudio.com/api/references/commands),
+[WorkspaceEdit](https://code.visualstudio.com/api/references/vscode-api#WorkspaceEdit).

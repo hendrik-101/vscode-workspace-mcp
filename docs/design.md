@@ -1,70 +1,66 @@
-# Workspace MCP: initial design
+# Design
 
-Build a small MIT-licensed VS Code extension that exposes the current window's
-workspace and live documents to any MCP client, including non-file URI schemes.
-SAP's ADT extension and ADT MCP server remain separate, installed products.
-No SAP backend credentials, source code or proprietary SAP extension code belong
-in this repository. This is an independent community project, not an SAP product.
+An MIT-licensed VS Code extension exposes one window's workspace and live documents
+to MCP clients, including virtual URI schemes. SAP ADT and its MCP server remain
+separate products. This independent community project contains no SAP credentials,
+private sources or proprietary extension code.
 
-## Boundaries
+## Components
 
-- `workspace.ts`: VS Code APIs and document semantics. Preserve full URI identity;
-  never convert workspace URIs into OS paths. Read live buffers, apply versioned
-  edits, and save only through a separate operation.
-- `server.ts`: the official MCP TypeScript SDK, input schemas, bounded requests,
-  internal loopback HTTPS, bearer token and rejection of browser Origins.
-- `tls.ts`: persistent server identity in SecretStorage, generated through native
-  WebCrypto and pinned certificate library; explicit replacement only.
-- `stdio.ts`: MCP stdio adapter with dedicated TLS certificate trust, loopback-only
-  destination, no redirects and no external requests. Native clients use stdio.
-- `extension.ts`: explicit start/stop, per-window lifecycle and connection details.
-  Writes follow a user-only deny/allow/ask policy (default ask); no autostart.
-- Client packages: common workflows with thin Claude Code and Codex manifests;
-  stdio MCP settings for Codex IDE and ChatGPT desktop on the same host.
+| Component       | Responsibility                                                             |
+| --------------- | -------------------------------------------------------------------------- |
+| `workspace.ts`  | VS Code URIs, live buffers, versioned edits and explicit save              |
+| `server.ts`     | Official MCP SDK, schemas, request bounds and authenticated loopback HTTPS |
+| `tls.ts`        | SecretStorage identity, native WebCrypto and pinned certificate library    |
+| `stdio.ts`      | Client adapter; dedicated certificate trust, loopback only, no redirects   |
+| `adapter.ts`    | Stable extension-owned adapter installation; no workspace resources        |
+| `extension.ts`  | Explicit start/stop, window lifecycle, connection details and write policy |
+| Client packages | Shared workflow, thin Claude/Codex manifests and stdio settings            |
 
-Tools: roots, editor context, directory listing, text reading, literal text search,
-versioned text edits, explicit save and diagnostics. No shell, terminal, arbitrary
-VS Code commands, file deletion, backend activation or remote listener in v0.1.
+No autostart. Writes use user-only `deny`/`allow`/`ask` policy, default `ask`.
+Workspace operations use `workspace.fs`, `TextDocument` and `WorkspaceEdit`, never
+OS paths. Search requires neither a search provider nor local ripgrep. Saving is
+separate from editing and never activates ABAP objects; SAP save hooks may prompt
+for locks/transports.
 
-## Security contract
+## Security boundary
 
-Bind only to 127.0.0.1 on the configured fixed port (default 39117). Store a
-256-bit random bearer token and TLS server identity in VS Code SecretStorage, reused
-until explicit rotation. The adapter pins the supplied certificate before sending
-credentials. Another local user taking the port cannot impersonate the bridge. Authorize every request before MCP parsing, validate Host,
-reject Origin, cap request size/concurrency and close transports on completion.
-The token grants access to this window's admitted workspace roots only. Recheck
-roots and Workspace Trust for operations. Reject traversal and symlinks. A hostile
-filesystem provider is outside the boundary: installed VS Code extensions already
-run with user privileges. No telemetry, analytics or external network requests in product code. Only the
-stdio adapter may connect to the loopback listener, with verified server identity.
+Listen only on `127.0.0.1`, fixed configurable port (default `39117`). Persist a
+random 256-bit token and TLS identity in SecretStorage until explicit rotation.
+The adapter pins the certificate before sending credentials, preventing another
+local port owner from impersonating the bridge.
 
-Search is bounded and reports incomplete results. No assumptions about a search
-provider or local ripgrep. File operations use workspace.fs / TextDocument /
-WorkspaceEdit. Writes never silently save or activate ABAP objects. SAP save hooks
-may still prompt for locks/transports; users must verify this on their own backend.
+Authorize before MCP parsing; validate Host, reject Origin, bound request size
+and concurrency, and close completed transports. Recheck current roots and
+Workspace Trust; reject traversal and symlinks. Tokens authorize only admitted
+roots in the connected window. Installed filesystem providers are trusted VS Code
+extensions, outside this boundary.
+
+No telemetry, analytics, external requests, remote listener, shell, terminal,
+arbitrary commands, file deletion or backend activation. Only the stdio adapter
+initiates product connections, to the authenticated loopback listener.
+See [SECURITY.md](../SECURITY.md) for threats and reporting.
+
+## IDE operations
+
+Fixed VS Code APIs provide document display, symbols, diffs, formatting,
+[navigation](navigation.md), [diagnostics](diagnostics.md) and
+[refactoring previews](refactoring.md). Registered providers determine support;
+there is no direct LSP connection or ABAP-specific protocol.
+
+Formatting uses the normal edit validator and mutation path. Symbol locations
+are bounded and independently authorized. Proposal diffs use a bounded read-only
+in-memory content provider disposed on stop. Cancellation is checked before UI
+dispatch; dispatched UI operations and edits cannot be rolled back on disconnect.
+[Search](search.md) reports bounds and incomplete results explicitly.
 
 ## Verification and delivery
 
-Use an in-memory FileSystemProvider with a non-file scheme in a real VS Code
-extension host. Cover live unsaved text, write refusal, version conflicts, search,
-save and root containment. HTTP tests use real MCP clients and sockets. SAP ADT
-installation without a backend can verify coexistence only, not backend behavior.
+Real extension-host tests use an in-memory non-file FileSystemProvider to cover
+unsaved text, write refusal, version conflicts, search, save and containment.
+Transport tests use real MCP clients and sockets. See [acceptance](acceptance.md)
+for SAP coexistence versus backend/client validation.
 
-The first delivery is an unmerged PR and installable VSIX. Marketplace publication
-and a production-ready claim are explicitly out of scope. GitHub-hosted CI builds,
-tests and packages without publishing. Cloud Codex reviews and Codex Security
-scans are separate checks, never represented as passed without an actual result.
-
-## Generic IDE tools
-
-The workspace service exposes `show_document`, workspace/document symbol lookup,
-visual diffs and formatting through fixed VS Code APIs. These tools retain full
-URIs and dispatch to registered providers, with no direct LSP connection or
-ABAP-specific protocol. There is no generic command-execution escape hatch.
-Formatting reuses the ordinary edit validator and mutation path. Symbol output
-is bounded and independently authorized before returning locations. Proposal
-diffs use a bounded read-only in-memory content provider owned by the running
-bridge; stopping the connection disposes it. UI operations check request
-cancellation before being handed to VS Code. Already dispatched UI operations,
-like already dispatched edits, cannot be rolled back on disconnect.
+CI builds, tests and packages a VSIX without publishing. Initial delivery is an
+unmerged PR, not a production-readiness claim. Review, scan and release gates are
+in [development rules](development.md).
