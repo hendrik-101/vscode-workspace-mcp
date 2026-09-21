@@ -869,6 +869,7 @@ async function ideTools(
     try {
       const repeated = await service.workspaceSymbols({
         query: "mcp-repeated-symbol",
+        maxResults: 100,
       });
       assert.equal(repeated.symbols.length, 100);
       assert.equal(repeated.truncated, false);
@@ -894,6 +895,7 @@ async function ideTools(
     );
     const bounded = await service.documentSymbols({
       uri: symbolTarget.toString(),
+      maxResults: 100,
     });
     assert.equal(bounded.symbols.length, 100);
     assert.equal(bounded.omitted, 0);
