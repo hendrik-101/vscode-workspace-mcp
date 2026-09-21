@@ -32,6 +32,10 @@ resource-scoped editor settings supply the indentation defaults. Provider
 selection follows VS Code's execute-provider commands and does not promise the
 same formatter-picker behavior as the interactive Format Document command.
 Language-specific formatting remains the installed provider's responsibility.
+`apply: true` omits edits by default and returns document state, `applied` and
+`editCount`. Set `includeEdits: true` to include the complete edits, or false for
+a preview summary. Full previews retain the existing 1 MiB replacement-text
+limit; see [formatting response size](formatting.md).
 `apply: true` uses the same version, write-approval, trust, Auto Save and
 cancellation checks as `edit_document`; it never implicitly saves. Preview
 validates edit ranges, overlap and size too. Empty edits may mean the text is

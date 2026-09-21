@@ -688,3 +688,160 @@ test("malformed immediate parent names cannot become selected container metadata
     }
   }
 });
+
+test("unnamed nested parents never establish top-level or named-container membership", async () => {
+  for (const name of [undefined, "", null, ["Known"]]) {
+    const unknown = {
+      ...symbol("Parent", undefined, undefined, [symbol()]),
+      name,
+    };
+    for (const containerName of [undefined, "", "Known"]) {
+      const known =
+        containerName === "Known"
+          ? symbol("Known", undefined, undefined, [symbol()])
+          : symbol();
+      for (const items of [[unknown], [unknown, known], [known, unknown]]) {
+        const f = fixture(source, items);
+        await assert.rejects(
+          f.service.readSymbol({ ...request(f), containerName }),
+          {
+            code: "SYMBOL_RANGE_UNAVAILABLE",
+          },
+        );
+      }
+    }
+  }
+});
+
+test("the empty container selector still accepts true top-level symbols only", async () => {
+  const f = fixture(source, [
+    symbol(),
+    symbol("Known", undefined, undefined, [symbol()]),
+  ]);
+  const result = await f.service.readSymbol({
+    ...request(f),
+    containerName: "",
+  });
+  assert.equal(result.text, "function method() {\n  work();\n}");
+  assert.equal(result.symbol.containerName, undefined);
+  f.provider(async () => [symbol("Known", undefined, undefined, [symbol()])]);
+  await assert.rejects(
+    f.service.readSymbol({ ...request(f), containerName: "" }),
+    {
+      code: "SYMBOL_NOT_FOUND",
+    },
+  );
+});
+
+test("a usable different identifier start can exclude a child with unknown parent identity", async () => {
+  const f = fixture("method first\nmethod second", [
+    symbol("method", range(at(0), at(0, 12)), range(at(0), at(0, 6))),
+    {
+      ...symbol("Parent", undefined, undefined, [
+        symbol("method", range(at(1), at(1, 13)), range(at(1), at(1, 6))),
+      ]),
+      name: undefined,
+    },
+  ]);
+  const result = await f.service.readSymbol({
+    ...request(f),
+    containerName: "",
+    position: at(0),
+  });
+  assert.equal(result.text, "method first");
+});
+
+for (const [endpoint, full, selection] of [
+  ["full start", range(at(0, 2), at(0, 8)), range(at(0, 3), at(0, 5))],
+  ["full end", range(at(0), at(0, 6)), range(at(0, 3), at(0, 5))],
+  ["selection start", range(at(0), at(0, 8)), range(at(0, 2), at(0, 5))],
+  ["selection end", range(at(0), at(0, 8)), range(at(0, 3), at(0, 6))],
+] as const) {
+  test(`provider ${endpoint} splitting a surrogate pair reports unavailable even on continuation`, async () => {
+    const f = fixture("a😀bc😀d", [symbol("method", full, selection)]);
+    for (const startPosition of [undefined, at(0, 3)])
+      await assert.rejects(
+        f.service.readSymbol({ ...request(f), startPosition }),
+        {
+          code: "SYMBOL_RANGE_UNAVAILABLE",
+        },
+      );
+  });
+}
+
+test("surrogate-interior provider starts cannot exclude flat or hierarchical possible overloads", async () => {
+  const good = symbol(
+    "method",
+    range(at(0), at(0, 8)),
+    range(at(0, 3), at(0, 5)),
+  );
+  for (const flat of [false, true]) {
+    for (const reverse of [false, true]) {
+      const f = fixture("a😀bc😀d");
+      const bad = flat
+        ? {
+            name: "method",
+            kind: 5,
+            containerName: "",
+            location: { uri: f.document.uri, range: range(at(0, 2), at(0, 5)) },
+          }
+        : symbol("method", range(at(0), at(0, 8)), range(at(0, 2), at(0, 5)));
+      f.provider(async () => (reverse ? [bad, good] : [good, bad]));
+      await assert.rejects(
+        f.service.readSymbol({ ...request(f), position: at(0, 3) }),
+        {
+          code: "SYMBOL_RANGE_UNAVAILABLE",
+        },
+      );
+    }
+  }
+});
+
+test("valid provider Unicode ranges remain readable while caller continuation splits are invalid arguments", async () => {
+  const f = fixture("a😀bc😀d", [
+    symbol("method", range(at(0), at(0, 8)), range(at(0, 3), at(0, 5))),
+  ]);
+  const result = await f.service.readSymbol(request(f));
+  assert.equal(result.text, "a😀bc😀d");
+  for (const startPosition of [at(0, 2), at(0, 6)])
+    await assert.rejects(
+      f.service.readSymbol({ ...request(f), startPosition }),
+      {
+        code: "INVALID_ARGUMENT",
+      },
+    );
+  assert.equal(
+    (await f.service.readSymbol({ ...request(f), startPosition: at(0, 3) }))
+      .text,
+    "bc😀d",
+  );
+});
+
+test("unknown flat container metadata cannot rule out a named-container match", async () => {
+  for (const containerName of [undefined, null, ["Known"]]) {
+    const f = fixture(source);
+    const flat = {
+      name: "method",
+      kind: 5,
+      containerName,
+      location: { uri: f.document.uri, range: range(at(0, 9), at(0, 15)) },
+    };
+    const known = symbol("Known", undefined, undefined, [symbol()]);
+    for (const items of [
+      [flat, known],
+      [known, flat],
+    ]) {
+      f.provider(async () => items);
+      await assert.rejects(
+        f.service.readSymbol({
+          ...request(f),
+          containerName: "Known",
+          position: at(0, 9),
+        }),
+        {
+          code: "SYMBOL_RANGE_UNAVAILABLE",
+        },
+      );
+    }
+  }
+});

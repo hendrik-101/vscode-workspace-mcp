@@ -1,4 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
 import {
@@ -19,6 +25,7 @@ import {
   type WaitDiagnosticsResult,
   type DocumentState,
   type EditInput,
+  type ListInput,
   type ListResult,
   type Position,
   type ReadInput,
@@ -36,6 +43,8 @@ import {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LIST_ENTRIES = 1000;
+const MAX_LIST_OUTPUT = 16_000;
+const MAX_SEARCH_OUTPUT = 24_000;
 const MAX_SEARCH_FILES = 200;
 const MAX_SEARCH_ENTRIES = 2000;
 const MAX_SEARCH_DEPTH = 12;
@@ -216,6 +225,13 @@ function parseUri(value: string): vscode.Uri {
   return uri;
 }
 
+function splitsSurrogate(text: string, offset: number): boolean {
+  return (
+    /[\ud800-\udbff]/.test(text.charAt(offset - 1)) &&
+    /[\udc00-\udfff]/.test(text.charAt(offset))
+  );
+}
+
 function position(value: vscode.Position): Position {
   return { line: value.line, character: value.character };
 }
@@ -252,6 +268,7 @@ export class WorkspaceService implements WorkspaceApi {
   private readonly navigationObservers = new Set<vscode.Disposable>();
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
   private readonly searchCursors = new Map<string, SearchContinuation>();
+  private listCursorKey: Buffer | undefined;
   private searchRoots: vscode.Disposable | undefined;
   private searchGeneration = 0;
   private activeSearches = 0;
@@ -811,7 +828,12 @@ export class WorkspaceService implements WorkspaceApi {
           signal,
         )
       : state(document);
-    return { ...final, edits, applied };
+    return {
+      ...final,
+      applied,
+      editCount: edits.length,
+      ...((input.includeEdits ?? !input.apply) ? { edits } : {}),
+    };
   }
 
   /** Preview only: public WorkspaceEdit.entries() cannot enumerate file/notebook operations. */
@@ -1278,26 +1300,90 @@ export class WorkspaceService implements WorkspaceApi {
     return result;
   }
 
-  /**
-   * Lists a workspace directory without following symbolic links.
-   * The result counts blocked entries and reports whether the entry limit was reached.
-   */
-  async list({ uri: value }: UriInput): Promise<ListResult> {
+  /** Stateless pages over a bounded, fingerprinted provider listing. */
+  async list({
+    uri: value,
+    maxEntries = 50,
+    cursor,
+  }: ListInput): Promise<ListResult> {
+    integer(maxEntries, "maxEntries", 1);
+    if (maxEntries > MAX_RESULTS)
+      fail("INVALID_ARGUMENT", "maxEntries must be at most 100.");
     const uri = parseUri(value);
+    const roots = () =>
+      JSON.stringify(
+        (vscode.workspace.workspaceFolders ?? []).map((root) =>
+          root.uri.toString(),
+        ),
+      );
+    const rootContext = roots();
     const stat = await this.authorize(uri);
     if ((stat.type & vscode.FileType.Directory) === 0)
       fail("NOT_A_DIRECTORY", "URI must identify a directory.");
     const children = await vscode.workspace.fs.readDirectory(uri);
     this.currentRoot(uri);
+    if (roots() !== rootContext)
+      fail("INVALID_ARGUMENT", "Workspace roots changed; restart the listing.");
+    const scanned = children.slice(0, MAX_LIST_ENTRIES);
+    const listingHash = createHash("sha256").update(
+      JSON.stringify([
+        uri.toString(),
+        maxEntries,
+        rootContext,
+        children.length,
+      ]),
+    );
+    // Hash one bounded representation at a time, never stringify provider arrays.
+    // Always-omitted oversized names are represented by length/type/position only.
+    for (const [name, type] of scanned)
+      listingHash.update(
+        JSON.stringify([
+          name.length > MAX_SEARCH_URI ? null : name,
+          name.length,
+          type,
+        ]),
+      );
+    const fingerprint = listingHash.digest("hex");
+    const key = (this.listCursorKey ??= randomBytes(32));
+    const tag = (position: string) =>
+      createHmac("sha256", key).update(`${fingerprint}:${position}`).digest();
+    let offset = 0;
+    if (cursor !== undefined) {
+      const parts =
+        typeof cursor === "string" && /^(\d{1,4}):([a-f0-9]{64})$/.exec(cursor);
+      if (
+        !parts ||
+        !timingSafeEqual(Buffer.from(parts[2]!, "hex"), tag(parts[1]!)) ||
+        Number(parts[1]) >= scanned.length
+      )
+        fail(
+          "INVALID_ARGUMENT",
+          "Listing cursor is invalid or the directory changed; restart the listing.",
+        );
+      offset = Number(parts[1]);
+    }
     const result: ListResult = {
       uri: uri.toString(),
       entries: [],
-      truncated: children.length > MAX_LIST_ENTRIES,
+      truncated: false,
       blockedEntries: 0,
+      omittedEntries: children.length - scanned.length,
+      incomplete: false,
     };
-    for (const [name, type] of children.slice(0, MAX_LIST_ENTRIES)) {
+    // Reserve cursor and count metadata before selecting entries.
+    const budget = MAX_LIST_OUTPUT - JSON.stringify({ result }).length - 200;
+    if (budget < 0)
+      fail("LIMIT_EXCEEDED", "Directory URI exceeds the response budget.");
+    let used = 0;
+    let next: number | undefined;
+    for (let index = 0; index < scanned.length; index++) {
+      const [name, type] = scanned[index]!;
       if ((type & vscode.FileType.SymbolicLink) !== 0) {
         result.blockedEntries++;
+        continue;
+      }
+      if (name.length > MAX_SEARCH_URI) {
+        result.omittedEntries!++;
         continue;
       }
       let child: vscode.Uri;
@@ -1312,7 +1398,7 @@ export class WorkspaceService implements WorkspaceApi {
         result.blockedEntries++;
         continue;
       }
-      result.entries.push({
+      const entry: ListResult["entries"][number] = {
         name,
         uri: child.toString(),
         kind:
@@ -1321,8 +1407,24 @@ export class WorkspaceService implements WorkspaceApi {
             : (type & vscode.FileType.File) !== 0
               ? "file"
               : "unknown",
-      });
+      };
+      const size = JSON.stringify(entry).length + 1;
+      if (size > budget) {
+        result.omittedEntries!++;
+        continue;
+      }
+      if (index < offset || next !== undefined) continue;
+      if (result.entries.length >= maxEntries || used + size > budget) {
+        next = index;
+        continue;
+      }
+      result.entries.push(entry);
+      used += size;
     }
+    if (next !== undefined)
+      result.nextCursor = `${next}:${tag(String(next)).toString("hex")}`;
+    result.truncated = next !== undefined || result.omittedEntries! > 0;
+    result.incomplete = result.truncated || result.blockedEntries > 0;
     return result;
   }
 
@@ -1399,10 +1501,7 @@ export class WorkspaceService implements WorkspaceApi {
     }
     const start = document.offsetAt(wanted.start);
     const end = document.offsetAt(wanted.end);
-    const splitsSurrogate = (offset: number) =>
-      /[\ud800-\udbff]/.test(original.charAt(offset - 1)) &&
-      /[\udc00-\udfff]/.test(original.charAt(offset));
-    if (splitsSurrogate(start) || splitsSurrogate(end))
+    if (splitsSurrogate(original, start) || splitsSurrogate(original, end))
       fail(
         "INVALID_ARGUMENT",
         "Read positions must not split a surrogate pair.",
@@ -1417,7 +1516,7 @@ export class WorkspaceService implements WorkspaceApi {
     );
     // VS Code positions cannot represent the middle of CRLF; keep both units together.
     if (
-      splitsSurrogate(finish) ||
+      splitsSurrogate(original, finish) ||
       (original[finish - 1] === "\r" && original[finish] === "\n")
     )
       finish--;
@@ -1464,6 +1563,7 @@ export class WorkspaceService implements WorkspaceApi {
     const uri = parseUri(input.uri);
     const document = await this.document(uri, signal);
     this.expected(document, input.version);
+    const original = this.text(document);
     if (input.position !== undefined)
       this.exactPosition(document, input.position);
     const current = () => {
@@ -1490,7 +1590,8 @@ export class WorkspaceService implements WorkspaceApi {
       items: ProviderSymbol[];
       index: number;
       container?: string;
-    }> = [{ items: items ?? [], index: 0 }];
+      nested: boolean;
+    }> = [{ items: items ?? [], index: 0, nested: false }];
     let visited = 0;
     let matches = 0;
     let unavailable = false;
@@ -1514,12 +1615,22 @@ export class WorkspaceService implements WorkspaceApi {
       const hierarchical = "selectionRange" in item || "children" in item;
       const container = hierarchical
         ? frame.container
-        : (item as vscode.SymbolInformation).containerName || undefined;
+        : (item as vscode.SymbolInformation).containerName;
+      const containerKnown = hierarchical
+        ? !frame.nested ||
+          (typeof container === "string" && container.length > 0)
+        : typeof container === "string";
       if ("children" in item && item.children?.length)
-        stack.push({ items: item.children, index: 0, container: item.name });
+        stack.push({
+          items: item.children,
+          index: 0,
+          container: item.name,
+          nested: true,
+        });
       if (
         item.name !== input.name ||
-        (input.containerName !== undefined &&
+        (containerKnown &&
+          input.containerName !== undefined &&
           input.containerName !== (container ?? ""))
       )
         continue;
@@ -1535,21 +1646,26 @@ export class WorkspaceService implements WorkspaceApi {
             ? symbol.selectionRange.start
             : (item as vscode.SymbolInformation).location.range.start,
         );
+        if (splitsSurrogate(original, document.offsetAt(selectionStart)))
+          throw new Error("Provider selection start splits a surrogate pair");
         if (
           input.position &&
           (input.position.line !== selectionStart.line ||
             input.position.character !== selectionStart.character)
         )
           continue;
-        if (!hierarchical) {
+        if (!hierarchical || !containerKnown) {
           unavailable = true;
           continue;
         }
-        if (container !== undefined && typeof container !== "string")
-          throw new Error("Invalid immediate parent name");
         integer(symbol.kind, "symbol kind");
         selection = this.exactRange(document, symbol.selectionRange);
         full = this.exactRange(document, symbol.range);
+        // The selection start was checked before exclusion; validate every remaining endpoint.
+        for (const endpoint of [full.start, full.end, selection.end]) {
+          if (splitsSurrogate(original, document.offsetAt(endpoint)))
+            throw new Error("Provider range splits a surrogate pair");
+        }
         if (
           full.start.isAfter(selection.start) ||
           selection.end.isAfter(full.end)
@@ -1626,7 +1742,7 @@ export class WorkspaceService implements WorkspaceApi {
     const {
       uri: value,
       query,
-      maxResults = MAX_RESULTS,
+      maxResults = 20,
       cursor,
       include = [],
       exclude = [],
@@ -1774,6 +1890,26 @@ export class WorkspaceService implements WorkspaceApi {
         consistency: "live",
         limits: [],
       };
+      // Reserve final cursor/limit metadata; all variable text is measured as JSON.
+      const outputFits = () =>
+        JSON.stringify({ result }).length <= MAX_SEARCH_OUTPUT - 512;
+      if (!outputFits())
+        fail(
+          "LIMIT_EXCEEDED",
+          "URI and query exceed the search response budget.",
+        );
+      const addError = (error: SearchResult["errors"][number]) => {
+        result.errors.push(error);
+        if (result.errors.length > MAX_RESULTS || !outputFits()) {
+          result.errors.pop();
+          state.limits.add("errors");
+        }
+      };
+      const outputError = new WorkspaceError(
+        "LIMIT_EXCEEDED",
+        "URI and query leave no room for a search match.",
+      );
+      let outputFull = false;
       let bytes = 0;
       let entries = 0;
       let files = 0;
@@ -1790,6 +1926,7 @@ export class WorkspaceService implements WorkspaceApi {
           break;
         }
         if (
+          outputFull ||
           entries >= MAX_SEARCH_ENTRIES ||
           files >= MAX_SEARCH_FILES ||
           bytes >= MAX_SEARCH_BYTES ||
@@ -1825,11 +1962,10 @@ export class WorkspaceService implements WorkspaceApi {
                 enqueue({ uri: child, depth: item.depth + 1, type });
               } catch {
                 state.incomplete = true;
-                if (result.errors.length < MAX_RESULTS)
-                  result.errors.push({
-                    uri: item.uri.toString(),
-                    message: "Unsafe provider entry name skipped.",
-                  });
+                addError({
+                  uri: item.uri.toString(),
+                  message: "Unsafe provider entry name skipped.",
+                });
               }
             }
           } else if ((item.type & vscode.FileType.File) !== 0) {
@@ -1903,7 +2039,7 @@ export class WorkspaceService implements WorkspaceApi {
                     text: document.lineAt(line).text.slice(0, MAX_PREVIEW),
                   });
               }
-              result.matches.push({
+              const candidate: SearchResult["matches"][number] = {
                 uri: item.uri.toString(),
                 line: at.line,
                 character: at.character,
@@ -1914,7 +2050,39 @@ export class WorkspaceService implements WorkspaceApi {
                     at.character + MAX_PREVIEW,
                   ),
                 ...(contextLines ? { context } : {}),
-              });
+              };
+              result.matches.push(candidate);
+              if (!outputFits() && result.matches.length === 1) {
+                while (!outputFits() && result.errors.length) {
+                  result.errors.pop();
+                  state.limits.add("errors");
+                }
+                // Keep a full URI and position even for long paths: trim optional previews.
+                while (
+                  !outputFits() &&
+                  (candidate.text.length || candidate.context?.length)
+                ) {
+                  candidate.previewTruncated = true;
+                  if (candidate.context?.length) candidate.context.pop();
+                  else
+                    candidate.text = candidate.text.slice(
+                      0,
+                      Math.floor(candidate.text.length / 2),
+                    );
+                }
+                if (!outputFits()) throw outputError;
+              }
+              if (!outputFits()) {
+                result.matches.pop();
+                enqueue({
+                  ...item,
+                  offset,
+                  version: document.version,
+                  contentHash,
+                });
+                outputFull = true;
+                break;
+              }
             }
           } else fail("NOT_A_FILE", "Entry has an unsupported file type.");
         } catch (error) {
@@ -1925,20 +2093,19 @@ export class WorkspaceService implements WorkspaceApi {
             break;
           }
           if (
-            error instanceof WorkspaceError &&
-            error.code === "SEARCH_INVALIDATED"
+            error === outputError ||
+            (error instanceof WorkspaceError &&
+              error.code === "SEARCH_INVALIDATED")
           )
             throw error;
           state.incomplete = true;
-          if (result.errors.length < MAX_RESULTS)
-            result.errors.push({
-              uri: item.uri.toString(),
-              message:
-                error instanceof WorkspaceError
-                  ? error.message
-                  : "Entry could not be read by the workspace filesystem provider.",
-            });
-          else state.limits.add("errors");
+          addError({
+            uri: item.uri.toString(),
+            message:
+              error instanceof WorkspaceError
+                ? error.message
+                : "Entry could not be read by the workspace filesystem provider.",
+          });
         }
       }
       checkpoint();

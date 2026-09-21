@@ -3,8 +3,12 @@
 `read_symbol` reads the provider-reported full body of one symbol from an
 admitted live document, without editing, showing or saving. Required inputs are
 `uri`, `version`, and exact `name` (1–4096 UTF-16 code units). Optional
-`containerName` selects the immediate parent; `position` must equal the
-identifier's `selectionRange.start`, allowing overload disambiguation. All
+`containerName` selects the immediate parent; an empty string selects actual
+top-level symbols. Traversal retains parent provenance: a nested symbol with a
+missing, empty or malformed parent name cannot be treated as top-level or ruled
+out by a named-container filter. If its other selectors may match, resolution
+fails with `SYMBOL_RANGE_UNAVAILABLE`. `position` must equal the identifier's
+`selectionRange.start`, allowing overload disambiguation. All
 positions are zero-based UTF-16. Selectors are scoped to the requested URI.
 
 Every call executes `vscode.executeDocumentSymbolProvider` directly and inspects
@@ -14,7 +18,10 @@ found. Never choose the first duplicate. `SYMBOL_NOT_FOUND` means no matching
 provider result, not proof that no provider exists; `SYMBOL_AMBIGUOUS` requires a
 more precise selector. Flat `SymbolInformation` locations cannot establish a
 body: matching flat results, malformed full ranges, and invalid or uncontained
-selection ranges fail with `SYMBOL_RANGE_UNAVAILABLE`. Provider errors remain
+selection ranges fail with `SYMBOL_RANGE_UNAVAILABLE`. All four full/selection
+range endpoints must lie on Unicode scalar boundaries; provider positions inside
+a surrogate pair are unavailable, including on continuation calls. An unusable
+provider identifier start cannot rule out a possible overload. Provider errors remain
 redacted by the MCP boundary. VS Code normalizes flat results into symbols whose
 full and selection ranges are identical. This indistinguishable shape is also
 rejected, including genuine symbols with identical ranges. Use `read_document`
@@ -27,7 +34,8 @@ and replacement instances with `VERSION_CONFLICT`. Recheck cancellation,
 workspace admission and bridge activity before dispatch and before responding.
 
 Optional `startPosition` resumes within the selected full range, including its
-end for an empty final page. It cannot precede the body or extend beyond its end.
+end for an empty final page. It cannot precede the body, extend beyond its end, or
+split a surrogate pair; invalid caller positions return `INVALID_ARGUMENT`.
 `maxLines` and `maxChars` use the same limits and defaults as
 [bounded document reads](reading.md). The implementation calls
 `WorkspaceService.read` with the selected residual range, expected version and
