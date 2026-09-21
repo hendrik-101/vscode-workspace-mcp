@@ -100,6 +100,8 @@ const workspace: WorkspaceApi = {
     entries: [],
     truncated: false,
     blockedEntries: 0,
+    omittedEntries: 0,
+    incomplete: false,
   }),
   read: async ({ uri }) => ({
     uri,
@@ -125,6 +127,8 @@ const workspace: WorkspaceApi = {
     query,
     matches: [],
     filesSearched: 0,
+    consistency: "live",
+    limits: [],
     truncated: false,
     incomplete: false,
     errors: [],
@@ -979,7 +983,7 @@ test("discovery documents tool roles, URI/position conventions and search contin
     ["nextCursor", "string"],
   ]) {
     assert.equal(listSchema.properties![field!]!.type, type);
-    assert.equal(listSchema.required!.includes(field!), false);
+    assert.equal(listSchema.required!.includes(field!), field !== "nextCursor");
   }
   const matchSchema =
     resultSchema("search_workspace").properties!.matches!.items!;
@@ -1001,13 +1005,21 @@ test("discovery documents tool roles, URI/position conventions and search contin
       assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
       assert.equal(
         schema.required!.includes(field),
-        name === "document_symbols" && field === "version",
+        ["consistency", "scanned", "scanLimitReached"].includes(field) ||
+          (name === "document_symbols" && field === "version"),
       );
     }
     const validate = new AjvJsonSchemaValidator().getValidator(
       find(name).outputSchema!,
     );
-    const result = { symbols: [], truncated: false, omitted: 0 };
+    const result = {
+      symbols: [],
+      truncated: false,
+      omitted: 0,
+      consistency: "live",
+      scanned: 0,
+      scanLimitReached: false,
+    };
     assert.equal(
       validate({ result }).valid,
       name === "workspace_symbols",
@@ -1032,7 +1044,7 @@ test("discovery documents tool roles, URI/position conventions and search contin
     const item = schema.properties!.symbols!.items!;
     for (const field of ["type", "selectionRange", "fullRangeKnown"]) {
       assert.ok(item.properties![field]);
-      assert.equal(item.required!.includes(field), false);
+      assert.equal(item.required!.includes(field), field !== "selectionRange");
     }
   }
   for (const name of ["get_diagnostics", "wait_for_diagnostics"]) {
@@ -1047,12 +1059,109 @@ test("discovery documents tool roles, URI/position conventions and search contin
       "nextOffset",
     ]) {
       assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
-      assert.equal(schema.required!.includes(field), false);
+      assert.equal(schema.required!.includes(field), field !== "nextOffset");
     }
     assert.equal(
       schema.properties!.diagnostics!.items!.properties!.messageTruncated!.type,
       "boolean",
     );
+  }
+  // Both the SDK's advertised JSON Schema and the server's Zod parser must
+  // reject missing unconditional metadata, while accepting absent conditionals.
+  const uri = "memfs:/project/a.abap";
+  const point = { line: 0, character: 0 };
+  const range = { start: point, end: point };
+  const diagnostic = {
+    range,
+    severity: "hint",
+    message: "",
+    messageTruncated: false,
+  };
+  const symbol = {
+    name: "x",
+    kind: 0,
+    type: "file",
+    uri,
+    range,
+    fullRangeKnown: false,
+  };
+  const cases = [
+    [
+      "list_directory",
+      await workspace.list({ uri }),
+      ["omittedEntries", "incomplete"],
+      undefined,
+    ],
+    [
+      "search_workspace",
+      await workspace.search({ uri, query: "x" }),
+      ["consistency", "limits"],
+      undefined,
+    ],
+    [
+      "workspace_symbols",
+      {
+        ...(await workspace.workspaceSymbols({ query: "x" })),
+        symbols: [symbol],
+      },
+      ["consistency", "scanned", "scanLimitReached"],
+      ["symbols", "type", "fullRangeKnown"],
+    ],
+    [
+      "document_symbols",
+      { ...(await workspace.documentSymbols({ uri })), symbols: [symbol] },
+      ["consistency", "scanned", "scanLimitReached", "version"],
+      ["symbols", "type", "fullRangeKnown"],
+    ],
+    [
+      "get_diagnostics",
+      { ...(await workspace.diagnostics({ uri })), diagnostics: [diagnostic] },
+      ["counts", "total", "inspected", "matching", "incomplete", "snapshotId"],
+      ["diagnostics", "messageTruncated"],
+    ],
+    [
+      "wait_for_diagnostics",
+      {
+        ...(await workspace.waitForDiagnostics({ uri, version: 1 })),
+        diagnostics: [diagnostic],
+      },
+      ["counts", "total", "inspected", "matching", "incomplete", "snapshotId"],
+      ["diagnostics", "messageTruncated"],
+    ],
+  ] as const;
+  for (const [name, result, required, nested] of cases) {
+    const validate = new AjvJsonSchemaValidator().getValidator(
+      find(name).outputSchema!,
+    );
+    const check = (value: unknown, valid: boolean, reason: string) => {
+      assert.equal(validate(value).valid, valid, `${name} SDK: ${reason}`);
+      assert.equal(
+        outputSchema(name).safeParse(value).success,
+        valid,
+        `${name} Zod: ${reason}`,
+      );
+    };
+    const envelope = {
+      result: { ...result, futureMetadata: { available: true } },
+    };
+    check(envelope, true, "conditional fields may be absent");
+    assert.deepEqual(outputSchema(name).parse(envelope), envelope);
+    for (const field of required) {
+      const incomplete: Record<string, unknown> = { ...result };
+      delete incomplete[field];
+      check({ result: incomplete }, false, `requires ${field}`);
+    }
+    if (nested) {
+      const [collection, ...fields] = nested;
+      for (const field of fields) {
+        const incomplete = structuredClone(result) as unknown as Record<
+          string,
+          Record<string, unknown>[]
+        >;
+        delete incomplete[collection]![0]![field];
+        check({ result: incomplete }, false, `requires ${collection}.${field}`);
+      }
+    }
   }
   assert.match(find("workspace_symbols").description!, /name/i);
   assert.match(find("document_symbols").description!, /outline/i);
