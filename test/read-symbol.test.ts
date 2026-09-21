@@ -893,3 +893,72 @@ test("caller identifier positions cannot split surrogate pairs before provider d
     assert.equal(f.calls(), 0);
   }
 });
+
+test("non-object provider entries are skipped without losing valid root or nested symbols", async () => {
+  const entries = [null, undefined, "method", 42, true, () => {}, symbol()];
+  for (const nested of [false, true]) {
+    const f = fixture(
+      source,
+      nested ? [symbol("Parent", undefined, undefined, entries)] : entries,
+    );
+    const result = await f.service.readSymbol({
+      ...request(f),
+      ...(nested ? { containerName: "Parent" } : {}),
+    });
+    assert.equal(result.text, "function method() {\n  work();\n}");
+  }
+});
+
+test("malformed provider locations remain unavailable instead of throwing or manufacturing uniqueness", async () => {
+  for (const location of [
+    undefined,
+    null,
+    {},
+    { uri: undefined },
+    { uri: null },
+    { uri: {} },
+    { uri: { toString: undefined } },
+    { uri: { toString: () => undefined } },
+    { uri: { toString: () => "invalid URI" } },
+    { uri: { toString: () => "vfs:/" + "x".repeat(8192) } },
+    {
+      uri: {
+        toString: () => {
+          throw new Error("private provider path");
+        },
+      },
+    },
+  ]) {
+    const bad = { ...symbol(), location };
+    for (const items of [[bad], [bad, symbol()], [symbol(), bad]]) {
+      const f = fixture(source, items);
+      await assert.rejects(f.service.readSymbol(request(f)), {
+        code: "SYMBOL_RANGE_UNAVAILABLE",
+      });
+    }
+  }
+});
+
+test("valid hybrid locations retain the exact requested-URI filter", async () => {
+  const f = fixture(source);
+  const same = {
+    ...symbol(),
+    location: { uri: f.document.uri, range: range(at(0, 9), at(0, 15)) },
+  };
+  const other = {
+    ...same,
+    location: {
+      ...same.location,
+      uri: Uri.parse("vfs-test://host/project/other.txt?tenant=one"),
+    },
+  };
+  f.provider(async () => [other, same]);
+  assert.equal(
+    (await f.service.readSymbol(request(f))).text,
+    "function method() {\n  work();\n}",
+  );
+  f.provider(async () => [other]);
+  await assert.rejects(f.service.readSymbol(request(f)), {
+    code: "SYMBOL_NOT_FOUND",
+  });
+});

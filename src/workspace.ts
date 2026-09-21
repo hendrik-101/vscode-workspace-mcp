@@ -1765,10 +1765,21 @@ export class WorkspaceService implements WorkspaceApi {
           "Symbol traversal exceeded 1000 nodes; use an explicit document range.",
         );
       const item = frame.items[frame.index++]!;
+      if (!item || typeof item !== "object") continue;
       // The native command may return hybrid DocumentSymbol/SymbolInformation objects.
       // A location alone is never evidence of a full body.
-      if ("location" in item && item.location.uri.toString() !== uri.toString())
-        continue;
+      if ("location" in item) {
+        try {
+          const target = item.location?.uri?.toString();
+          if (typeof target !== "string" || target.length > 8192)
+            throw new Error("Invalid provider URI");
+          parseUri(target);
+          if (target !== uri.toString()) continue;
+        } catch {
+          unavailable = true;
+          continue;
+        }
+      }
       const hierarchical = "selectionRange" in item || "children" in item;
       const container = hierarchical
         ? frame.container

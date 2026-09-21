@@ -14,7 +14,9 @@ positions are zero-based UTF-16. Selectors are scoped to the requested URI.
 Every call executes `vscode.executeDocumentSymbolProvider` directly and inspects
 at most 1000 nodes. Resolution must finish: overflow fails with
 `SYMBOL_RESOLUTION_INCOMPLETE`, even if an apparent unique match was already
-found. Never choose the first duplicate. `SYMBOL_NOT_FOUND` means no matching
+found. Non-object provider entries are skipped; malformed location URIs fail with
+`SYMBOL_RANGE_UNAVAILABLE`, while valid locations for other URIs are excluded.
+Never choose the first duplicate. `SYMBOL_NOT_FOUND` means no matching
 provider result, not proof that no provider exists; `SYMBOL_AMBIGUOUS` requires a
 more precise selector. Flat `SymbolInformation` locations cannot establish a
 body: matching flat results, malformed full ranges, and invalid or uncontained
