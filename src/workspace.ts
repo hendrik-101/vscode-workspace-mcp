@@ -809,7 +809,12 @@ export class WorkspaceService implements WorkspaceApi {
           signal,
         )
       : state(document);
-    return { ...final, edits, applied };
+    return {
+      ...final,
+      applied,
+      editCount: edits.length,
+      ...((input.includeEdits ?? !input.apply) ? { edits } : {}),
+    };
   }
 
   /** Preview only: public WorkspaceEdit.entries() cannot enumerate file/notebook operations. */

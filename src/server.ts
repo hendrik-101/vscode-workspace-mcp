@@ -262,7 +262,7 @@ function createMcpServer(
   );
   tool(
     "format_document",
-    "Compute formatting edits through the installed language provider. Optional apply uses guarded buffer edits without saving. Empty edits may mean no provider or no changes.",
+    "Compute formatting edits through the installed language provider. Optional apply uses guarded buffer edits without saving and omits edits by default. includeEdits overrides edit inclusion; editCount always reports the complete count. Empty edits may mean no provider or no changes.",
     z.strictObject({
       uri,
       version: index,
@@ -270,6 +270,7 @@ function createMcpServer(
       tabSize: z.number().int().min(1).max(32).optional(),
       insertSpaces: z.boolean().optional(),
       apply: z.boolean().optional(),
+      includeEdits: z.boolean().optional(),
     }),
     (args) => workspace.format(args, signal),
     false,
