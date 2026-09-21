@@ -51,7 +51,7 @@ const errors: Record<string, string> = {
   AUTO_SAVE_ENABLED:
     "Disable editor auto-save before applying buffer-only edits.",
   VERSION_CONFLICT:
-    "Document changed; read its current version before writing.",
+    "Document changed or was reopened; read its current version before retrying.",
   LIMIT_EXCEEDED: "Workspace operation exceeded its limit.",
   NOT_A_FILE: "Resource is not a file.",
   NOT_A_DIRECTORY: "Resource is not a directory.",

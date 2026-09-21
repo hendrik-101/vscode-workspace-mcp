@@ -5,6 +5,7 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startServer } from "../src/server.js";
+import { outputSchema } from "../src/contracts.js";
 import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 
 const workspace: WorkspaceApi = {
@@ -948,7 +949,8 @@ test("MCP output contracts validate success, cursor round-trips and structured e
   assert.deepEqual(error.structuredContent, {
     error: {
       code: "VERSION_CONFLICT",
-      message: "Document changed; read its current version before writing.",
+      message:
+        "Document changed or was reopened; read its current version before retrying.",
     },
   });
   const listing = await client.callTool({
@@ -991,5 +993,44 @@ test("MCP output contracts validate success, cursor round-trips and structured e
     invalid.isError,
     true,
     "invalid successful output must be rejected",
+  );
+});
+
+test("symbol-read contract validates bounded source and preserves additive metadata before registration", () => {
+  const range = {
+    start: { line: 1, character: 0 },
+    end: { line: 2, character: 1 },
+  };
+  const result = {
+    uri: "vfs:/project/file",
+    version: 3,
+    dirty: true,
+    languageId: "abap",
+    lineCount: 4,
+    startLine: 1,
+    endLine: 3,
+    text: "source",
+    requestedRange: range,
+    returnedRange: range,
+    truncated: false,
+    symbol: {
+      name: "example",
+      kind: 5,
+      containerName: "parent",
+      range,
+      selectionRange: range,
+      futureMetadata: { supported: true },
+    },
+    futureReadMetadata: { count: 1 },
+  };
+  const schema = outputSchema("read_symbol");
+  assert.deepEqual(schema.parse({ result }), { result });
+  const { symbol: _symbol, ...missingSymbol } = result;
+  assert.equal(schema.safeParse({ result: missingSymbol }).success, false);
+  assert.equal(
+    schema.safeParse({
+      result: { ...result, symbol: { ...result.symbol, kind: "invalid" } },
+    }).success,
+    false,
   );
 });

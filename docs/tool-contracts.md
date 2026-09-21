@@ -45,3 +45,11 @@ schemas. Shapes retain typed fields and arrays while avoiding repeated bounds an
 verbose output descriptions. Per-tool references would save little because each
 range generally appears once within a schema, and definitions cannot be shared
 across separate tool schemas.
+
+## Independent integration
+
+The internal `read_symbol` output schema matches the sibling symbol-reading PR's
+bounded `ReadSymbolResult`, including symbol name, kind, full range, selection
+range and optional immediate container. It preserves additive read/symbol fields.
+This entry alone exposes no tool or new capability; registration is supplied by
+the separate PR. The 19-tool discovery cost above excludes this dormant schema.

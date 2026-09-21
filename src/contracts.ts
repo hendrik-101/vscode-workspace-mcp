@@ -59,6 +59,15 @@ const preview = {
   documents: z.array(z.looseObject({ ...state, edits: z.array(edit) })),
 };
 
+const readFields = {
+  ...state,
+  languageId: text,
+  lineCount: number,
+  startLine: number,
+  endLine: number,
+  text,
+};
+
 export const results = {
   workspace_roots: z.array(root),
   editor_context: z.looseObject({
@@ -89,13 +98,20 @@ export const results = {
     truncated: boolean,
     blockedEntries: number,
   }),
-  read_document: z.looseObject({
-    ...state,
-    languageId: text,
-    lineCount: number,
-    startLine: number,
-    endLine: number,
-    text,
+  read_document: z.looseObject(readFields),
+  read_symbol: z.looseObject({
+    ...readFields,
+    requestedRange: range,
+    returnedRange: range,
+    truncated: boolean,
+    nextPosition: position.optional(),
+    symbol: z.looseObject({
+      name: text,
+      kind: number,
+      containerName: text.optional(),
+      range,
+      selectionRange: range,
+    }),
   }),
   search_workspace: z.looseObject({
     uri: text,
