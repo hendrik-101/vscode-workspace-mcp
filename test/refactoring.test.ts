@@ -569,3 +569,18 @@ test("a provider-opened target closed and reopened at the same version invalidat
   assert.equal(f.listeners.size, 0);
   assert.equal(f.closeListeners.size, 0);
 });
+
+test("preview availability reports visible text independently of application support", async () => {
+  const f = fixture();
+  for (const edits of [[], [{ range, newText: "after" }]]) {
+    f.supply(() => ({ entries: () => [[f.documents[0]!.uri, edits]] }));
+    const { preview } = await f.service.rename(f.input);
+    assert.equal(preview.previewAvailable, edits.length > 0);
+    assert.equal(preview.applicationSupported, false);
+    assert.equal(preview.supported, false);
+  }
+  f.supply(() => undefined);
+  const { preview } = await f.service.rename(f.input);
+  assert.equal(preview.previewAvailable, false);
+  assert.equal(preview.applicationSupported, false);
+});

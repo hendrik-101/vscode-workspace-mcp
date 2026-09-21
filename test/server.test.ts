@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import test from "node:test";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startServer } from "../src/server.js";
@@ -49,6 +50,8 @@ const workspace: WorkspaceApi = {
     dirty: false,
     providerResult: false,
     preview: {
+      previewAvailable: false,
+      applicationSupported: false,
       supported: false,
       applicable: false,
       complete: false,
@@ -201,6 +204,26 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "workspace_symbols",
   ]);
   for (const [name, args] of [
+    ["workspace_roots", {}],
+    ["editor_context", {}],
+    ["list_directory", { uri: "memfs:/project" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.abap" }],
+    [
+      "edit_document",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        edits: [
+          {
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 0 },
+            },
+            text: "x",
+          },
+        ],
+      },
+    ],
     ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
     ["document_symbols", { uri: "memfs:/project/a.abap" }],
     [
@@ -783,3 +806,190 @@ for (const toolName of ["edit_document", "save_document"]) {
     assert.notEqual(roots.isError, true);
   });
 }
+
+test("discovery documents tool roles, URI/position conventions and search continuation", async (t) => {
+  const server = await startServer(workspace);
+  t.after(() => server.close());
+  const client = new Client({ name: "contract-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const { tools } = await client.listTools();
+  const find = (name: string) => tools.find((tool) => tool.name === name)!;
+  for (const tool of tools) {
+    assert.ok(tool.outputSchema, `${tool.name} exposes its result contract`);
+    const validate = new AjvJsonSchemaValidator().getValidator(
+      tool.outputSchema,
+    );
+    assert.equal(
+      validate({}).valid,
+      false,
+      `${tool.name} rejects an empty envelope`,
+    );
+    assert.equal(
+      validate({ error: { code: "OPERATION_FAILED", message: "failed" } })
+        .valid,
+      true,
+    );
+
+    for (const [name, property] of Object.entries(
+      tool.inputSchema.properties ?? {},
+    )) {
+      assert.ok(
+        (property as { description?: string }).description,
+        `${tool.name}.${name} has guidance`,
+      );
+    }
+  }
+  const validateRoots = new AjvJsonSchemaValidator().getValidator(
+    find("workspace_roots").outputSchema!,
+  );
+  assert.equal(validateRoots({ result: [] }).valid, true);
+  assert.equal(
+    validateRoots({
+      result: [],
+      error: { code: "OPERATION_FAILED", message: "failed" },
+    }).valid,
+    false,
+  );
+  assert.match(find("workspace_symbols").description!, /name/i);
+  assert.match(find("document_symbols").description!, /outline/i);
+  assert.match(find("search_workspace").description!, /literal/i);
+  assert.match(find("search_workspace").description!, /nextCursor.*cursor/);
+  const properties = find("get_definition").inputSchema.properties as Record<
+    string,
+    { description: string }
+  >;
+  assert.match(properties.uri!.description, /scheme/);
+  assert.match(properties.position!.description, /zero-based UTF-16/i);
+});
+
+test("MCP output contracts validate success, cursor round-trips and structured errors", async (t) => {
+  const cursor = "32f146a4-8c1a-4bd4-b065-7c33eaef98a7";
+  let seenCursor: string | undefined;
+  const server = await startServer({
+    ...workspace,
+    search: async (input) => {
+      seenCursor = input.cursor;
+      return {
+        ...(await workspace.search(input)),
+        nextCursor: input.cursor ? undefined : cursor,
+      };
+    },
+    context: async () => ({
+      roots: [],
+      tabs: [],
+      truncated: false,
+      activeEditor: {
+        uri: "vfs:/project/file",
+        version: 1,
+        dirty: false,
+        languageId: "text",
+        selection: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+        selectedText: "",
+        selectionTruncated: false,
+        futureMetadata: { available: true },
+      },
+    }),
+    read: async () => {
+      throw new WorkspaceError("VERSION_CONFLICT", "private provider data");
+    },
+    list: async (input) => ({
+      ...(await workspace.list(input)),
+      nextOffset: 20,
+      totalEntries: 30,
+    }),
+    format: async ({ uri, version }) =>
+      ({ uri, version, dirty: false, applied: true, editCount: 1 }) as never,
+    save: async () =>
+      ({ uri: "vfs:/project/file", version: "invalid", dirty: false }) as never,
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "contract-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  await client.listTools(); // Populate the official client's output validators.
+  const args = { uri: "vfs:/project", query: "literal", include: ["**/*.ts"] };
+  const first = await client.callTool({
+    name: "search_workspace",
+    arguments: args,
+  });
+  assert.equal(
+    (first.structuredContent as { result: { nextCursor: string } }).result
+      .nextCursor,
+    cursor,
+  );
+  const second = await client.callTool({
+    name: "search_workspace",
+    arguments: { ...args, cursor },
+  });
+  assert.equal(second.isError, undefined);
+  assert.equal(seenCursor, cursor);
+  const wrongKey = await client.callTool({
+    name: "search_workspace",
+    arguments: { ...args, nextCursor: cursor },
+  });
+  assert.equal(wrongKey.isError, true);
+  const error = await client.callTool({
+    name: "read_document",
+    arguments: { uri: "vfs:/project/file" },
+  });
+  assert.equal(error.isError, true);
+  assert.deepEqual(error.structuredContent, {
+    error: {
+      code: "VERSION_CONFLICT",
+      message: "Document changed; read its current version before writing.",
+    },
+  });
+  const listing = await client.callTool({
+    name: "list_directory",
+    arguments: { uri: "vfs:/project" },
+  });
+  assert.equal(
+    (listing.structuredContent as { result: { nextOffset: number } }).result
+      .nextOffset,
+    20,
+  );
+  const context = await client.callTool({
+    name: "editor_context",
+    arguments: {},
+  });
+  assert.deepEqual(
+    (
+      context.structuredContent as {
+        result: { activeEditor: { futureMetadata: { available: boolean } } };
+      }
+    ).result.activeEditor.futureMetadata,
+    { available: true },
+    "nested editor metadata survives output validation",
+  );
+  const formatting = await client.callTool({
+    name: "format_document",
+    arguments: { uri: "vfs:/project/file", version: 1, apply: true },
+  });
+  assert.equal(formatting.isError, undefined);
+  assert.equal(
+    (formatting.structuredContent as { result: { editCount: number } }).result
+      .editCount,
+    1,
+  );
+  const invalid = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: 1 },
+  });
+  assert.equal(
+    invalid.isError,
+    true,
+    "invalid successful output must be rejected",
+  );
+});

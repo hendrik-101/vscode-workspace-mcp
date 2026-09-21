@@ -109,7 +109,10 @@ export namespace Refactoring {
     kind: "quickfix" | "refactor";
   }
   export interface Preview {
-    /** Automatic application is unsupported: public WorkspaceEdit hides operations. */
+    /** At least one visible text edit exists; never implies complete operations. */
+    previewAvailable: boolean;
+    applicationSupported: false;
+    /** Legacy alias for applicationSupported, not preview availability. */
     supported: false;
     applicable: false;
     complete: false;
