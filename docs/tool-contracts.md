@@ -37,15 +37,15 @@ write-policy or provider behavior changes are included.
 
 ## Context cost
 
-The 19 expanded output schemas add 26,135 bytes of schema JSON (approximately
-6,534 tokens at four bytes per token; this is an estimate, not a tokenizer count).
+The 19 expanded output schemas add 26,175 bytes of schema JSON (approximately
+6,544 tokens at four bytes per token; this is an estimate, not a tokenizer count).
 Clients that eagerly inject every tool definition incur this cost; lazy discovery
 may defer it. Shared primitives keep authoring small but do not deduplicate wire
 schemas. Shapes retain typed fields and arrays while avoiding repeated bounds and
 verbose output descriptions. Per-tool references would save little because each
 range generally appears once within a schema, and definitions cannot be shared
 across separate tool schemas. Publishing merged read/list/search/format metadata
-and optional symbol/diagnostic metadata adds 4,154 bytes over the initial schemas.
+and optional symbol/diagnostic metadata adds 4,194 bytes over the initial schemas.
 
 ## Independent integration
 
@@ -57,7 +57,7 @@ the separate PR. The 19-tool discovery cost above excludes this dormant schema.
 
 Merged read ranges, read continuation, listing omissions/cursors, search preview
 truncation and formatting edit counts are declared explicitly for discovery.
-Document symbol results require the live document version needed for continuation;
+Document symbol results require a positive integer live document version for continuation;
 workspace symbol results may omit it. Other known symbol metadata (kind name,
 ranges, offsets and scan state) and diagnostic metadata (snapshot, offsets, counts
 and clipping flags) remain optional for independent integration. Their values are

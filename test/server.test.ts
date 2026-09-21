@@ -979,6 +979,17 @@ test("discovery documents tool roles, URI/position conventions and search contin
     };
     assert.equal(validate(withVersion).valid, true);
     assert.deepEqual(outputSchema(name).parse(withVersion), withVersion);
+    if (name === "document_symbols") {
+      for (const version of [0, -1, 1.5]) {
+        const invalid = { result: { ...result, version } };
+        assert.equal(
+          validate(invalid).valid,
+          false,
+          `version ${version} must be a positive integer`,
+        );
+        assert.equal(outputSchema(name).safeParse(invalid).success, false);
+      }
+    }
     const item = schema.properties!.symbols!.items!;
     for (const field of ["type", "selectionRange", "fullRangeKnown"]) {
       assert.ok(item.properties![field]);
