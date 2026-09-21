@@ -739,6 +739,7 @@ async function ideTools(
   const selector = { scheme: file.scheme, pattern: "**/ide-tools.txt" };
   const full = new vscode.Range(0, 0, 0, 5);
   let formatMode: "normal" | "overlap" | "change" = "normal";
+  let formattedReplacement = "tidy!";
   const disposables = [
     vscode.languages.registerWorkspaceSymbolProvider({
       provideWorkspaceSymbols: (query) =>
@@ -822,7 +823,13 @@ async function ideTools(
           edit.insert(doc.uri, new vscode.Position(0, 0), "x");
           await vscode.workspace.applyEdit(edit);
         }
-        const edit = vscode.TextEdit.replace(full, "tidy!");
+        const edit = vscode.TextEdit.replace(
+          new vscode.Range(
+            doc.positionAt(0),
+            doc.positionAt(doc.getText().length),
+          ),
+          formattedReplacement,
+        );
         return formatMode === "overlap" ? [edit, edit] : [edit];
       },
     }),
@@ -902,6 +909,10 @@ async function ideTools(
     const version = document.version;
     const preview = await service.format({ uri: file.toString(), version });
     assert.equal(preview.applied, false);
+    assert.ok(preview.edits);
+    // VS Code minimizes provider replacements, which may split or remove edits.
+    assert.equal(preview.editCount, preview.edits.length);
+    assert.ok(preview.editCount > 0);
     assert.equal(formattedText(document, preview.edits), "tidy!");
     assert.equal(document.getText(), "messy");
     await rejectsCode(
@@ -919,6 +930,7 @@ async function ideTools(
       version,
       range: range(0, 1),
     });
+    assert.ok(ranged.edits);
     assert.equal(formattedText(document, ranged.edits), "Tessy");
     const writesBefore = provider.writes;
     assert.deepEqual(
@@ -971,8 +983,53 @@ async function ideTools(
       apply: true,
     });
     assert.equal(applied.applied, true);
+    assert.equal(applied.editCount, preview.edits.length);
+    assert.equal("edits" in applied, false);
     assert.equal(document.getText(), "tidy!");
     assert.equal(document.isDirty, true);
+    assert.equal(provider.writes, writesBefore);
+    const replacement = "x".repeat(100_000);
+    formattedReplacement = replacement;
+    const largePreview = await service.format({
+      uri: file.toString(),
+      version: document.version,
+    });
+    const compact = await service.format({
+      uri: file.toString(),
+      version: document.version,
+      apply: true,
+    });
+    assert.equal(document.getText(), replacement);
+    assert.ok(largePreview.edits);
+    assert.equal(largePreview.editCount, largePreview.edits.length);
+    assert.equal(compact.editCount, largePreview.edits.length);
+    assert.equal("edits" in compact, false);
+    assert.ok(JSON.stringify(compact).length < 1000);
+    assert.ok(JSON.stringify(largePreview).length > 100_000);
+    formattedReplacement = "tidy!";
+    const included = await service.format({
+      uri: file.toString(),
+      version: document.version,
+      apply: true,
+      includeEdits: true,
+    });
+    assert.ok(included.edits);
+    assert.equal(included.editCount, included.edits.length);
+    const unchangedPreview = await service.format({
+      uri: file.toString(),
+      version: document.version,
+    });
+    assert.ok(unchangedPreview.edits);
+    assert.equal(formattedText(document, unchangedPreview.edits), "tidy!");
+    const summary = await service.format({
+      uri: file.toString(),
+      version: document.version,
+      includeEdits: false,
+    });
+    assert.equal("edits" in summary, false);
+    assert.equal(summary.editCount, unchangedPreview.edits.length);
+    assert.equal(summary.applied, false);
+    assert.equal(document.getText(), "tidy!");
     assert.equal(provider.writes, writesBefore);
     formatMode = "change";
     await rejectsCode(

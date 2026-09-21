@@ -41,6 +41,7 @@ const workspace: WorkspaceApi = {
     version,
     dirty: false,
     edits: [],
+    editCount: 0,
     applied: false,
   }),
   rename: async ({ uri, version }) => ({
@@ -226,7 +227,12 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ],
     [
       "format_document",
-      { uri: "memfs:/project/a.abap", version: 4, apply: false },
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        apply: false,
+        includeEdits: true,
+      },
     ],
     [
       "preview_rename",

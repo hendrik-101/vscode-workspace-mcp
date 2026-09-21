@@ -90,9 +90,11 @@ export interface FormatInput extends UriInput {
   tabSize?: number;
   insertSpaces?: boolean;
   apply?: boolean;
+  includeEdits?: boolean;
 }
 export interface FormatResult extends DocumentState {
-  edits: EditInput["edits"];
+  edits?: EditInput["edits"];
+  editCount: number;
   applied: boolean;
 }
 
