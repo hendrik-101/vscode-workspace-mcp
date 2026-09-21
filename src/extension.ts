@@ -16,17 +16,20 @@ import {
   TOKEN_KEY,
 } from "./preferences";
 import { clientConfiguration } from "./configuration";
+import { installAdapter } from "./adapter";
 import { startServer } from "./server";
 import { BridgeSession } from "./session";
 import { WorkspaceService } from "./workspace";
 
 let running: BridgeSession | undefined;
 let runningIdentity: ServerIdentity | undefined;
+let runningAdapter: string | undefined;
 let runningAccess: { allowed: boolean } | undefined;
 let starting = Promise.resolve();
 let stopping = Promise.resolve();
 let binding = Promise.resolve();
 let credentialWrites = Promise.resolve();
+let adapterWrites = Promise.resolve();
 let pending: BridgeSession | undefined;
 let cancelStartup: (() => void) | undefined;
 const cancelledStartup = Symbol("cancelled startup");
@@ -41,6 +44,7 @@ function stopSessions(): Promise<void> {
   running = undefined;
   pending = undefined;
   runningIdentity = undefined;
+  runningAdapter = undefined;
   if (runningAccess) runningAccess.allowed = false;
   runningAccess = undefined;
   stopping = Promise.all([
@@ -131,7 +135,7 @@ export function activate(context: vscode.ExtensionContext): void {
       error instanceof Error && "code" in error && error.code === "EADDRINUSE"
         ? "Workspace MCP port is already in use. Stop the bridge in the other window or choose another user setting for workspaceMcp.port."
         : error instanceof Error &&
-            /^(Workspace MCP port|Stored Workspace MCP token|Stored Workspace MCP server identity)/.test(
+            /^(Workspace MCP port|Workspace MCP adapter|Stored Workspace MCP token|Stored Workspace MCP server identity)/.test(
               error.message,
             )
           ? error.message
@@ -237,6 +241,7 @@ export function activate(context: vscode.ExtensionContext): void {
           await wait(stopping);
           await wait(binding);
           await wait(credentialWrites);
+          await wait(adapterWrites);
           checkCurrent();
           if (running) return;
           if (!vscode.workspace.isTrusted) {
@@ -256,6 +261,27 @@ export function activate(context: vscode.ExtensionContext): void {
               policy() !== "deny",
           );
           const configuredPort = port();
+          const installing = installAdapter(context, checkCurrent).catch(
+            (error: unknown) => {
+              if (error === cancelledStartup) throw error;
+              if (
+                error instanceof Error &&
+                error.message.startsWith("Workspace MCP adapter")
+              )
+                throw error;
+              throw new Error(
+                "Workspace MCP adapter could not be installed. Check extension storage on this host and restart the bridge.",
+              );
+            },
+          );
+          // Stop stays responsive, but another Start must wait for already-issued
+          // filesystem operations. Installer guards prevent later stale publication.
+          adapterWrites = installing.then(
+            () => {},
+            () => {},
+          );
+          const adapter = await wait(installing);
+          checkCurrent();
           const token = await storedToken(secrets);
           const identity = await storedIdentity(secrets);
           if (requestedGeneration !== generation) return;
@@ -326,6 +352,7 @@ export function activate(context: vscode.ExtensionContext): void {
           running = started;
           runningAccess = access;
           runningIdentity = identity;
+          runningAdapter = adapter;
           access.allowed = true;
           if (policy() === "allow") started.enableWrites();
           if (policy() === "ask") void askWrites(started).catch(report);
@@ -436,13 +463,14 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (!client || running !== session) return;
     const identity = runningIdentity;
-    if (!identity) return;
+    const adapter = runningAdapter;
+    if (!identity || !adapter) return;
     const { url, token } = session.connection;
     const document = await vscode.workspace.openTextDocument({
       language: client.value === "claude" ? "json" : "toml",
       content: clientConfiguration(
         client.value,
-        context.asAbsolutePath("dist/stdio.cjs"),
+        adapter,
         url,
         token,
         identity.cert,
