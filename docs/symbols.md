@@ -21,8 +21,10 @@ Each page caps combined name/container/URI text at 32 Ki characters, so it may
 return fewer than maxResults and still provide nextOffset. Individual
 names/container names are capped at 1000 characters; targets longer than 8192
 characters are omitted. External, unsafe, inaccessible and symlink targets
-remain omitted. Malformed provider entries (including missing/non-string names)
-are counted in `omitted`; later valid entries remain available. No document text
+remain omitted. Malformed provider names/kinds, non-string container names, and
+ranges with invalid coordinates or ordering are counted in `omitted`; later valid
+entries and children remain available. Provider kinds must be nonnegative safe
+integers; future numeric kinds are retained with `type: "unknown"`. No document text
 or provider detail is included.
 
 Document responses include `version` and `consistency: "document-version"`.

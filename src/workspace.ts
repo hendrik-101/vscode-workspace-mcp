@@ -337,6 +337,21 @@ export class WorkspaceService implements WorkspaceApi {
     return { maxResults, offset, kind, name: input.name?.toLowerCase() };
   }
 
+  private symbolRangeValid(value: vscode.Range): boolean {
+    return (
+      [value.start, value.end].every(
+        (point) =>
+          Number.isSafeInteger(point.line) &&
+          point.line >= 0 &&
+          Number.isSafeInteger(point.character) &&
+          point.character >= 0,
+      ) &&
+      (value.start.line < value.end.line ||
+        (value.start.line === value.end.line &&
+          value.start.character <= value.end.character))
+    );
+  }
+
   private symbolFullRangeKnown(
     item: vscode.DocumentSymbol,
     document: vscode.TextDocument,
@@ -401,7 +416,7 @@ export class WorkspaceService implements WorkspaceApi {
       this.active();
       try {
         const hierarchical = "children" in item;
-        // Keep traversing valid children even when their parent's name is invalid.
+        // Keep traversing valid children even when their parent is invalid.
         if (hierarchical && item.children.length)
           stack.push({
             items: item.children,
@@ -411,7 +426,12 @@ export class WorkspaceService implements WorkspaceApi {
                 ? item.name.slice(0, MAX_PREVIEW)
                 : "",
           });
-        if (typeof item.name !== "string") {
+        if (
+          typeof item.name !== "string" ||
+          typeof item.kind !== "number" ||
+          !Number.isSafeInteger(item.kind) ||
+          item.kind < 0
+        ) {
           result.omitted++;
           continue;
         }
@@ -423,6 +443,18 @@ export class WorkspaceService implements WorkspaceApi {
           (options.kind !== undefined && item.kind !== options.kind)
         )
           continue;
+        const bodyRange = hierarchical ? item.range : item.location.range;
+        const containerName = hierarchical
+          ? frame.container
+          : item.containerName;
+        if (
+          !this.symbolRangeValid(bodyRange) ||
+          (hierarchical && !this.symbolRangeValid(item.selectionRange)) ||
+          (containerName !== undefined && typeof containerName !== "string")
+        ) {
+          result.omitted++;
+          continue;
+        }
         const target = hierarchical ? source?.uri : item.location.uri;
         if (!target) {
           result.omitted++;
@@ -442,15 +474,12 @@ export class WorkspaceService implements WorkspaceApi {
         }
         await check;
         this.currentRoot(uri);
-        const containerName = hierarchical
-          ? frame.container
-          : item.containerName;
         matches.push({
           name,
           kind: item.kind,
           type: SYMBOL_TYPES[item.kind] ?? "unknown",
           uri: key,
-          range: range(hierarchical ? item.range : item.location.range),
+          range: range(bodyRange),
           fullRangeKnown:
             hierarchical && !!source && this.symbolFullRangeKnown(item, source),
           ...(hierarchical

@@ -728,14 +728,19 @@ for (const selection of [
   { start: { line: 0, character: 3 }, end: { line: 0, character: 2 } },
   { start: { line: 0, character: 3 }, end: { line: 5, character: 0 } },
 ]) {
-  test(`invalid or uncontained selection ${JSON.stringify(selection)} leaves body range unknown`, async () => {
+  test(`invalid or uncontained selection ${JSON.stringify(selection)} is never a known body`, async () => {
     const f = symbolFixture();
     f.setItems([{ ...f.makeSymbol("invalid"), selectionRange: selection }]);
     try {
       const result = await f.service.documentSymbols({
         uri: f.file.toString(),
       });
-      assert.equal(result.symbols[0]?.fullRangeKnown, false);
+      if (selection.end.line === 5) {
+        assert.equal(result.symbols[0]?.fullRangeKnown, false);
+      } else {
+        assert.equal(result.symbols.length, 0);
+        assert.equal(result.omitted, 1);
+      }
     } finally {
       f.service.dispose();
     }
@@ -809,3 +814,114 @@ for (const operation of ["documentSymbols", "workspaceSymbols"] as const) {
     }
   });
 }
+
+for (const operation of ["documentSymbols", "workspaceSymbols"] as const) {
+  test(`${operation} omits invalid kinds before filtering and preserves future kinds`, async () => {
+    const f = symbolFixture();
+    const invalidKinds = [
+      undefined,
+      "5",
+      1.5,
+      -1,
+      NaN,
+      Infinity,
+      Number.MAX_SAFE_INTEGER + 1,
+    ];
+    f.setItems([
+      ...invalidKinds.map((kind) => ({
+        name: "bad",
+        kind,
+        location: { uri: f.file, range: f.selection },
+      })),
+      {
+        name: "future",
+        kind: 99,
+        location: { uri: f.file, range: f.selection },
+      },
+      { name: "valid", kind: 5, location: { uri: f.file, range: f.selection } },
+    ]);
+    try {
+      const all =
+        operation === "documentSymbols"
+          ? await f.service.documentSymbols({ uri: f.file.toString() })
+          : await f.service.workspaceSymbols({ query: "symbol" });
+      assert.equal(all.omitted, 7);
+      assert.equal(all.scanned, 9);
+      assert.equal(
+        all.symbols.map((s) => `${s.name}:${s.kind}:${s.type}`).join(","),
+        "future:99:unknown,valid:5:method",
+      );
+      const filtered =
+        operation === "documentSymbols"
+          ? await f.service.documentSymbols({ uri: f.file.toString(), kind: 5 })
+          : await f.service.workspaceSymbols({ query: "symbol", kind: 5 });
+      assert.equal(filtered.omitted, 7);
+      assert.equal(filtered.symbols.map((s) => s.name).join(","), "valid");
+    } finally {
+      f.service.dispose();
+    }
+  });
+
+  test(`${operation} omits malformed range and container shapes`, async () => {
+    const f = symbolFixture();
+    const flat = {
+      name: "valid",
+      kind: 5,
+      location: { uri: f.file, range: f.selection },
+    };
+    f.setItems([
+      ...[undefined, "0", -1, 0.5, NaN].map((line) => ({
+        ...flat,
+        location: {
+          uri: f.file,
+          range: {
+            start: { line, character: 0 },
+            end: { line: 0, character: 2 },
+          },
+        },
+      })),
+      {
+        ...flat,
+        location: {
+          uri: f.file,
+          range: {
+            start: { line: 0, character: 3 },
+            end: { line: 0, character: 2 },
+          },
+        },
+      },
+      { ...flat, containerName: ["array"] },
+      flat,
+    ]);
+    try {
+      const result =
+        operation === "documentSymbols"
+          ? await f.service.documentSymbols({ uri: f.file.toString() })
+          : await f.service.workspaceSymbols({ query: "symbol" });
+      assert.equal(result.omitted, 7);
+      assert.equal(result.scanned, 8);
+      assert.equal(result.symbols.length, 1);
+    } finally {
+      f.service.dispose();
+    }
+  });
+}
+
+test("invalid parent kind preserves valid children and counts only the parent omitted", async () => {
+  const f = symbolFixture();
+  f.setItems([
+    {
+      ...f.makeSymbol("parent"),
+      kind: "class",
+      children: [f.makeSymbol("child")],
+    },
+  ]);
+  try {
+    const result = await f.service.documentSymbols({ uri: f.file.toString() });
+    assert.equal(result.omitted, 1);
+    assert.equal(result.scanned, 2);
+    assert.equal(result.symbols.map((s) => s.name).join(","), "child");
+  } finally {
+    f.service.dispose();
+  }
+});
