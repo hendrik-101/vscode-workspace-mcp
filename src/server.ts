@@ -20,6 +20,8 @@ const uri = z.string().min(1).max(8192);
 const index = z.number().int().min(0).max(2_147_483_647);
 const position = z.strictObject({ line: index, character: index });
 const errors: Record<string, string> = {
+  SEARCH_INVALIDATED:
+    "Search continuation expired or changed. Restart the search without a cursor.",
   SESSION_STOPPED:
     "The workspace bridge has stopped. Reconnect to a running bridge.",
   INVALID_ARGUMENT: "Invalid workspace operation arguments.",
@@ -146,13 +148,19 @@ function createMcpServer(
   );
   tool(
     "search_workspace",
-    "Search literal text within a workspace URI. Results report incomplete searches.",
+    "Search live literal text within a workspace URI. Repeat identical options with nextCursor to continue. Results are not an atomic snapshot; inspect incomplete and limits.",
     z.strictObject({
       uri,
       query: z.string().min(1).max(4096),
       maxResults: z.number().int().min(1).max(100).optional(),
+      cursor: z.string().uuid().optional(),
+      include: z.array(z.string().min(1).max(256)).max(20).optional(),
+      exclude: z.array(z.string().min(1).max(256)).max(20).optional(),
+      caseSensitive: z.boolean().optional(),
+      wholeWord: z.boolean().optional(),
+      contextLines: z.number().int().min(0).max(5).optional(),
     }),
-    (args) => workspace.search(args),
+    (args) => workspace.search(args, signal),
   );
   tool(
     "edit_document",

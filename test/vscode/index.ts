@@ -9,6 +9,7 @@ import {
 } from "../../src/types";
 import { navigationTools } from "./navigation";
 import { MemoryProvider } from "./memory-provider";
+import { progressiveSearch } from "./search";
 
 const uri = (value: string): vscode.Uri => vscode.Uri.parse(value);
 const range = (start: number, end: number) => ({
@@ -301,6 +302,8 @@ export async function run(): Promise<void> {
       }),
       "INVALID_ARGUMENT",
     );
+
+    await progressiveSearch(provider, first);
 
     allowWrites = true;
     console.log("VS Code integration: validating edits and explicit save");

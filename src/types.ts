@@ -27,6 +27,13 @@ export interface ReadInput extends UriInput {
 export interface SearchInput extends UriInput {
   query: string;
   maxResults?: number;
+  /** Opaque, single-use continuation; resend the same query and options. */
+  cursor?: string;
+  include?: string[];
+  exclude?: string[];
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  contextLines?: number;
 }
 export interface EditInput extends UriInput {
   version: number;
@@ -155,8 +162,14 @@ export interface SearchResult {
     line: number;
     character: number;
     text: string;
+    context?: Array<{ line: number; text: string }>;
   }>;
   filesSearched: number;
+  nextCursor?: string;
+  /** Searches observe live files across pages, never an atomic snapshot. */
+  consistency?: "live";
+  /** Cumulative hard limits: omitted work cannot be recovered by continuation. */
+  limits?: string[];
   truncated: boolean;
   incomplete: boolean;
   errors: Array<{ uri: string; message: string }>;
@@ -228,7 +241,7 @@ export interface WorkspaceApi {
   context(): Promise<ContextResult>;
   list(input: UriInput): Promise<ListResult>;
   read(input: ReadInput): Promise<ReadResult>;
-  search(input: SearchInput): Promise<SearchResult>;
+  search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
   edit(input: EditInput, signal?: AbortSignal): Promise<DocumentState>;
   save(input: SaveInput, signal?: AbortSignal): Promise<DocumentState>;
   waitForDiagnostics(
@@ -239,6 +252,7 @@ export interface WorkspaceApi {
 }
 
 export type WorkspaceErrorCode =
+  | "SEARCH_INVALIDATED"
   | "SESSION_STOPPED"
   | "INVALID_ARGUMENT"
   | "OUTSIDE_WORKSPACE"
