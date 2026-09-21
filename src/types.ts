@@ -185,19 +185,36 @@ export interface ContextResult {
   tabs: Array<{ uri: string; active: boolean; dirty: boolean }>;
   truncated: boolean;
 }
+export type DiagnosticSeverity = "error" | "warning" | "information" | "hint";
+export interface DiagnosticsInput extends UriInput {
+  maxResults?: number;
+  severity?: DiagnosticSeverity;
+  offset?: number;
+  snapshotId?: string;
+}
 export interface DiagnosticsResult {
   uri: string;
   diagnostics: Array<{
     range: TextRange;
-    severity: "error" | "warning" | "information" | "hint";
+    severity: DiagnosticSeverity;
     message: string;
+    messageTruncated: boolean;
     source?: string;
+    sourceTruncated?: boolean;
     code?: string | number;
+    codeTruncated?: boolean;
   }>;
+  counts: Record<DiagnosticSeverity, number>;
+  total: number;
+  inspected: number;
+  matching: number;
+  incomplete: boolean;
+  snapshotId: string;
+  nextOffset?: number;
   truncated: boolean;
 }
 
-export interface WaitDiagnosticsInput extends UriInput {
+export interface WaitDiagnosticsInput extends DiagnosticsInput {
   version: number;
   timeoutMs?: number;
 }
@@ -248,11 +265,12 @@ export interface WorkspaceApi {
     input: WaitDiagnosticsInput,
     signal?: AbortSignal,
   ): Promise<WaitDiagnosticsResult>;
-  diagnostics(input: UriInput): Promise<DiagnosticsResult>;
+  diagnostics(input: DiagnosticsInput): Promise<DiagnosticsResult>;
 }
 
 export type WorkspaceErrorCode =
   | "SEARCH_INVALIDATED"
+  | "DIAGNOSTICS_CHANGED"
   | "SESSION_STOPPED"
   | "INVALID_ARGUMENT"
   | "OUTSIDE_WORKSPACE"

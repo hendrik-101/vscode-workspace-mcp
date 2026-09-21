@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
@@ -33,7 +33,21 @@ class Uri {
   }
 }
 
+function diagnostic(index: number, severity = index % 4) {
+  return {
+    range: {
+      start: { line: index, character: 0 },
+      end: { line: index, character: 1 },
+    },
+    severity,
+    message: `diagnostic ${index}`,
+    source: "test provider",
+    code: `code ${index}`,
+  };
+}
+
 function fixture(hardDeadlineMs = 25_000) {
+  const diagnostics: ReturnType<typeof diagnostic>[] = [];
   const uri = Uri.parse("memfs:/project/main.txt");
   const root = Uri.parse("memfs:/project");
   const document = {
@@ -81,7 +95,7 @@ function fixture(hardDeadlineMs = 25_000) {
         listeners.add(listener);
         return { dispose: () => listeners.delete(listener) };
       },
-      getDiagnostics: () => [],
+      getDiagnostics: () => diagnostics,
     },
   };
   const module = {
@@ -114,7 +128,7 @@ function fixture(hardDeadlineMs = 25_000) {
       require: (id: string) => {
         if (id === "vscode") return vscode;
         if (id === "node:buffer") return { Buffer };
-        if (id === "node:crypto") return { randomUUID };
+        if (id === "node:crypto") return { createHash, randomUUID };
         if (id === "./types") return contracts;
         throw new Error(`Unexpected import: ${id}`);
       },
@@ -123,6 +137,7 @@ function fixture(hardDeadlineMs = 25_000) {
   const service = new module.exports.WorkspaceService();
   return {
     service,
+    diagnostics,
     vscode,
     document,
     emit,
@@ -412,5 +427,269 @@ test("closing an unrelated URI does not invalidate the diagnostic wait", async (
   f.close(Uri.parse("memfs:/project/unrelated.txt"));
   f.emit();
   assert.equal((await pending).outcome, "event_observed");
+  f.clean();
+});
+
+test("defaults to a small page and continues without losing diagnostics", async () => {
+  const f = fixture();
+  f.diagnostics.push(...Array.from({ length: 25 }, (_, i) => diagnostic(i)));
+  const input = { uri: f.document.uri.toString() };
+  const first = await f.service.diagnostics(input);
+  assert.equal(first.diagnostics.length, 20);
+  assert.equal(first.nextOffset, 20);
+  assert.equal(first.truncated, true);
+  const next = await f.service.diagnostics({
+    ...input,
+    offset: first.nextOffset,
+    snapshotId: first.snapshotId,
+  });
+  assert.deepEqual(
+    Array.from(next.diagnostics, (d) => d.message),
+    [
+      "diagnostic 20",
+      "diagnostic 21",
+      "diagnostic 22",
+      "diagnostic 23",
+      "diagnostic 24",
+    ],
+  );
+  assert.equal(next.nextOffset, undefined);
+  assert.equal(next.truncated, false);
+  f.clean();
+});
+
+test("severity counts cover the inspected source before filtering and pagination", async () => {
+  const f = fixture();
+  f.diagnostics.push(...Array.from({ length: 1004 }, (_, i) => diagnostic(i)));
+  const result = await f.service.diagnostics({
+    uri: f.document.uri.toString(),
+    severity: "error",
+    maxResults: 3,
+  });
+  assert.deepEqual(
+    { ...result.counts },
+    { error: 250, warning: 250, information: 250, hint: 250 },
+  );
+  assert.equal(result.total, 1004);
+  assert.equal(result.inspected, 1000);
+  assert.equal(result.matching, 250);
+  assert.equal(result.incomplete, true);
+  assert.deepEqual(
+    Array.from(result.diagnostics, (d) => d.message),
+    ["diagnostic 0", "diagnostic 4", "diagnostic 8"],
+  );
+  const empty = await f.service.diagnostics({
+    uri: f.document.uri.toString(),
+    severity: "error",
+    maxResults: 3,
+    offset: 250,
+    snapshotId: result.snapshotId,
+  });
+  assert.equal(empty.diagnostics.length, 0);
+  assert.equal(empty.truncated, true);
+  assert.equal(empty.nextOffset, undefined);
+  f.clean();
+});
+
+test("clips hostile text within the global budget and every continuation advances", async () => {
+  const f = fixture();
+  f.diagnostics.push(
+    ...Array.from({ length: 24 }, (_, i) => ({
+      ...diagnostic(i),
+      message: "\u0000".repeat(9000),
+      source: "s".repeat(9000),
+      code: "c".repeat(9000),
+    })),
+  );
+  let offset = 0;
+  let snapshotId: string | undefined;
+  do {
+    const result = await f.service.diagnostics({
+      uri: f.document.uri.toString(),
+      maxResults: 100,
+      offset,
+      snapshotId,
+    });
+    assert.ok(JSON.stringify(result).length <= 16000);
+    assert.ok(result.diagnostics.length > 0);
+    assert.ok(
+      result.diagnostics.every(
+        (d) => d.messageTruncated && d.sourceTruncated && d.codeTruncated,
+      ),
+    );
+    assert.equal(result.truncated, true);
+    offset += result.diagnostics.length;
+    assert.equal(result.nextOffset, offset < 24 ? offset : undefined);
+    snapshotId = result.snapshotId;
+  } while (offset < 24);
+  f.clean();
+});
+
+for (const change of [
+  "message",
+  "tail",
+  "total",
+  "range",
+  "severity",
+  "source",
+  "code",
+  "filter",
+  "page size",
+  "uri",
+  "version",
+  "roots",
+  "session",
+] as const) {
+  test(`continuation rejects changed ${change} binding`, async () => {
+    const f = fixture();
+    f.diagnostics.push(...Array.from({ length: 30 }, (_, i) => diagnostic(i)));
+    const input: contracts.DiagnosticsInput = {
+      uri: f.document.uri.toString(),
+      maxResults: 3,
+    };
+    const first = await f.service.diagnostics(input);
+    if (change === "message") f.diagnostics[0]!.message = "changed";
+    if (change === "tail")
+      f.diagnostics[29]!.message = "changed outside first page";
+    if (change === "total") f.diagnostics.push(diagnostic(30));
+    if (change === "range") f.diagnostics[0]!.range.end.character++;
+    if (change === "severity") f.diagnostics[0]!.severity = 3;
+    if (change === "source") f.diagnostics[0]!.source = "changed";
+    if (change === "code") f.diagnostics[0]!.code = "changed";
+    if (change === "filter") input.severity = "warning";
+    if (change === "page size") input.maxResults = 4;
+    if (change === "uri") input.uri = "memfs:/project/other.txt";
+    if (change === "version") f.document.version++;
+    if (change === "roots")
+      f.vscode.workspace.workspaceFolders.push({
+        uri: Uri.parse("memfs:/other"),
+      });
+    const other = change === "session" ? fixture() : undefined;
+    if (other) other.diagnostics.push(...f.diagnostics);
+    await assert.rejects(
+      (other?.service ?? f.service).diagnostics({
+        ...input,
+        offset: first.nextOffset,
+        snapshotId: first.snapshotId,
+      }),
+      code("DIAGNOSTICS_CHANGED"),
+    );
+    other?.clean();
+    f.clean();
+  });
+}
+
+test("rejects invalid pagination before authorization or adding wait listeners", async () => {
+  const f = fixture();
+  let statCalls = 0;
+  f.setStat(async () => {
+    statCalls++;
+  });
+  for (const options of [
+    { maxResults: 0 },
+    { maxResults: 101 },
+    { offset: 1 },
+    { offset: -1 },
+    { snapshotId: "invalid" },
+    { severity: "fatal" },
+  ]) {
+    const input = {
+      uri: f.document.uri.toString(),
+      ...options,
+    } as contracts.DiagnosticsInput;
+    await assert.rejects(
+      f.service.diagnostics(input),
+      code("INVALID_ARGUMENT"),
+    );
+    await assert.rejects(
+      f.service.waitForDiagnostics({ ...input, version: 4 }),
+      code("INVALID_ARGUMENT"),
+    );
+  }
+  assert.equal(statCalls, 0);
+  assert.equal(f.registrations(), 0);
+  f.clean();
+});
+
+test("wait snapshots share filtering, budgets and continuation without changing honesty metadata", async () => {
+  const f = fixture();
+  f.diagnostics.push(...Array.from({ length: 40 }, (_, i) => diagnostic(i)));
+  const input = {
+    uri: f.document.uri.toString(),
+    maxResults: 3,
+    severity: "warning" as const,
+  };
+  const pending = f.service.waitForDiagnostics({
+    ...input,
+    version: 4,
+    timeoutMs: 1000,
+  });
+  f.emit();
+  const result = await pending;
+  assert.equal(result.outcome, "event_observed");
+  assert.equal(result.documentVersion, 4);
+  assert.equal(result.analysisComplete, "unknown");
+  assert.ok(Number.isFinite(Date.parse(result.capturedAt)));
+  assert.equal(result.diagnostics.length, 3);
+  assert.equal(result.matching, 10);
+  assert.ok(JSON.stringify(result).length <= 16000);
+  const next = await f.service.diagnostics({
+    ...input,
+    offset: result.nextOffset,
+    snapshotId: result.snapshotId,
+  });
+  assert.equal(next.diagnostics[0]!.message, "diagnostic 13");
+  f.clean();
+});
+
+test("wait output fits with a long URI and heavily escaped diagnostic fields", async () => {
+  const f = fixture();
+  f.document.uri = Uri.parse(`memfs:/project/${"a".repeat(7600)}.txt`);
+  f.diagnostics.push(
+    ...Array.from({ length: 2 }, (_, i) => ({
+      ...diagnostic(i),
+      message: "\u0000".repeat(9000),
+      source: "\u0000".repeat(9000),
+      code: "\u0000".repeat(9000),
+    })),
+  );
+  const pending = f.service.waitForDiagnostics({
+    uri: f.document.uri.toString(),
+    version: 4,
+    timeoutMs: 1000,
+  });
+  f.emit(f.document.uri);
+  const result = await pending;
+  assert.ok(JSON.stringify(result).length <= 16000);
+  assert.equal(result.diagnostics.length, 1);
+  assert.ok(result.diagnostics[0]!.message.length > 0);
+  assert.equal(result.diagnostics[0]!.messageTruncated, true);
+  assert.equal(result.nextOffset, 1);
+  assert.equal(result.analysisComplete, "unknown");
+  f.clean();
+});
+
+test("changes beyond clipped text and outside the severity filter invalidate continuation", async () => {
+  const f = fixture();
+  f.diagnostics.push(
+    { ...diagnostic(0, 1), message: "a".repeat(9000) },
+    diagnostic(1, 0),
+    diagnostic(2, 0),
+  );
+  const input = {
+    uri: f.document.uri.toString(),
+    severity: "error" as const,
+    maxResults: 1,
+  };
+  const first = await f.service.diagnostics(input);
+  f.diagnostics[0]!.message += "changed clipped tail";
+  await assert.rejects(
+    f.service.diagnostics({
+      ...input,
+      offset: first.nextOffset,
+      snapshotId: first.snapshotId,
+    }),
+    code("DIAGNOSTICS_CHANGED"),
+  );
   f.clean();
 });

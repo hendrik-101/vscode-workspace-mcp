@@ -20,6 +20,8 @@ const uri = z.string().min(1).max(8192);
 const index = z.number().int().min(0).max(2_147_483_647);
 const position = z.strictObject({ line: index, character: index });
 const errors: Record<string, string> = {
+  DIAGNOSTICS_CHANGED:
+    "Diagnostics or continuation options changed. Restart without offset and snapshotId.",
   SEARCH_INVALIDATED:
     "Search continuation expired or changed. Restart the search without a cursor.",
   SESSION_STOPPED:
@@ -188,10 +190,19 @@ function createMcpServer(
     (args) => workspace.save(args, signal),
     false,
   );
+  const diagnosticOptions = {
+    maxResults: z.number().int().min(1).max(100).optional(),
+    severity: z.enum(["error", "warning", "information", "hint"]).optional(),
+    offset: z.number().int().min(0).max(1000).optional(),
+    snapshotId: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+  };
   tool(
     "get_diagnostics",
-    "Get editor diagnostics for a workspace document.",
-    z.strictObject({ uri }),
+    "Get a bounded diagnostics page (default 20, max 100). Optional severity filter; counts cover the first 1000 diagnostics before filtering. Continue with nextOffset and snapshotId using unchanged options; restart if diagnostics changed.",
+    z.strictObject({ uri, ...diagnosticOptions }),
     (args) => workspace.diagnostics(args),
   );
   tool(
@@ -201,6 +212,7 @@ function createMcpServer(
       uri,
       version: index.min(1),
       timeoutMs: z.number().int().min(1).max(20_000).optional(),
+      ...diagnosticOptions,
     }),
     (args, requestSignal) => workspace.waitForDiagnostics(args, requestSignal),
   );
