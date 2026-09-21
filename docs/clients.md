@@ -1,126 +1,111 @@
-# Connect a client
+# Client setup
 
-Install the VSIX, open the intended workspace, then run **Workspace MCP: Start**
-and **Workspace MCP: Show Connection Details** from the VS Code Command Palette.
-The details contain ready-to-copy **stdio** client configuration for `workspace_mcp`.
-Install Node.js 24 or newer on the client host. The client launches the bundled
-`dist/stdio.cjs` adapter with `node`; keep the generated absolute path. The adapter
-connects only to the local extension over authenticated TLS, using its public
-certificate as the sole trust anchor. It never discovers other endpoints or follows
-redirects. Credentials are environment values, never command-line arguments.
-The loopback port is fixed: `workspaceMcp.port` defaults to **39117** (1024–65535).
-The bearer token is generated once in VS Code SecretStorage and reused across
-restarts and port changes. Set these options in **User** settings; workspace
-overrides are ignored. Update client configuration only after changing the port
-or explicitly rotating the token or server identity. Extension upgrades can change
-the adapter path; refresh connection details after upgrading. A port already in use fails visibly, without
-fallback; stop the other window or choose another user port before starting.
-Windows sharing this extension SecretStorage share the credential; inspect the
-returned workspace roots before working.
+Install the VSIX, open the intended workspace and run **Workspace MCP: Start**,
+then **Workspace MCP: Show Connection Details**. Copy the generated stdio settings
+for `workspace_mcp`. The client needs Node.js 24+ and launches the bundled
+`dist/stdio.cjs` using its generated absolute path.
 
-Before enabling agent edits, turn **Files: Auto Save** off for the workspace.
-Otherwise VS Code may save an edited buffer automatically even though the bridge
-does not call save. Leave Auto Save off when you need to review changes before
-the separate save operation.
+The adapter connects only to the local extension over authenticated TLS, trusting
+only its supplied public certificate. No endpoint discovery or redirects;
+credentials travel in environment variables, never command arguments.
 
-Keep connection details in private machine configuration, outside version control.
-Do not paste tokens into chats, issues, or the optional plugin. Stopping the bridge
-revokes its running connection, but does not delete the token.
+## Connection and write policy
 
-`workspaceMcp.writePolicy` is `ask` by default: each bridge start offers **Allow for
-this session**, **Deny for this session**, **Always allow**, and **Always deny**.
-Closing the prompt denies writes. Only the Always choices update the user setting
-to `allow` or `deny`; session choices leave it unchanged. Workspace Trust remains
-mandatory. **Enable Writes for This Session** reopens the choices unless policy
-is `deny`; change that user setting explicitly before allowing writes again.
-Editing and saving are separate operations.
+Set these in **User** settings; workspace overrides are ignored:
 
-**Workspace MCP: Rotate Token** immediately stops the bridge and asks confirmation
-before replacing the credential. Afterwards start it and update client settings.
-Other active windows sharing the secret stop when notified of the change. Cancelling
-rotation leaves the credential unchanged and the local bridge stopped.
+| Setting                    | Behavior                                                                                                       |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `workspaceMcp.port`        | Fixed port, default `39117`, range 1024–65535. A conflict fails; stop the other window or choose another port. |
+| `workspaceMcp.writePolicy` | `ask` (default), `allow` or `deny`; Workspace Trust remains required.                                          |
 
-## Codex CLI and the native Codex VS Code extension
+Token and server identity persist in SecretStorage. Refresh client settings after
+port changes, explicit credential/identity rotation or extension upgrades that
+change the adapter path. Windows sharing SecretStorage share credentials: inspect
+returned roots before working. Stop closes the connection without deleting the token.
+Keep settings private and outside version control; never paste tokens into chats,
+issues or plugins.
 
-Merge the generated TOML into `~/.codex/config.toml`, preserving existing settings.
-It defines `[mcp_servers.workspace_mcp]` with `command = "node"`, an absolute
-adapter path in `args`, and an `env` table containing `WORKSPACE_MCP_URL`,
-`WORKSPACE_MCP_TOKEN` and `WORKSPACE_MCP_CERTIFICATE`. Copy the generated values
-verbatim; the certificate is public, but the token is secret.
+With `ask`, each start offers **Allow for this session**, **Deny for this session**,
+**Always allow** and **Always deny**. Closing the prompt denies writes. Only Always
+choices persist `allow`/`deny`. **Enable Writes for This Session** reopens the choices
+unless policy is `deny`; change that user setting first.
 
-Restart the client connection. In the CLI, use `codex mcp list` to inspect configured
-servers and `/mcp` in the interactive client to inspect active connections. In the
-IDE, open the gear menu, choose MCP servers, then restart the extension after
-updating the configuration.
+Turn **Files: Auto Save** off before agent edits. Editing and saving are separate
+bridge operations, but VS Code Auto Save could otherwise persist buffer changes.
 
-The adapter reads these values from its environment. Configure them privately in
-the client; a shell export does not necessarily reach a running desktop process.
-[Official MCP configuration](https://developers.openai.com/codex/mcp).
+**Workspace MCP: Rotate Token** stops the bridge before requesting confirmation.
+Confirm, restart and refresh client settings; other windows sharing the secret
+stop when notified. Cancellation preserves the token and leaves the local bridge
+stopped.
 
-## Native Claude Code VS Code extension and CLI
+## Codex CLI and VS Code extension
 
-Use the generated Claude JSON: a `mcpServers.workspace_mcp` entry with
-`type: "stdio"`, `command: "node"`, the adapter path in `args`, and the three
-connection environment variables in `env`. Configure it in Claude Code's private
-user/local MCP settings. Do not commit a project `.mcp.json` containing the token.
-Reload Claude Code and inspect `/mcp` before accessing the workspace. VS Code's
-Copilot MCP settings are a separate client configuration.
-[Claude MCP documentation](https://code.claude.com/docs/en/mcp).
+Merge generated TOML into `~/.codex/config.toml` without replacing other settings.
+`[mcp_servers.workspace_mcp]` uses `command = "node"`, the absolute adapter path in
+`args` and these `env` values:
 
-## ChatGPT desktop on the same host
+- `WORKSPACE_MCP_URL`
+- `WORKSPACE_MCP_TOKEN` (secret)
+- `WORKSPACE_MCP_CERTIFICATE` (public)
 
-The desktop app, Codex CLI, and IDE extension share MCP configuration for the same
-Codex host. Use the generated TOML in that host's `~/.codex/config.toml`, including
-the adapter environment values. In the desktop app, open **Settings → MCP servers**, then
-restart the connection. Use `/mcp` to confirm that `workspace_mcp` is connected.
-[Official desktop MCP setup](https://developers.openai.com/codex/mcp).
+Copy values verbatim. Configure the client's environment directly; shell exports
+may not reach desktop processes. Restart the connection. CLI: `codex mcp list`
+shows configuration, `/mcp` shows active connections. IDE: gear menu → MCP servers;
+restart the extension after configuration changes.
+[Official MCP setup](https://developers.openai.com/codex/mcp).
 
-The adapter must run in the same network environment as the VS Code extension
-host and have access to its installed adapter file. Remote SSH, containers, WSL, and cloud execution can have a different loopback
-interface. This initial bridge does not configure tunnels or expose a remote server.
-Hosted ChatGPT web sessions do not read local Codex configuration and cannot
-launch this local stdio adapter. A hosted integration is separate work.
+## Claude Code CLI and VS Code extension
 
-## Optional shared workflow plugin
+Place generated `mcpServers.workspace_mcp` JSON in private user/local MCP settings:
+`type: "stdio"`, `command: "node"`, adapter path in `args` and the same three `env`
+values. Never commit tokens in project `.mcp.json`. Reload and inspect `/mcp`.
+Copilot's MCP settings configure a separate client.
+[Claude MCP setup](https://code.claude.com/docs/en/mcp).
 
-`plugins/vscode-workspace-mcp` contains one shared skill and thin Codex/Claude
-manifests. Pair the MCP server first. The plugin contains no connection file,
-credentials, hooks, or bundled server, and installing it does not establish a
-connection or grant write access.
+## Desktop and remote hosts
 
-For a Claude Code CLI session, run this from the repository root:
+For the desktop app using the same Codex host, use that host's
+`~/.codex/config.toml` as above. Open **Settings → MCP servers**, restart the
+connection and check `/mcp`.
+[Desktop MCP setup](https://developers.openai.com/codex/mcp).
+
+The adapter needs access to its installed file and the extension host's network
+environment. SSH, containers, WSL and cloud execution may have different loopback
+interfaces. The bridge provides no tunnels or remote listener. Hosted ChatGPT web
+cannot read local Codex settings or launch this adapter; hosted integration is
+separate work.
+
+## Optional workflow plugin
+
+`plugins/vscode-workspace-mcp` contains a shared skill and thin Codex/Claude
+manifests, no credentials, connection files, hooks or server. Pair MCP first;
+installing the plugin neither connects nor grants writes.
+
+Claude CLI, from the repository root:
 
 ```sh
 claude --plugin-dir ./plugins/vscode-workspace-mcp
 ```
 
-Then invoke `/vscode-workspace-mcp:workspace-mcp`. See the official
-[plugin reference](https://code.claude.com/docs/en/plugins-reference) for loading
-behavior.
+Invoke `/vscode-workspace-mcp:workspace-mcp`.
+[Plugin reference](https://code.claude.com/docs/en/plugins-reference).
 
-For persistent use as a personal skill without a plugin marketplace, install the
-skill itself from the repository root:
+Alternatively install a persistent personal skill from the repository root:
 
 ```sh
 mkdir -p ~/.claude/skills/workspace-mcp
 cp plugins/vscode-workspace-mcp/skills/workspace-mcp/SKILL.md ~/.claude/skills/workspace-mcp/SKILL.md
 ```
 
-Start a new Claude Code session and invoke `/workspace-mcp`. The personal-skill
-layout is `~/.claude/skills/<skill-name>/SKILL.md`; do not copy the enclosing
-plugin directory there. See the official
-[skills documentation](https://code.claude.com/docs/en/skills#choose-where-skills-load).
+Start a new session and invoke `/workspace-mcp`. Copy the skill file, not its
+enclosing plugin directory.
+[Skill locations](https://code.claude.com/docs/en/skills#choose-where-skills-load).
 
-For Codex, the compatibility manifest is ready for a personal plugin catalog.
-This repository does not create that catalog or assume an undocumented local
-plugin installation command. To use the workflow immediately without a catalog,
-ask Codex to read the repository's
-`plugins/vscode-workspace-mcp/skills/workspace-mcp/SKILL.md` and use the already
-paired `workspace_mcp` tools. Follow the current
-[OpenAI plugin packaging guide](https://developers.openai.com/plugins/build/plugins)
-if you want to add it to your personal catalog and install it in the desktop app.
+For Codex, add the compatibility manifest to a personal catalog using the
+[plugin packaging guide](https://developers.openai.com/plugins/build/plugins).
+This repository supplies no catalog or local installation command. Without a
+catalog, ask Codex to read `plugins/vscode-workspace-mcp/skills/workspace-mcp/SKILL.md`
+and use the paired tools.
 
-Ask the client to list workspace roots and read one document as a connection
-check. Verify that an unsaved editor change appears in the response. Client
-configuration and synthetic virtual-workspace tests do not prove SAP backend
-compatibility; test that separately against an authorized system.
+Check the connection by listing roots and reading a document with an unsaved
+change. Verify SAP/backend behavior separately using [acceptance](acceptance.md).

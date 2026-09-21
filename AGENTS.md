@@ -1,42 +1,31 @@
 # Agent entry point
 
-Keep this MIT project small, readable and free of telemetry. Preserve full VS Code
-URIs and live buffers. No shell tools, arbitrary commands or external outbound requests.
-The stdio adapter may connect only to the configured loopback TLS endpoint, with
-its pinned certificate; never disable certificate verification or follow redirects.
-Use feature branches and PRs. **Never push development commits to `main`, merge
-without the owner's explicit instruction, or publish a release without approval.**
+Keep this MIT project small, readable and telemetry-free.
 
-Read the relevant documents before working:
+- Preserve workspace URIs and live buffers. No Node fs/path, `fsPath`, `Uri.file()`,
+  shell search or file-scheme filters for workspace operations.
+- Admit resources and editor context only within current workspace roots; reject
+  traversal and symlink escapes. Require document versions for edits; never
+  implicitly save. Writes require user approval and Workspace Trust.
+- No shell tools, arbitrary commands or external product requests. The stdio
+  adapter may contact only its configured loopback TLS endpoint, with certificate
+  pinning and no redirects. Reject hostile Host/Origin and invalid tokens.
+- Never commit secrets/customer code, push development to `main`, bypass protection,
+  merge without the owner's instruction, or publish without approval.
+- Report incomplete results and failed operations honestly. Synthetic tests do
+  not prove SAP/backend or native-client compatibility; PR reviews are not Security scans.
 
-- [Development rules](docs/development.md): **required for every change**; branching,
-  validation, Codex and CodeRabbit reviews, merge authority and release policy.
-- [Design](docs/design.md): architecture, scope and security boundary.
-- [Security](SECURITY.md): threat model, token handling and reporting.
-- [Client integration](docs/clients.md): supported clients and plugin packaging.
-- [SAP acceptance](docs/acceptance.md): manual checks and unverified behavior.
-- [Initial implementation plan](docs/implementation-plan.md): first-delivery scope.
+Read [development rules](docs/development.md) for every change, including the
+current-head review and actual merge-gate checklist before handoff.
 
-## Code Review Rules
-
-### Virtual workspace correctness
-
-Workspace resources must remain VS Code URIs. Flag Node fs/path, fsPath,
-Uri.file(), local shell search or a file-scheme filter in workspace operations.
-Read unsaved buffers; require document versions for edits; never implicitly save.
-
-### Access boundary
-
-Every resource and editor context must be within admitted current workspace roots.
-Reject traversal, symlink escapes, hostile Host/Origin and missing/invalid tokens.
-Writes need the user write policy or session approval and Workspace Trust. No network binding beyond
-loopback, no outgoing product requests, no secrets in logs or checked-in files.
-
-### Honest results
-
-Before declaring a PR ready, follow the completion-evidence checklist in
-docs/development.md. Green checks and `mergeable: true` are insufficient:
-verify formal review blockers and GitHub's actual merge gate after all reviews.
-
-Report partial search, save refusal and validation failures as such. Do not claim
-SAP backend, cloud-client or Security-scan validation from a synthetic test.
+| Document                                    | Purpose                                       |
+| ------------------------------------------- | --------------------------------------------- |
+| [Design](docs/design.md)                    | Architecture and runtime boundaries           |
+| [Security](SECURITY.md)                     | Threat model, credentials and reporting       |
+| [Clients](docs/clients.md)                  | Connection and optional plugin setup          |
+| [Acceptance](docs/acceptance.md)            | Automated scope and manual SAP/client checks  |
+| [Navigation](docs/navigation.md)            | Definitions, references and hover             |
+| [Diagnostics](docs/diagnostics.md)          | Waiting semantics and limits                  |
+| [Refactoring](docs/refactoring.md)          | Rename/action previews and application limits |
+| [Search](docs/search.md)                    | Filters, cursors and consistency              |
+| [Initial plan](docs/implementation-plan.md) | Historical delivery scope                     |
