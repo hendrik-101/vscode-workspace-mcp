@@ -45,8 +45,8 @@ bytes. One extra bounded buffer may be inspected before yielding at the byte lim
 
 Cumulative limits: 12 directory levels, 2,000 pending entries or 128 Ki UTF-16 URI
 characters, 8,192 characters per URI, 20,000 traversal steps, 64 MiB examined buffers
-and 1,000 pages. `limits.filterWork` terminates expensive filters;
-`limits.totalWork` terminates overall exhaustion. Other limits omit unsafe/excess
+and 1,000 pages. In `limits`, `filterWork` marks expensive-filter termination;
+`totalWork` marks overall exhaustion. Other limits omit unsafe/excess
 entries while retained work can continue. Provider `readDirectory` returns a
 whole array; the bridge retains a bounded subset but cannot paginate that call.
 
