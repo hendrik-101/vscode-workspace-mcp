@@ -191,13 +191,35 @@ function createMcpServer(
     false,
   );
   const diagnosticOptions = {
-    maxResults: z.number().int().min(1).max(100).optional(),
-    severity: z.enum(["error", "warning", "information", "hint"]).optional(),
-    offset: z.number().int().min(0).max(1000).optional(),
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe("Maximum results per page; default 20, maximum 100."),
+    severity: z
+      .enum(["error", "warning", "information", "hint"])
+      .optional()
+      .describe(
+        "Return only this severity; omit for all severities. Counts remain unfiltered.",
+      ),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(1000)
+      .optional()
+      .describe(
+        "Filtered result offset; default 0. Continue with nextOffset and unchanged filters.",
+      ),
     snapshotId: z
       .string()
       .regex(/^[a-f0-9]{64}$/)
-      .optional(),
+      .optional()
+      .describe(
+        "Returned snapshotId; supply only together with a positive offset. Rejects changed diagnostics or options.",
+      ),
   };
   tool(
     "get_diagnostics",

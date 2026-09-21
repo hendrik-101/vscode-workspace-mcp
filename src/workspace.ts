@@ -2022,7 +2022,7 @@ export class WorkspaceService implements WorkspaceApi {
     if (
       maxResults > 100 ||
       offset > MAX_LIST_ENTRIES ||
-      (offset > 0 && snapshotId === undefined) ||
+      offset > 0 !== (snapshotId !== undefined) ||
       (snapshotId !== undefined &&
         (typeof snapshotId !== "string" ||
           !/^[a-f0-9]{64}$/.test(snapshotId))) ||
@@ -2031,7 +2031,7 @@ export class WorkspaceService implements WorkspaceApi {
     )
       fail(
         "INVALID_ARGUMENT",
-        "Invalid diagnostic page options or missing snapshotId.",
+        "Invalid diagnostic page options; snapshotId and a positive offset must be supplied together.",
       );
     const uri = parseUri(input.uri);
     if (JSON.stringify(uri.toString()).length > 8192)

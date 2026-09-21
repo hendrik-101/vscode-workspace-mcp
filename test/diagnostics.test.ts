@@ -693,3 +693,53 @@ test("changes beyond clipped text and outside the severity filter invalidate con
   );
   f.clean();
 });
+
+for (const operation of ["get", "wait"] as const) {
+  test(`${operation} rejects snapshotId without a positive continuation offset before provider work`, async () => {
+    const f = fixture();
+    f.diagnostics.push(diagnostic(0), diagnostic(1));
+    const input = { uri: f.document.uri.toString(), maxResults: 1 };
+    const first = await f.service.diagnostics(input);
+    let statCalls = 0;
+    f.setStat(async () => {
+      statCalls++;
+    });
+    for (const page of [
+      { snapshotId: first.snapshotId },
+      { offset: 0, snapshotId: first.snapshotId },
+    ]) {
+      const args = { ...input, ...page };
+      await assert.rejects(
+        operation === "get"
+          ? f.service.diagnostics(args)
+          : f.service.waitForDiagnostics({ ...args, version: 4, timeoutMs: 1 }),
+        code("INVALID_ARGUMENT"),
+      );
+    }
+    assert.equal(statCalls, 0);
+    assert.equal(f.registrations(), 0);
+    f.clean();
+  });
+
+  test(`${operation} accepts initial offset zero without snapshotId and positive paired continuation`, async () => {
+    const f = fixture();
+    f.diagnostics.push(diagnostic(0), diagnostic(1));
+    const input = { uri: f.document.uri.toString(), maxResults: 1 };
+    const call = (args: contracts.DiagnosticsInput) =>
+      operation === "get"
+        ? f.service.diagnostics(args)
+        : f.service.waitForDiagnostics({ ...args, version: 4, timeoutMs: 1 });
+    for (const page of [{}, { offset: 0 }]) {
+      const first = await call({ ...input, ...page });
+      assert.equal(first.diagnostics[0]!.message, "diagnostic 0");
+      const next = await call({
+        ...input,
+        offset: first.nextOffset,
+        snapshotId: first.snapshotId,
+      });
+      assert.equal(next.diagnostics[0]!.message, "diagnostic 1");
+      assert.equal(next.nextOffset, undefined);
+    }
+    f.clean();
+  });
+}

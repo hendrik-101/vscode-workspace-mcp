@@ -36,6 +36,8 @@ Excess waits fail with `LIMIT_EXCEEDED` before adding listeners or invoking prov
 Both tools accept `maxResults` (default 20, 1–100), optional `severity`
 (`error`, `warning`, `information`, or `hint`), and optional continuation
 `offset` plus `snapshotId`. The first page uses offset 0 and no snapshot ID.
+A snapshot ID requires a positive offset, and a positive offset requires a
+snapshot ID; incomplete pairs are rejected before provider work.
 Continue with the returned `nextOffset` and `snapshotId`, the same URI, severity
 and page size. Prefer `get_diagnostics` for continuation after a wait: another
 wait still performs its usual version checks and event/timeout observation.
