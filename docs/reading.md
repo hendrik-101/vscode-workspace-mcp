@@ -11,7 +11,9 @@ maps to the last line's end.
 
 Optional `version` must equal the live buffer version. Every response includes
 the observed version. Read pages are individually checked observations; pass
-that version on subsequent pages to reject intervening edits.
+that version on subsequent pages to reject intervening edits in the same open
+document. Versions may reset on close/reopen, so they are not persistent snapshot
+identities across reopen.
 
 Both budgets apply to each response: `maxLines` defaults to 200 (1–1000) and
 `maxChars` defaults to 16000 (2–64000 UTF-16 code units, including line endings).
