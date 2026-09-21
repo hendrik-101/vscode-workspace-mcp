@@ -217,23 +217,65 @@ function createMcpServer(
     false,
   );
   const symbolOptions = {
-    name: z.string().min(1).max(1000).optional(),
+    name: z
+      .string()
+      .min(1)
+      .max(1000)
+      .optional()
+      .describe(
+        "Case-insensitive symbol name substring filter; omit for all names.",
+      ),
     kind: z
       .union([z.number().int().min(0).max(25), z.enum(SYMBOL_TYPES)])
-      .optional(),
-    maxResults: z.number().int().min(1).max(100).optional(),
-    offset: z.number().int().min(0).max(1000).optional(),
+      .optional()
+      .describe(
+        "VS Code symbol kind number (0–25) or lowercase type name; omit for all kinds.",
+      ),
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe("Maximum results per page; default 20, maximum 100."),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(1000)
+      .optional()
+      .describe(
+        "Filtered result offset; default 0. Continue with nextOffset and unchanged filters.",
+      ),
   };
   tool(
     "workspace_symbols",
     "Search registered workspace symbol providers. Defaults to 20 results (max 100); name substring/kind filters and offset pagination. Each page is live: provider changes may skip or duplicate results. scanLimitReached means the 1000-node scan was incomplete; empty results do not prove provider availability.",
-    z.strictObject({ query: z.string().min(1).max(4096), ...symbolOptions }),
+    z.strictObject({
+      query: z
+        .string()
+        .min(1)
+        .max(4096)
+        .describe(
+          "Symbol name query interpreted by the registered language provider.",
+        ),
+      ...symbolOptions,
+    }),
     (args) => workspace.workspaceSymbols(args, signal),
   );
   tool(
     "document_symbols",
-    "Get document symbols with full range and selectionRange when known. Defaults to 20 results (max 100); filter name/kind and resend filters with nextOffset plus version for another page. Document changes reject; provider ordering is not a snapshot. scanLimitReached means additional nodes were not inspected. Flat provider locations have fullRangeKnown:false.",
-    z.strictObject({ uri, version: index.min(1).optional(), ...symbolOptions }),
+    "Get the document symbol outline with full range and selectionRange when known. Defaults to 20 results (max 100); filter name/kind and resend filters with nextOffset plus version for another page. Document changes reject; provider ordering is not a snapshot. scanLimitReached means additional nodes were not inspected. Flat provider locations have fullRangeKnown:false.",
+    z.strictObject({
+      uri,
+      version: index
+        .min(1)
+        .optional()
+        .describe(
+          "Expected live document version; required with nonzero offset.",
+        ),
+      ...symbolOptions,
+    }),
     (args) => workspace.documentSymbols(args, signal),
   );
   tool(
