@@ -6,7 +6,7 @@
 | `preview_code_actions` | `vscode.executeCodeActionProvider`     | URI, version, selection, `quickfix` or `refactor` kind              |
 
 Resolve at most 20 actions. Both tools work with writes disabled: neither edits,
-saves, activates objects nor executes provider commands.
+saves, activates objects nor executes commands returned by providers.
 
 ## Validation
 

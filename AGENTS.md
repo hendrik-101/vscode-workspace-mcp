@@ -7,11 +7,11 @@ Keep this MIT project small, readable and telemetry-free.
 - Admit resources and editor context only within current workspace roots; reject
   traversal and symlink escapes. Require document versions for edits; never
   implicitly save. Writes require user approval and Workspace Trust.
-- No shell tools, arbitrary commands or external product requests. The stdio
-  adapter may contact only its configured loopback TLS endpoint, with certificate
+- No shell tools, arbitrary commands or external product requests. Bind listeners
+  only to loopback. The stdio adapter may contact only its configured loopback TLS endpoint, with certificate
   pinning and no redirects. Reject hostile Host/Origin and invalid tokens.
-- Never commit secrets/customer code, push development to `main`, bypass protection,
-  merge without the owner's instruction, or publish without approval.
+- Never log or commit secrets/customer code. Never push development to `main`,
+  bypass protection, merge without the owner's instruction, or publish without approval.
 - Report incomplete results and failed operations honestly. Synthetic tests do
   not prove SAP/backend or native-client compatibility; PR reviews are not Security scans.
 
