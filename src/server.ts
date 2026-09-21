@@ -142,9 +142,20 @@ function createMcpServer(
     z
       .strictObject({
         uri,
-        startLine: index.optional(),
-        endLine: index.optional(),
-        range: z.strictObject({ start: position, end: position }).optional(),
+        startLine: index
+          .optional()
+          .describe("First line, zero-based; default 0. Excludes range."),
+        endLine: index
+          .optional()
+          .describe(
+            "Exclusive end line; default document line count. Excludes range.",
+          ),
+        range: z
+          .strictObject({ start: position, end: position })
+          .optional()
+          .describe(
+            "Exact half-open UTF-16 range; excludes startLine and endLine.",
+          ),
         version: index
           .min(1)
           .optional()
