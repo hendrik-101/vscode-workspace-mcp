@@ -10,7 +10,14 @@ import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 
 const workspace: WorkspaceApi = {
   show: async ({ uri }) => ({ uri, version: 1, dirty: false }),
-  workspaceSymbols: async () => ({ symbols: [], truncated: false, omitted: 0 }),
+  workspaceSymbols: async () => ({
+    symbols: [],
+    truncated: false,
+    omitted: 0,
+    scanned: 0,
+    scanLimitReached: false,
+    consistency: "live",
+  }),
   definition: async () => ({
     uri: "vfs:/project/file",
     version: 1,
@@ -36,7 +43,15 @@ const workspace: WorkspaceApi = {
     truncated: false,
     omitted: 0,
   }),
-  documentSymbols: async () => ({ symbols: [], truncated: false, omitted: 0 }),
+  documentSymbols: async () => ({
+    symbols: [],
+    truncated: false,
+    omitted: 0,
+    scanned: 0,
+    scanLimitReached: false,
+    consistency: "document-version",
+    version: 1,
+  }),
   diff: async () => ({ shown: true }),
   format: async ({ uri, version }) => ({
     uri,
@@ -236,12 +251,25 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       },
     ],
     ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
-    ["document_symbols", { uri: "memfs:/project/a.abap" }],
+    [
+      "document_symbols",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 1,
+        name: "member",
+        kind: "method",
+        offset: 20,
+        maxResults: 20,
+      },
+    ],
     [
       "wait_for_diagnostics",
       { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 1 },
     ],
-    ["workspace_symbols", { query: "class" }],
+    [
+      "workspace_symbols",
+      { query: "class", name: "Class", kind: 4, offset: 1, maxResults: 100 },
+    ],
     [
       "get_definition",
       { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
@@ -323,6 +351,9 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
     ],
     ["workspace_symbols", { query: "" }],
+    ["workspace_symbols", { query: "x", maxResults: 101 }],
+    ["workspace_symbols", { query: "x", kind: "bogus" }],
+    ["document_symbols", { uri: "memfs:/project/a.abap", offset: -1 }],
     [
       "wait_for_diagnostics",
       { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 20001 },
