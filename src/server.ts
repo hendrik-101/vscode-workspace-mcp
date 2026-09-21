@@ -51,7 +51,10 @@ function createMcpServer(
     name: string,
     description: string,
     schema: z.ZodObject<S>,
-    operation: (args: z.output<typeof schema>) => unknown,
+    operation: (
+      args: z.output<typeof schema>,
+      requestSignal: AbortSignal,
+    ) => unknown,
     readOnly = true,
     destructive = !readOnly,
   ) {
@@ -66,10 +69,13 @@ function createMcpServer(
           openWorldHint: false,
         },
       },
-      async (args) => {
+      async (args, extra) => {
         try {
           const result = await execute(() =>
-            operation(args as z.output<typeof schema>),
+            operation(
+              args as z.output<typeof schema>,
+              AbortSignal.any([signal, extra.signal]),
+            ),
           );
           const structuredContent = { result };
           return {
@@ -179,6 +185,16 @@ function createMcpServer(
     "Get editor diagnostics for a workspace document.",
     z.strictObject({ uri }),
     (args) => workspace.diagnostics(args),
+  );
+  tool(
+    "wait_for_diagnostics",
+    "Wait for a diagnostic change event for a version-checked document, or timeout. Returns a current snapshot; an event does not prove analysis completion or diagnostic freshness.",
+    z.strictObject({
+      uri,
+      version: index.min(1),
+      timeoutMs: z.number().int().min(1).max(20_000).optional(),
+    }),
+    (args, requestSignal) => workspace.waitForDiagnostics(args, requestSignal),
   );
   tool(
     "show_document",

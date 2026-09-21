@@ -14,6 +14,8 @@ import {
   type FormatResult,
   type ContextResult,
   type DiagnosticsResult,
+  type WaitDiagnosticsInput,
+  type WaitDiagnosticsResult,
   type DocumentState,
   type EditInput,
   type ListResult,
@@ -156,6 +158,8 @@ export class WorkspaceService implements WorkspaceApi {
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
   private disposed = false;
+  private readonly diagnosticWaits = new Set<() => void>();
+  private pendingDiagnosticWork = 0;
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
@@ -165,6 +169,8 @@ export class WorkspaceService implements WorkspaceApi {
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
     this.disposed = true;
+    for (const stop of this.diagnosticWaits) stop();
+    this.diagnosticWaits.clear();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
     this.snapshots.clear();
@@ -1316,10 +1322,152 @@ export class WorkspaceService implements WorkspaceApi {
     return state(document);
   }
 
+  /** Observe a change event, never infer a language server's analysis version. */
+  async waitForDiagnostics(
+    { uri: value, version, timeoutMs = 1000 }: WaitDiagnosticsInput,
+    signal?: AbortSignal,
+  ): Promise<WaitDiagnosticsResult> {
+    signal?.throwIfAborted();
+    this.active();
+    integer(version, "version", 1);
+    integer(timeoutMs, "timeoutMs", 1);
+    if (timeoutMs > 20_000)
+      fail("INVALID_ARGUMENT", "timeoutMs must be <= 20000.");
+    const uri = parseUri(value);
+    const root = this.currentRoot(uri);
+    const controller = new AbortController();
+    const stop = () =>
+      controller.abort(
+        new WorkspaceError(
+          "SESSION_STOPPED",
+          "The workspace bridge has stopped.",
+        ),
+      );
+    const abort = () => controller.abort(signal?.reason);
+    const check = () => {
+      controller.signal.throwIfAborted();
+      this.stillAllowed(uri, root);
+      if (!vscode.workspace.isTrusted)
+        fail("UNTRUSTED_WORKSPACE", "Workspace Trust is required.");
+    };
+    check();
+    if (this.pendingDiagnosticWork >= 16)
+      fail(
+        "LIMIT_EXCEEDED",
+        "Too much diagnostic provider work remains pending.",
+      );
+    let wake!: () => void;
+    const event = new Promise<"event_observed">((resolve) => {
+      wake = () => resolve("event_observed");
+    });
+    // Subscribe before any asynchronous document checks/loading can emit events.
+    const listener = vscode.languages.onDidChangeDiagnostics((change) => {
+      if (
+        change.uris.some((changed) => changed.toString() === uri.toString())
+      ) {
+        wake();
+      }
+    });
+    // Even a URI unopened at entry can open and close while authorization awaits.
+    const closeListener = vscode.workspace.onDidCloseTextDocument(
+      (document) => {
+        if (document.uri.toString() === uri.toString())
+          controller.abort(
+            new WorkspaceError(
+              "VERSION_CONFLICT",
+              "The observed document was closed during the wait.",
+            ),
+          );
+      },
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = setTimeout(
+      () =>
+        controller.abort(
+          new WorkspaceError(
+            "LIMIT_EXCEEDED",
+            "Diagnostic request exceeded 25 seconds.",
+          ),
+        ),
+      25_000,
+    );
+    this.diagnosticWaits.add(stop);
+    signal?.addEventListener("abort", abort, { once: true });
+    let rejectAbort!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      rejectAbort = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", rejectAbort, { once: true });
+    });
+    try {
+      this.pendingDiagnosticWork++;
+      return await Promise.race([
+        cancelled,
+        (async (): Promise<WaitDiagnosticsResult> => {
+          // Versions are scoped to a document instance, including during loading.
+          const initialDocument = vscode.workspace.textDocuments.find(
+            (document) =>
+              !document.isClosed && document.uri.toString() === uri.toString(),
+          );
+          const document = await this.document(uri, controller.signal);
+          check();
+          if (initialDocument && initialDocument !== document)
+            fail(
+              "VERSION_CONFLICT",
+              "The observed document was closed or replaced during loading.",
+            );
+          this.expected(document, version);
+          const outcome = await Promise.race([
+            event,
+            new Promise<"timeout">((resolve) => {
+              timer = setTimeout(() => resolve("timeout"), timeoutMs);
+            }),
+          ]);
+          check();
+          await this.authorize(uri, controller.signal);
+          check();
+          if (
+            document.isClosed ||
+            !vscode.workspace.textDocuments.includes(document)
+          )
+            fail(
+              "VERSION_CONFLICT",
+              "The observed document was closed or replaced.",
+            );
+          this.expected(document, version);
+          return {
+            ...this.diagnosticSnapshot(uri),
+            outcome,
+            documentVersion: document.version,
+            capturedAt: new Date().toISOString(),
+            analysisComplete: "unknown",
+          };
+        })().finally(() => {
+          // A prompt cancelled response must not release uncancellable provider work.
+          this.pendingDiagnosticWork--;
+        }),
+      ]);
+    } finally {
+      // Wake background work too: a cancelled caller must retain no listener/timer.
+      controller.abort();
+      wake();
+      clearTimeout(timer);
+      clearTimeout(deadline);
+      listener.dispose();
+      closeListener.dispose();
+      this.diagnosticWaits.delete(stop);
+      signal?.removeEventListener("abort", abort);
+      controller.signal.removeEventListener("abort", rejectAbort);
+    }
+  }
+
   /** Returns bounded editor diagnostics for an admitted workspace URI. */
   async diagnostics({ uri: value }: UriInput): Promise<DiagnosticsResult> {
     const uri = parseUri(value);
     await this.authorize(uri);
+    return this.diagnosticSnapshot(uri);
+  }
+
+  private diagnosticSnapshot(uri: vscode.Uri): DiagnosticsResult {
     const diagnostics = vscode.languages.getDiagnostics(uri);
     const severity = ["error", "warning", "information", "hint"] as const;
     return {

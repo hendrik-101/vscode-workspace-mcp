@@ -149,6 +149,18 @@ export interface DiagnosticsResult {
   truncated: boolean;
 }
 
+export interface WaitDiagnosticsInput extends UriInput {
+  version: number;
+  timeoutMs?: number;
+}
+export interface WaitDiagnosticsResult extends DiagnosticsResult {
+  outcome: "event_observed" | "timeout";
+  documentVersion: number;
+  capturedAt: string;
+  /** VS Code exposes no diagnostic analysis version or completion guarantee. */
+  analysisComplete: "unknown";
+}
+
 export interface WorkspaceApi {
   /** Release resources owned by this bridge when its server stops. */
   dispose?(): void;
@@ -176,6 +188,10 @@ export interface WorkspaceApi {
   search(input: SearchInput): Promise<SearchResult>;
   edit(input: EditInput, signal?: AbortSignal): Promise<DocumentState>;
   save(input: SaveInput, signal?: AbortSignal): Promise<DocumentState>;
+  waitForDiagnostics(
+    input: WaitDiagnosticsInput,
+    signal?: AbortSignal,
+  ): Promise<WaitDiagnosticsResult>;
   diagnostics(input: UriInput): Promise<DiagnosticsResult>;
 }
 

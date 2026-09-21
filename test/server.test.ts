@@ -76,6 +76,15 @@ const workspace: WorkspaceApi = {
     dirty: true,
   }),
   save: async ({ uri, version }) => ({ uri, version, dirty: false }),
+  waitForDiagnostics: async ({ uri, version }) => ({
+    uri,
+    diagnostics: [],
+    truncated: false,
+    outcome: "timeout",
+    documentVersion: version,
+    capturedAt: new Date().toISOString(),
+    analysisComplete: "unknown",
+  }),
   diagnostics: async ({ uri }) => ({ uri, diagnostics: [], truncated: false }),
 };
 
@@ -165,12 +174,17 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "search_workspace",
     "show_diff",
     "show_document",
+    "wait_for_diagnostics",
     "workspace_roots",
     "workspace_symbols",
   ]);
   for (const [name, args] of [
     ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
     ["document_symbols", { uri: "memfs:/project/a.abap" }],
+    [
+      "wait_for_diagnostics",
+      { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 1 },
+    ],
     ["workspace_symbols", { query: "class" }],
     [
       "get_definition",
@@ -205,6 +219,11 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
       { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
     ],
     ["workspace_symbols", { query: "" }],
+    [
+      "wait_for_diagnostics",
+      { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 20001 },
+    ],
+    ["wait_for_diagnostics", { uri: "memfs:/project/a.abap" }],
   ] as const) {
     assert.equal(
       (await client.callTool({ name, arguments: args })).isError,

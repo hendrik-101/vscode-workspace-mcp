@@ -443,7 +443,24 @@ export async function run(): Promise<void> {
       vscode.DiagnosticSeverity.Warning,
     );
     diagnostic.source = "test-provider";
+    const diagnosticDocument = await vscode.workspace.openTextDocument(file);
+    const awaitingDiagnostics = service.waitForDiagnostics({
+      uri: file.toString(),
+      version: diagnosticDocument.version,
+      timeoutMs: 2000,
+    });
     diagnostics.set(file, [diagnostic]);
+    const observedDiagnostics = await awaitingDiagnostics;
+    assert.equal(observedDiagnostics.outcome, "event_observed");
+    assert.equal(
+      observedDiagnostics.documentVersion,
+      diagnosticDocument.version,
+    );
+    assert.equal(observedDiagnostics.analysisComplete, "unknown");
+    assert.equal(
+      observedDiagnostics.diagnostics[0]?.message,
+      "Synthetic diagnostic",
+    );
     const reported = await service.diagnostics({ uri: file.toString() });
     assert.equal(reported.diagnostics[0]?.message, "Synthetic diagnostic");
     assert.equal(reported.diagnostics[0]?.severity, "warning");
