@@ -59,6 +59,16 @@ cached. Equal fingerprints prove equality of this bounded observation, not that
 no intervening event occurred, that entries beyond 1000 stayed equal, or that a
 language provider analyzed the current buffer.
 
+Snapshot hashing admits at most 1048576 UTF-16 code units across message, source
+and string code values in the inspected source, including entries excluded by
+the severity filter or current page. Each entry's string lengths are checked
+before its full text is serialized or hashed. Exceeding this cumulative input
+budget fails the whole request with `LIMIT_EXCEEDED`; no partial snapshot or
+counts are returned. This bounds synchronous diagnostic text processing without
+relying on a timer to interrupt JavaScript. Input within the budget is still
+hashed in full, including text beyond output clipping. The budget does not limit
+VS Code's internal work obtaining the stored diagnostic array.
+
 Each result is bounded to 16000 serialized JSON characters (excluding MCP wrapper
 and duplicated text/structured representations). URI JSON is limited to 8192
 characters. Messages are at most 4096 characters and optional source/string code

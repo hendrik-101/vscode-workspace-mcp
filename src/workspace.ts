@@ -36,6 +36,7 @@ import {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LIST_ENTRIES = 1000;
+const MAX_DIAGNOSTIC_CHARACTERS = 1024 * 1024;
 const MAX_SEARCH_FILES = 200;
 const MAX_SEARCH_ENTRIES = 2000;
 const MAX_SEARCH_DEPTH = 12;
@@ -2070,7 +2071,19 @@ export class WorkspaceService implements WorkspaceApi {
         source.length,
       ]),
     );
+    let remainingCharacters = MAX_DIAGNOSTIC_CHARACTERS;
     for (const item of inspected) {
+      const code = typeof item.code === "object" ? item.code.value : item.code;
+      // Check lengths before serialization: timers cannot interrupt this work.
+      remainingCharacters -=
+        item.message.length +
+        (item.source?.length ?? 0) +
+        (typeof code === "string" ? code.length : 0);
+      if (remainingCharacters < 0)
+        fail(
+          "LIMIT_EXCEEDED",
+          "Diagnostic text exceeds the snapshot input budget.",
+        );
       const severity = severities[item.severity] ?? "information";
       counts[severity]++;
       // Hash complete exposed fields, including text omitted from the page.
@@ -2080,7 +2093,7 @@ export class WorkspaceService implements WorkspaceApi {
           severity,
           item.message,
           item.source ?? null,
-          typeof item.code === "object" ? item.code.value : (item.code ?? null),
+          code ?? null,
         ]),
       );
       if (filter === undefined || filter === severity) matching.push(item);

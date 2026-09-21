@@ -42,7 +42,7 @@ function diagnostic(index: number, severity = index % 4) {
     severity,
     message: `diagnostic ${index}`,
     source: "test provider",
-    code: `code ${index}`,
+    code: `code ${index}` as string | { value: string; target: Uri },
   };
 }
 
@@ -740,6 +740,92 @@ for (const operation of ["get", "wait"] as const) {
       assert.equal(next.diagnostics[0]!.message, "diagnostic 1");
       assert.equal(next.nextOffset, undefined);
     }
+    f.clean();
+  });
+}
+
+for (const operation of ["get", "wait"] as const) {
+  for (const field of ["message", "source", "code", "linked code"] as const) {
+    test(`${operation} rejects oversized diagnostic ${field} input even outside the severity filter`, async () => {
+      const f = fixture();
+      const oversized = "\u0000".repeat(1_048_577);
+      const item = diagnostic(0, 1);
+      if (field === "linked code")
+        item.code = { value: oversized, target: f.document.uri };
+      else item[field] = oversized;
+      f.diagnostics.push(item, diagnostic(1, 0));
+      const input = {
+        uri: f.document.uri.toString(),
+        severity: "error" as const,
+      };
+      await assert.rejects(
+        operation === "get"
+          ? f.service.diagnostics(input)
+          : f.service.waitForDiagnostics({
+              ...input,
+              version: 4,
+              timeoutMs: 1,
+            }),
+        code("LIMIT_EXCEEDED"),
+      );
+      f.clean();
+    });
+  }
+
+  test(`${operation} bounds cumulative diagnostic input beyond the requested page`, async () => {
+    const f = fixture();
+    f.diagnostics.push(
+      ...Array.from({ length: 1000 }, (_, i) => ({
+        ...diagnostic(i),
+        message: "m".repeat(600),
+        source: "s".repeat(300),
+        code: "c".repeat(300),
+      })),
+    );
+    const input = { uri: f.document.uri.toString(), maxResults: 1 };
+    await assert.rejects(
+      operation === "get"
+        ? f.service.diagnostics(input)
+        : f.service.waitForDiagnostics({ ...input, version: 4, timeoutMs: 1 }),
+      code("LIMIT_EXCEEDED"),
+    );
+    f.clean();
+  });
+
+  test(`${operation} hashes admitted large input fully and detects changes beyond clipped output`, async () => {
+    const f = fixture();
+    f.diagnostics.push(
+      {
+        ...diagnostic(0),
+        message: "a".repeat(1_048_576 - 1),
+        source: "",
+        code: "",
+      },
+      { ...diagnostic(1), message: "b", source: "", code: "" },
+    );
+    const input = { uri: f.document.uri.toString(), maxResults: 1 };
+    const call = (args: contracts.DiagnosticsInput) =>
+      operation === "get"
+        ? f.service.diagnostics(args)
+        : f.service.waitForDiagnostics({ ...args, version: 4, timeoutMs: 1 });
+    const first = await call(input);
+    assert.equal(first.diagnostics.length, 1);
+    assert.equal(first.diagnostics[0]!.messageTruncated, true);
+    const next = await call({
+      ...input,
+      offset: first.nextOffset,
+      snapshotId: first.snapshotId,
+    });
+    assert.equal(next.diagnostics[0]!.message, "b");
+    f.diagnostics[0]!.message = f.diagnostics[0]!.message.slice(0, -1) + "z";
+    await assert.rejects(
+      call({
+        ...input,
+        offset: first.nextOffset,
+        snapshotId: first.snapshotId,
+      }),
+      code("DIAGNOSTICS_CHANGED"),
+    );
     f.clean();
   });
 }
