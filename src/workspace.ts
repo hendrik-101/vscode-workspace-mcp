@@ -435,14 +435,6 @@ export class WorkspaceService implements WorkspaceApi {
           result.omitted++;
           continue;
         }
-        // Bound identifier work before case conversion or URI parsing.
-        const name = item.name.slice(0, MAX_PREVIEW);
-        if (
-          (options.name !== undefined &&
-            !name.toLowerCase().includes(options.name)) ||
-          (options.kind !== undefined && item.kind !== options.kind)
-        )
-          continue;
         const bodyRange = hierarchical ? item.range : item.location.range;
         const containerName = hierarchical
           ? frame.container
@@ -455,6 +447,14 @@ export class WorkspaceService implements WorkspaceApi {
           result.omitted++;
           continue;
         }
+        // Bound identifier work before case conversion or URI parsing.
+        const name = item.name.slice(0, MAX_PREVIEW);
+        if (
+          (options.name !== undefined &&
+            !name.toLowerCase().includes(options.name)) ||
+          (options.kind !== undefined && item.kind !== options.kind)
+        )
+          continue;
         const target = hierarchical ? source?.uri : item.location.uri;
         if (!target) {
           result.omitted++;

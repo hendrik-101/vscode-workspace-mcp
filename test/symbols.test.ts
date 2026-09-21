@@ -901,6 +901,18 @@ for (const operation of ["documentSymbols", "workspaceSymbols"] as const) {
       assert.equal(result.omitted, 7);
       assert.equal(result.scanned, 8);
       assert.equal(result.symbols.length, 1);
+      for (const filter of [{ name: "no-match" }, { kind: 4 }]) {
+        const filtered =
+          operation === "documentSymbols"
+            ? await f.service.documentSymbols({
+                uri: f.file.toString(),
+                ...filter,
+              })
+            : await f.service.workspaceSymbols({ query: "symbol", ...filter });
+        assert.equal(filtered.omitted, 7);
+        assert.equal(filtered.scanned, 8);
+        assert.equal(filtered.symbols.length, 0);
+      }
     } finally {
       f.service.dispose();
     }
