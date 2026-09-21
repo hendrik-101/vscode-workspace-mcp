@@ -1342,37 +1342,100 @@ export class WorkspaceService implements WorkspaceApi {
     return uri;
   }
 
-  /**
-   * Reads a zero-based, half-open line range from the current live document.
-   * Unsaved buffer content takes precedence over the provider's stored bytes.
-   */
-  async read({
-    uri: value,
-    startLine = 0,
-    endLine,
-  }: ReadInput): Promise<ReadResult> {
-    integer(startLine, "startLine");
+  /** Read an exact, bounded page from the live buffer, retaining residual positions. */
+  async read(input: ReadInput): Promise<ReadResult> {
+    const {
+      uri: value,
+      range: requested,
+      version: expectedVersion,
+      maxLines = 200,
+      maxChars = 16000,
+    } = input;
+    integer(maxLines, "maxLines", 1);
+    integer(maxChars, "maxChars", 2);
+    if (maxLines > 1000 || maxChars > 64000)
+      fail(
+        "INVALID_ARGUMENT",
+        "Read budgets exceed 1000 lines or 64000 UTF-16 code units.",
+      );
+    if (
+      requested !== undefined &&
+      (input.startLine !== undefined || input.endLine !== undefined)
+    )
+      fail(
+        "INVALID_ARGUMENT",
+        "range is mutually exclusive with startLine/endLine.",
+      );
     const document = await this.document(parseUri(value));
-    this.text(document);
-    const end = endLine ?? document.lineCount;
-    integer(end, "endLine");
-    if (startLine > end || end > document.lineCount)
-      fail("INVALID_ARGUMENT", "Line range is outside the document.");
-    const start =
-      startLine === document.lineCount
-        ? document.lineAt(document.lineCount - 1).range.end
-        : new vscode.Position(startLine, 0);
-    const finish =
-      end === document.lineCount
-        ? document.lineAt(document.lineCount - 1).range.end
-        : new vscode.Position(end, 0);
+    if (expectedVersion !== undefined) this.expected(document, expectedVersion);
+    const version = document.version;
+    const original = this.text(document);
+    let startLine: number;
+    let endLine: number;
+    let wanted: vscode.Range;
+    if (requested !== undefined) {
+      if (!requested || typeof requested !== "object")
+        fail("INVALID_ARGUMENT", "A read range is required.");
+      wanted = this.exactRange(document, requested);
+      startLine = wanted.start.line;
+      endLine =
+        document.offsetAt(wanted.start) === document.offsetAt(wanted.end)
+          ? startLine
+          : wanted.end.line + (wanted.end.character > 0 ? 1 : 0);
+    } else {
+      startLine = input.startLine ?? 0;
+      endLine = input.endLine ?? document.lineCount;
+      integer(startLine, "startLine");
+      integer(endLine, "endLine");
+      if (startLine > endLine || endLine > document.lineCount)
+        fail("INVALID_ARGUMENT", "Line range is outside the document.");
+      const lineStart = (line: number) =>
+        line === document.lineCount
+          ? document.lineAt(document.lineCount - 1).range.end
+          : new vscode.Position(line, 0);
+      wanted = new vscode.Range(lineStart(startLine), lineStart(endLine));
+    }
+    const start = document.offsetAt(wanted.start);
+    const end = document.offsetAt(wanted.end);
+    const splitsSurrogate = (offset: number) =>
+      /[\ud800-\udbff]/.test(original.charAt(offset - 1)) &&
+      /[\udc00-\udfff]/.test(original.charAt(offset));
+    if (splitsSurrogate(start) || splitsSurrogate(end))
+      fail(
+        "INVALID_ARGUMENT",
+        "Read positions must not split a surrogate pair.",
+      );
+    const lineLimit = wanted.start.line + maxLines;
+    let finish = Math.min(
+      end,
+      start + maxChars,
+      lineLimit < document.lineCount
+        ? document.offsetAt(new vscode.Position(lineLimit, 0))
+        : original.length,
+    );
+    // VS Code positions cannot represent the middle of CRLF; keep both units together.
+    if (
+      splitsSurrogate(finish) ||
+      (original[finish - 1] === "\r" && original[finish] === "\n")
+    )
+      finish--;
+    const returnedRange = range(
+      new vscode.Range(wanted.start, document.positionAt(finish)),
+    );
+    const truncated = finish < end;
+    this.currentRoot(document.uri);
+    this.expected(document, version);
     return {
       ...state(document),
       languageId: document.languageId,
       lineCount: document.lineCount,
       startLine,
-      endLine: end,
-      text: document.getText(new vscode.Range(start, finish)),
+      endLine,
+      text: original.slice(start, finish),
+      requestedRange: range(wanted),
+      returnedRange,
+      truncated,
+      ...(truncated ? { nextPosition: returnedRange.end } : {}),
     };
   }
 
