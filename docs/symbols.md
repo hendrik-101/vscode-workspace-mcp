@@ -7,12 +7,16 @@ kind or lowercase type name), and an `offset` into admitted, filtered results.
 Keep filters unchanged when following `nextOffset`. The existing workspace
 `query` remains required and is passed to the provider unchanged.
 
-Every result retains numeric `kind` and adds readable `type`. For hierarchical
-DocumentSymbol results, `range` is now the complete declaration/body range,
-`selectionRange` identifies the name, and `fullRangeKnown` is true. Flat
-SymbolInformation results retain their provider location as `range`, with
-`fullRangeKnown: false` and no invented selection or body range. This intentionally
-corrects the old document `range` behavior, which discarded the full range.
+Every result retains numeric `kind` and adds readable `type`. Hierarchical
+results preserve provider `range` and `selectionRange` separately. `fullRangeKnown`
+is true only when valid, ordered ranges show a distinct selection contained in
+the body range. VS Code normalizes legacy SymbolInformation into hierarchical
+objects with identical range and selectionRange; these remain explicitly unknown,
+as do genuine DocumentSymbols whose ranges coincide. Flat SymbolInformation
+retains its provider location as `range`, with `fullRangeKnown: false` and no
+invented selection or body range. The flag is deliberately conservative: unknown
+does not prove that a range is incomplete. This corrects the old document `range`
+behavior, which discarded the provider's full range.
 Each page caps combined name/container/URI text at 32 Ki characters, so it may
 return fewer than maxResults and still provide nextOffset. Individual
 names/container names are capped at 1000 characters; targets longer than 8192

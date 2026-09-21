@@ -694,3 +694,45 @@ test("document symbols recheck changes during target authorization", async () =>
     f.service.dispose();
   }
 });
+
+test("normalized legacy document symbols never claim a known body range", async () => {
+  const f = symbolFixture();
+  // VS Code adapts SymbolInformation into this hierarchical/hybrid shape.
+  f.setItems([
+    {
+      ...f.makeSymbol("legacy"),
+      range: f.selection,
+      location: { uri: f.file, range: f.selection },
+    },
+  ]);
+  try {
+    const result = await f.service.documentSymbols({ uri: f.file.toString() });
+    assert.equal(result.symbols[0]?.fullRangeKnown, false);
+    assert.equal(
+      JSON.stringify(result.symbols[0]?.range),
+      JSON.stringify(f.selection),
+    );
+  } finally {
+    f.service.dispose();
+  }
+});
+
+for (const selection of [
+  { start: { line: 0, character: -1 }, end: { line: 0, character: 2 } },
+  { start: { line: 0, character: 0.5 }, end: { line: 0, character: 2 } },
+  { start: { line: 0, character: 3 }, end: { line: 0, character: 2 } },
+  { start: { line: 0, character: 3 }, end: { line: 5, character: 0 } },
+]) {
+  test(`invalid or uncontained selection ${JSON.stringify(selection)} leaves body range unknown`, async () => {
+    const f = symbolFixture();
+    f.setItems([{ ...f.makeSymbol("invalid"), selectionRange: selection }]);
+    try {
+      const result = await f.service.documentSymbols({
+        uri: f.file.toString(),
+      });
+      assert.equal(result.symbols[0]?.fullRangeKnown, false);
+    } finally {
+      f.service.dispose();
+    }
+  });
+}

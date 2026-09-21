@@ -337,6 +337,31 @@ export class WorkspaceService implements WorkspaceApi {
     return { maxResults, offset, kind, name: input.name?.toLowerCase() };
   }
 
+  private symbolFullRangeKnown(item: vscode.DocumentSymbol): boolean {
+    const points = [
+      item.range.start,
+      item.selectionRange.start,
+      item.selectionRange.end,
+      item.range.end,
+    ];
+    const compare = (a: Position, b: Position) =>
+      a.line - b.line || a.character - b.character;
+    // VS Code normalizes legacy locations to identical range/selectionRange.
+    // Only a distinct, valid containing range demonstrates body information.
+    return (
+      points.every(
+        (point, index) =>
+          Number.isSafeInteger(point.line) &&
+          point.line >= 0 &&
+          Number.isSafeInteger(point.character) &&
+          point.character >= 0 &&
+          (index === 0 || compare(points[index - 1]!, point) <= 0),
+      ) &&
+      (compare(points[0]!, points[1]!) !== 0 ||
+        compare(points[2]!, points[3]!) !== 0)
+    );
+  }
+
   private async symbols(
     items: readonly (vscode.DocumentSymbol | vscode.SymbolInformation)[],
     options: ReturnType<WorkspaceService["symbolOptions"]>,
@@ -413,7 +438,7 @@ export class WorkspaceService implements WorkspaceApi {
           type: SYMBOL_TYPES[item.kind] ?? "unknown",
           uri: key,
           range: range(hierarchical ? item.range : item.location.range),
-          fullRangeKnown: hierarchical,
+          fullRangeKnown: hierarchical && this.symbolFullRangeKnown(item),
           ...(hierarchical
             ? { selectionRange: range(item.selectionRange) }
             : {}),
