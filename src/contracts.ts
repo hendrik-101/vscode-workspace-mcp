@@ -211,7 +211,7 @@ export const results = {
   }),
   show_document: z.looseObject(state),
   workspace_symbols: symbols,
-  document_symbols: symbols,
+  document_symbols: symbols.extend({ version: number }),
   get_definition: navigation,
   get_references: navigation,
   get_hover: z.looseObject({

@@ -950,7 +950,7 @@ test("discovery documents tool roles, URI/position conventions and search contin
   assert.equal(formatSchema.properties!.editCount!.type, "number");
   assert.ok(formatSchema.required!.includes("editCount"));
   assert.equal(formatSchema.required!.includes("edits"), false);
-  for (const name of ["workspace_symbols", "document_symbols"]) {
+  for (const name of ["workspace_symbols", "document_symbols"] as const) {
     const schema = resultSchema(name);
     for (const field of [
       "version",
@@ -960,8 +960,25 @@ test("discovery documents tool roles, URI/position conventions and search contin
       "scanLimitReached",
     ]) {
       assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
-      assert.equal(schema.required!.includes(field), false);
+      assert.equal(
+        schema.required!.includes(field),
+        name === "document_symbols" && field === "version",
+      );
     }
+    const validate = new AjvJsonSchemaValidator().getValidator(
+      find(name).outputSchema!,
+    );
+    const result = { symbols: [], truncated: false, omitted: 0 };
+    assert.equal(
+      validate({ result }).valid,
+      name === "workspace_symbols",
+      "only document symbol results require version",
+    );
+    const withVersion = {
+      result: { ...result, version: 1, futureMetadata: { available: true } },
+    };
+    assert.equal(validate(withVersion).valid, true);
+    assert.deepEqual(outputSchema(name).parse(withVersion), withVersion);
     const item = schema.properties!.symbols!.items!;
     for (const field of ["type", "selectionRange", "fullRangeKnown"]) {
       assert.ok(item.properties![field]);
