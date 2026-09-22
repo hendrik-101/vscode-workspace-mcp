@@ -213,6 +213,14 @@ export async function run(): Promise<void> {
     process.env.WORKSPACE_MCP_TEST_VERSION,
   );
   await extension.activate();
+  const port = vscode.workspace
+    .getConfiguration("workspaceMcp")
+    .inspect<number>("port");
+  console.log("Packaged host startup context", {
+    trusted: vscode.workspace.isTrusted,
+    defaultPort: port?.defaultValue,
+    globalPort: port?.globalValue,
+  });
   let client: Client | undefined;
   try {
     await deadline(vscode.commands.executeCommand("workspaceMcp.start"));

@@ -57,6 +57,7 @@ try {
       "workspaceMcp.writePolicy": "deny",
       "extensions.autoUpdate": false,
       "extensions.autoCheckUpdates": false,
+      "files.eol": "\n",
       "files.autoSave": "off",
       "files.hotExit": "off",
       "telemetry.telemetryLevel": "off",
