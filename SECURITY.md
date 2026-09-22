@@ -39,7 +39,14 @@ credential trust domain; inspect workspace roots before working.
 Settings are application-scoped and read from user configuration only, never
 checked-in workspace settings. Changing write policy to deny also blocks writes
 in a running session. Allow applies at the next start or explicit permission
-prompt. Changing the port requires a restart. Port collisions fail without fallback.
+prompt. **Disable Writes for This Session** revokes writes and invalidates older
+permission prompts without closing read access or changing stored policy. Requests
+in flight are aborted; provider operations already issued cannot be rolled back.
+An in-memory **Select Port for This Window** override comes only from an explicit
+command, stops that window's bridge, and requires another explicit Start. Reloading
+clears the override. It changes no workspace settings or credentials and creates no
+new trust domain. Changing the port requires updated private client configuration.
+Port collisions fail without fallback.
 First-time concurrent initialization has no atomic SecretStorage compare-and-swap;
 readback and change events fail closed, so a competing change may require restart.
 Never automatically replace a malformed or inaccessible stored token.

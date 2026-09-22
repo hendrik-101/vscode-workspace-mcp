@@ -42,10 +42,22 @@ path and updated client settings.
 
 Set these in **User** settings; workspace overrides are ignored:
 
-| Setting                    | Behavior                                                                                                       |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `workspaceMcp.port`        | Fixed port, default `39117`, range 1024–65535. A conflict fails; stop the other window or choose another port. |
-| `workspaceMcp.writePolicy` | `ask` (default), `allow` or `deny`; Workspace Trust remains required.                                          |
+| Setting                    | Behavior                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| `workspaceMcp.port`        | Default fixed port `39117`, range 1024–65535. Conflicts fail without fallback. |
+| `workspaceMcp.writePolicy` | `ask` (default), `allow` or `deny`; Workspace Trust remains required.          |
+
+For simultaneous windows, run **Workspace MCP: Select Port for This Window** in
+each window that needs a different port. Enter an unused port explicitly. Accepting
+stops that window's bridge; run **Start**, then copy **Show Connection Details** to
+a separate private client entry for that window (use distinct names instead of
+replacing `workspace_mcp`). The status bar shows the active port; its tooltip and
+connection picker show the endpoint. Inspect returned workspace roots before use.
+
+The selection stays in memory across Stop/Start in this window and resets on window
+reload. It never changes User or workspace settings and never starts a listener on
+its own. Cancel keeps the current connection. The User setting remains the default
+for other windows. Ports identify endpoints, not separate credential trust domains.
 
 Token and server identity persist in SecretStorage. Refresh client settings after
 port changes or explicit credential/identity rotation. Windows sharing
@@ -58,6 +70,14 @@ With `ask`, each start offers **Allow for this session**, **Deny for this sessio
 **Always allow** and **Always deny**. Closing the prompt denies writes. Only Always
 choices persist `allow`/`deny`. **Enable Writes for This Session** reopens the choices
 unless policy is `deny`; change that user setting first.
+
+**Disable Writes for This Session** immediately revokes write permission while
+keeping the listener and read access active. It also cancels the authority of a
+pending permission prompt, including delayed Always-choice persistence. It does
+not change your stored policy: an already-started settings write may still finish,
+but cannot re-enable this session. A fresh Enable Writes prompt can grant access
+again; Stop/Start applies the User policy anew. Revocation aborts in-flight requests,
+but cannot undo edits or saves already handed to VS Code or a filesystem provider.
 
 Turn **Files: Auto Save** off before agent edits; the bridge refuses edits while
 it is enabled. Editing and saving remain separate operations.
