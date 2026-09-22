@@ -264,14 +264,13 @@ export class WorkspaceService implements WorkspaceApi {
    */
   constructor(private readonly allowWrites: () => boolean = () => false) {}
 
-  private readonly refactoringCleanups = new Set<() => void>();
   private disposed = false;
   private readonly diagnosticWaits = new Set<() => void>();
   private pendingDiagnosticWork = 0;
   private readonly snapshots = new Map<string, string>();
   private readonly pendingSnapshots = new Set<string>();
   private snapshotProvider: vscode.Disposable | undefined;
-  private readonly navigationObservers = new Set<vscode.Disposable>();
+  private readonly documentObservers = new Set<vscode.Disposable>();
   private readonly snapshotScheme = `workspace-mcp-diff-${randomUUID()}`;
   private readonly searchCursors = new Map<string, SearchContinuation>();
   private listCursorKey: Buffer | undefined;
@@ -286,9 +285,8 @@ export class WorkspaceService implements WorkspaceApi {
     this.diagnosticWaits.clear();
     this.snapshotProvider?.dispose();
     this.snapshotProvider = undefined;
-    for (const cleanup of this.refactoringCleanups) cleanup();
     this.snapshots.clear();
-    for (const observer of this.navigationObservers) observer.dispose();
+    for (const observer of this.documentObservers) observer.dispose();
     this.pendingSnapshots.clear();
     this.searchRoots?.dispose();
     this.searchCursors.clear();
@@ -641,35 +639,27 @@ export class WorkspaceService implements WorkspaceApi {
     return this.navigation("vscode.executeReferenceProvider", input, signal);
   }
 
-  private async navigation(
-    command:
-      "vscode.executeDefinitionProvider" | "vscode.executeReferenceProvider",
-    input: NavigationInput,
-    signal?: AbortSignal,
-  ): Promise<NavigationResult> {
-    const source = await this.navigationSource(input, signal);
-    this.navigationComplete(source.document, source.version, signal);
-    // Snapshot open targets before dispatch; also observe documents opened and
-    // edited while the command runs. Never label old ranges with a new version.
+  /** Bound document snapshots and release observers even if a provider never settles. */
+  private observeDocuments(signal?: AbortSignal, onDispose = () => {}) {
     const openDocuments = vscode.workspace.textDocuments;
     if (openDocuments.length > MAX_LIST_ENTRIES)
-      fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 1000 documents.");
-    const initialDocuments = new Map<
+      fail("LIMIT_EXCEEDED", "Provider snapshot exceeds 1000 open documents.");
+    const initial = new Map<
       string,
       { document: vscode.TextDocument; version: number }
     >();
-    let snapshotBytes = 0;
+    let initialBytes = 0;
     for (const document of openDocuments) {
       const uri = document.uri.toString();
-      snapshotBytes += Buffer.byteLength(uri);
-      if (snapshotBytes > 256 * 1024)
-        fail("LIMIT_EXCEEDED", "Navigation snapshot exceeds 256 KiB of URIs.");
-      initialDocuments.set(uri, { document, version: document.version });
+      initialBytes += Buffer.byteLength(uri);
+      if (initialBytes > 256 * 1024)
+        fail("LIMIT_EXCEEDED", "Provider snapshot URI text exceeds 256 KiB.");
+      initial.set(uri, { document, version: document.version });
     }
     const changed = new Set<string>();
-    let overflow = false;
     let changedBytes = 0;
-    const markChanged = (document: vscode.TextDocument) => {
+    let overflow = false;
+    const recordChange = (document: vscode.TextDocument) => {
       if (overflow) return;
       const uri = document.uri.toString();
       if (changed.has(uri)) return;
@@ -682,21 +672,41 @@ export class WorkspaceService implements WorkspaceApi {
       changed.add(uri);
     };
     const listener = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.contentChanges.length) markChanged(event.document);
+      if (event.contentChanges?.length !== 0) recordChange(event.document);
     });
-    // A close invalidates ranges even for targets first opened after dispatch.
-    const closeListener = vscode.workspace.onDidCloseTextDocument(markChanged);
+    const closeListener = vscode.workspace.onDidCloseTextDocument(recordChange);
     const dispose = () => {
       listener.dispose();
       closeListener.dispose();
       signal?.removeEventListener("abort", dispose);
-      this.navigationObservers.delete(observer);
-      initialDocuments.clear();
+      this.documentObservers.delete(observation);
+      initial.clear();
       changed.clear();
+      onDispose();
     };
-    const observer = { dispose };
-    this.navigationObservers.add(observer);
+    const observation = {
+      initial,
+      changed,
+      get overflow() {
+        return overflow;
+      },
+      dispose,
+    };
+    this.documentObservers.add(observation);
     signal?.addEventListener("abort", dispose, { once: true });
+    return observation;
+  }
+
+  private async navigation(
+    command:
+      "vscode.executeDefinitionProvider" | "vscode.executeReferenceProvider",
+    input: NavigationInput,
+    signal?: AbortSignal,
+  ): Promise<NavigationResult> {
+    const source = await this.navigationSource(input, signal);
+    this.navigationComplete(source.document, source.version, signal);
+    const observation = this.observeDocuments(signal);
+    const { initial: initialDocuments, changed } = observation;
     try {
       const items = await vscode.commands.executeCommand<
         Array<vscode.Location | vscode.LocationLink>
@@ -783,12 +793,12 @@ export class WorkspaceService implements WorkspaceApi {
         }
       }
       this.navigationComplete(source.document, source.version, signal);
-      if (overflow)
+      if (observation.overflow)
         fail("LIMIT_EXCEEDED", "Too many documents changed during navigation.");
       result.locations = retained;
       return { ...result, ...state(source.document) };
     } finally {
-      dispose();
+      observation.dispose();
     }
   }
 
@@ -1084,54 +1094,8 @@ export class WorkspaceService implements WorkspaceApi {
       string,
       { document: vscode.TextDocument; version: number }
     >();
-    const openDocuments = vscode.workspace.textDocuments;
-    if (openDocuments.length > 1000)
-      fail("LIMIT_EXCEEDED", "Provider snapshot exceeds 1000 open documents.");
-    const initial = new Map<
-      string,
-      { document: vscode.TextDocument; version: number }
-    >();
-    let initialBytes = 0;
-    for (const document of openDocuments) {
-      const uri = document.uri.toString();
-      initialBytes += Buffer.byteLength(uri);
-      if (initialBytes > 256 * 1024)
-        fail("LIMIT_EXCEEDED", "Provider snapshot URI text exceeds 256 KiB.");
-      initial.set(uri, { document, version: document.version });
-    }
-    const changed = new Set<string>();
-    let changedBytes = 0;
-    let trackingOverflow = false;
-    const recordChange = (document: vscode.TextDocument) => {
-      if (trackingOverflow) return;
-      const uri = document.uri.toString();
-      if (changed.has(uri)) return;
-      changedBytes += Buffer.byteLength(uri);
-      if (changed.size >= 1000 || changedBytes > 256 * 1024) {
-        trackingOverflow = true;
-        listener.dispose();
-        closeListener.dispose();
-        return;
-      }
-      changed.add(uri);
-    };
-    const listener = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.contentChanges?.length !== 0) recordChange(event.document);
-    });
-    const closeListener = vscode.workspace.onDidCloseTextDocument(recordChange);
-    // Provider commands have no cancellation token and can remain pending forever.
-    // Release observers and retained document snapshots independently of settlement.
-    const cleanup = () => {
-      listener.dispose();
-      closeListener.dispose();
-      signal?.removeEventListener("abort", cleanup);
-      this.refactoringCleanups.delete(cleanup);
-      changed.clear();
-      initial.clear();
-      observed.clear();
-    };
-    this.refactoringCleanups.add(cleanup);
-    signal?.addEventListener("abort", cleanup, { once: true });
+    const observation = this.observeDocuments(signal, () => observed.clear());
+    const { initial, changed } = observation;
     let editCount = 0;
     let documentCount = 0;
     let bytes = 0;
@@ -1212,7 +1176,7 @@ export class WorkspaceService implements WorkspaceApi {
         await this.authorize(document.uri, signal);
       signal?.throwIfAborted();
       this.active();
-      if (trackingOverflow)
+      if (observation.overflow)
         fail(
           "LIMIT_EXCEEDED",
           "Too many document changes during provider preview.",
@@ -1235,7 +1199,7 @@ export class WorkspaceService implements WorkspaceApi {
           Object.assign(snapshot, state(observed.get(snapshot.uri)!.document));
       return result;
     } finally {
-      cleanup();
+      observation.dispose();
     }
   }
 

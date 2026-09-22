@@ -1,41 +1,8 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { transformSync } from "esbuild";
 import * as contracts from "../src/types";
-import type { WorkspaceService } from "../src/workspace";
-
-/** Minimal URI fixture for deterministic workspace API boundary tests. */
-class Uri {
-  private constructor(private readonly value: URL) {}
-  static from(value: { scheme: string; path: string }): Uri {
-    return Uri.parse(`${value.scheme}:${value.path}`);
-  }
-  static parse(value: string): Uri {
-    return new Uri(new URL(value));
-  }
-  get scheme() {
-    return this.value.protocol.slice(0, -1);
-  }
-  get authority() {
-    return this.value.host;
-  }
-  get path() {
-    return this.value.pathname;
-  }
-  get query() {
-    return this.value.search.slice(1);
-  }
-  get fragment() {
-    return this.value.hash.slice(1);
-  }
-  toString() {
-    return this.value.toString();
-  }
-}
+import { Uri } from "./support/values";
+import { loadWorkspace } from "./support/workspace";
 
 test("exactly 1000 legacy document symbols with 999 denied targets are complete", async () => {
   const root = Uri.parse("vfs-test:/project");
@@ -97,25 +64,9 @@ test("exactly 1000 legacy document symbols with 999 denied targets are complete"
   }
 });
 
-function loadService(vscode: unknown): WorkspaceService {
-  const exports = {} as { WorkspaceService: new () => WorkspaceService };
-  const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
-    loader: "ts",
-    format: "cjs",
-  }).code;
-  const module = { exports };
-  runInNewContext(code, {
-    module,
-    exports,
-    require: (id: string) => {
-      if (id === "vscode") return vscode;
-      if (id === "node:buffer") return { Buffer };
-      if (id === "node:crypto") return { randomUUID };
-      if (id === "./types") return contracts;
-      throw new Error(`Unexpected import: ${id}`);
-    },
-  });
-  return new module.exports.WorkspaceService();
+function loadService(vscode: unknown) {
+  const WorkspaceService = loadWorkspace(vscode);
+  return new WorkspaceService();
 }
 
 test("diff completion rechecks a removed comparison root", async () => {

@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { transformSync } from "esbuild";
 import * as contracts from "../src/types";
-import type { WorkspaceService } from "../src/workspace";
+import { loadWorkspace } from "./support/workspace";
 
 class Uri {
   constructor(readonly path: string) {}
@@ -43,10 +38,6 @@ class Range {
   ) {}
 }
 const range = new Range(new Position(0, 0), new Position(0, 6));
-const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
-  loader: "ts",
-  format: "cjs",
-}).code;
 function fixture() {
   const listeners = new Set<
     (event: {
@@ -121,21 +112,8 @@ function fixture() {
       },
     },
   };
-  const module = {
-    exports: {} as { WorkspaceService: new () => WorkspaceService },
-  };
-  runInNewContext(code, {
-    module,
-    exports: module.exports,
-    require: (id: string) => {
-      if (id === "vscode") return vscode;
-      if (id === "node:buffer") return { Buffer };
-      if (id === "node:crypto") return { randomUUID };
-      if (id === "./types") return contracts;
-      throw new Error(id);
-    },
-  });
-  const service = new module.exports.WorkspaceService();
+  const WorkspaceService = loadWorkspace(vscode);
+  const service = new WorkspaceService();
   const input = {
     uri: documents[0]!.uri.toString(),
     version: 3,
