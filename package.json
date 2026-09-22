@@ -86,6 +86,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "node --import tsx --test test/*.test.ts",
+    "measure:context": "node --import tsx scripts/measure-context.ts",
     "test:vscode": "node scripts/test-vscode.mjs",
     "package": "npm run build && vsce package --no-dependencies --out artifacts/workspace-mcp.vsix"
   },
