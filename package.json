@@ -39,12 +39,20 @@
         "title": "Workspace MCP: Stop"
       },
       {
+        "command": "workspaceMcp.selectPort",
+        "title": "Workspace MCP: Select Port for This Window"
+      },
+      {
         "command": "workspaceMcp.connection",
         "title": "Workspace MCP: Show Connection Details"
       },
       {
         "command": "workspaceMcp.enableWrites",
         "title": "Workspace MCP: Enable Writes for This Session"
+      },
+      {
+        "command": "workspaceMcp.disableWrites",
+        "title": "Workspace MCP: Disable Writes for This Session"
       },
       {
         "command": "workspaceMcp.rotateToken",
@@ -64,7 +72,7 @@
           "minimum": 1024,
           "maximum": 65535,
           "scope": "application",
-          "description": "Fixed loopback port. Restart the bridge after changing. Another window needs a different port; no fallback port is selected."
+          "description": "Default fixed loopback port. Restart the bridge after changing. Use Select Port for This Window for a temporary window override. Conflicts fail; no fallback port is selected."
         },
         "workspaceMcp.writePolicy": {
           "type": "string",

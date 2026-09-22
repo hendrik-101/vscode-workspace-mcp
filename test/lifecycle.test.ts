@@ -13,6 +13,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 function fixture(initialPolicy: string = "ask") {
   const commands = new Map<string, () => Promise<void>>();
   const prompts: { resolve(value?: string): void }[] = [];
+  const inputs: { resolve(value?: string): void }[] = [];
   const warnings: string[] = [];
   const errors: string[] = [];
   const identity = { cert: "test certificate", key: "test private key" };
@@ -21,6 +22,7 @@ function fixture(initialPolicy: string = "ask") {
     identityGeneration?: Promise<void>;
     adapterInstallation?: Promise<void>;
     adapterFailure?: Error;
+    bindFailure?: Error;
   } = {};
   const installedAdapters: string[] = [];
   const documents: { content: string; language: string }[] = [];
@@ -28,6 +30,7 @@ function fixture(initialPolicy: string = "ask") {
   const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
   const connections: {
     closed: boolean;
+    authorized(): boolean;
     abortedRequests: number;
     token: string;
     tls: { cert: string; key: string };
@@ -82,6 +85,8 @@ function fixture(initialPolicy: string = "ask") {
       }),
     },
     window: {
+      showInputBox: () =>
+        new Promise<string | undefined>((resolve) => inputs.push({ resolve })),
       showQuickPick: async () => ({ value: "codex" }),
       showTextDocument: async () => undefined,
       createStatusBarItem: () => status,
@@ -160,10 +165,16 @@ function fixture(initialPolicy: string = "ask") {
         return {
           startServer: async (
             _service: unknown,
-            options: { port: number; token: string; tls: typeof identity },
+            options: {
+              port: number;
+              token: string;
+              tls: typeof identity;
+              authorized(): boolean;
+            },
           ) => {
             const connection = {
               closed: false,
+              authorized: options.authorized,
               abortedRequests: 0,
               abortRequests() {
                 this.abortedRequests++;
@@ -175,6 +186,7 @@ function fixture(initialPolicy: string = "ask") {
                 this.closed = true;
               },
             };
+            if (delays.bindFailure) throw delays.bindFailure;
             connections.push(connection);
             await delays.bind;
             return connection;
@@ -184,8 +196,10 @@ function fixture(initialPolicy: string = "ask") {
     },
   });
   module.exports.activate!(context);
-  const command = async (name: string) => {
-    await commands.get(`workspaceMcp.${name}`)!();
+  const command = (name: string) => {
+    const action = commands.get(`workspaceMcp.${name}`);
+    assert.ok(action, `command ${name} must be registered`);
+    return action();
   };
   return {
     command,
@@ -195,6 +209,7 @@ function fixture(initialPolicy: string = "ask") {
     errors,
     deactivate: () => module.exports.deactivate!(),
     prompts,
+    inputs,
     values,
     settings,
     connections,
@@ -951,3 +966,143 @@ for (const kind of ["malformed", "missing", "changed", "identity"] as const) {
     await f.command("stop");
   });
 }
+
+test("Disable Writes revokes pending permission without stopping reads or persisting policy", async () => {
+  const f = fixture("allow");
+  await f.command("start");
+  f.settings.set("writePolicy", "ask");
+  const enabling = f.command("enableWrites");
+  await f.command("disableWrites");
+  assert.equal(f.services[0]!.canWrite(), false);
+  assert.equal(f.connections[0]!.closed, false);
+  assert.equal(f.connections[0]!.abortedRequests, 1);
+  assert.equal(
+    f.connections[0]!.authorized(),
+    true,
+    "read admission remains active",
+  );
+  assert.match(f.status.text, /read only/);
+  f.prompts[0]!.resolve("Always allow");
+  await enabling;
+  assert.equal(f.services[0]!.canWrite(), false);
+  assert.equal(f.settings.get("writePolicy"), "ask");
+  const freshEnable = f.command("enableWrites");
+  f.prompts[1]!.resolve("Allow for this session");
+  await freshEnable;
+  assert.equal(f.services[0]!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("Disable Writes during startup overrides automatic allow for that start", async () => {
+  const f = fixture("allow");
+  const bind = deferred<void>();
+  f.delays.bind = bind.promise;
+  const starting = f.command("start");
+  await tick();
+  await f.command("disableWrites");
+  bind.resolve();
+  await starting;
+  assert.equal(f.services[0]!.canWrite(), false);
+  assert.equal(f.connections[0]!.closed, false);
+  await f.command("stop");
+  await f.command("start");
+  assert.equal(f.services[1]!.canWrite(), true);
+  await f.command("stop");
+});
+
+test("Disable Writes wins over already pending permission persistence", async () => {
+  const f = fixture("ask");
+  await f.command("start");
+  const write = deferred<void>();
+  f.settings.set = () => write.promise as unknown as Map<string, unknown>;
+  f.prompts[0]!.resolve("Always allow");
+  await tick();
+  await f.command("disableWrites");
+  write.resolve();
+  await tick();
+  assert.equal(f.services[0]!.canWrite(), false);
+  assert.equal(f.connections[0]!.closed, false);
+  await f.command("stop");
+});
+
+test("explicit window port stops current bridge and preserves credentials and user settings", async () => {
+  const f = fixture("allow");
+  f.settings.set("port", 40001);
+  await f.command("start");
+  const credentials = [...f.values];
+  const choosing = f.command("selectPort");
+  f.inputs[0]!.resolve("40002");
+  await choosing;
+  assert.equal(f.connections[0]!.closed, true);
+  assert.equal(f.connections.length, 1, "selection must not autostart");
+  assert.equal(f.settings.get("port"), 40001);
+  await f.command("start");
+  assert.match(f.connections[1]!.url, /:40002\/mcp$/);
+  assert.match(f.status.text, /40002/);
+  assert.match(f.status.tooltip, /40002/);
+  await f.command("connection");
+  assert.match(f.documents[0]!.content, /:40002\/mcp/);
+  assert.deepEqual([...f.values], credentials);
+  await f.command("stop");
+  await f.command("start");
+  assert.match(f.connections[2]!.url, /:40002\/mcp$/);
+  await f.command("stop");
+  const otherWindow = fixture("deny");
+  await otherWindow.command("start");
+  assert.match(otherWindow.connections[0]!.url, /:39117\/mcp$/);
+  await otherWindow.command("stop");
+});
+
+for (const value of [
+  undefined,
+  "",
+  "0",
+  "1023",
+  "65536",
+  "40002.5",
+  "4e4",
+  "0x9c42",
+  "not a port",
+]) {
+  test(`cancelled or invalid window port ${JSON.stringify(value)} preserves active connection`, async () => {
+    const f = fixture("deny");
+    await f.command("start");
+    const choosing = f.command("selectPort");
+    f.inputs[0]!.resolve(value);
+    await choosing;
+    assert.equal(f.connections[0]!.closed, false);
+    assert.match(f.connections[0]!.url, /:39117\/mcp$/);
+    await f.command("stop");
+  });
+}
+
+test("a stale port prompt cannot stop a newer session", async () => {
+  const f = fixture("deny");
+  await f.command("start");
+  const choosing = f.command("selectPort");
+  await f.command("stop");
+  await f.command("start");
+  f.inputs[0]!.resolve("40002");
+  await choosing;
+  assert.equal(f.connections[1]!.closed, false);
+  assert.match(f.connections[1]!.url, /:39117\/mcp$/);
+  await f.command("stop");
+});
+
+test("selected port collision fails closed without retry or default fallback", async () => {
+  const f = fixture("deny");
+  const choosing = f.command("selectPort");
+  f.inputs[0]!.resolve("40002");
+  await choosing;
+  f.delays.bindFailure = Object.assign(new Error("occupied"), {
+    code: "EADDRINUSE",
+  });
+  await f.command("start");
+  assert.equal(f.connections.length, 0);
+  assert.equal(f.errors.length, 1);
+  assert.match(f.errors[0]!, /Select Port for This Window/);
+  f.delays.bindFailure = undefined;
+  await f.command("start");
+  assert.match(f.connections[0]!.url, /:40002\/mcp$/);
+  await f.command("stop");
+});

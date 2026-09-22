@@ -7,6 +7,7 @@ import {
   type ServerIdentity,
 } from "./tls";
 import {
+  DEFAULT_PORT,
   portPreference,
   writePreference,
   WRITE_CHOICES,
@@ -60,12 +61,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.StatusBarAlignment.Right,
   );
   status.command = "workspaceMcp.connection";
+  let windowPort: number | undefined;
+  let portPromptGeneration = 0;
   const refresh = () => {
     const suspended = !!running && !runningAccess?.allowed;
-    status.text = `$(plug) MCP: ${suspended ? "suspended" : running?.canWrite() ? "read/write" : "read only"}`;
-    status.tooltip = suspended
-      ? "Workspace MCP access is suspended while stored credentials are verified."
-      : "Workspace MCP is listening on this host's loopback interface. Stop it from the command palette.";
+    status.text = `$(plug) MCP ${running ? new URL(running.connection.url).port : ""}: ${suspended ? "suspended" : running?.canWrite() ? "read/write" : "read only"}`;
+    status.tooltip = `${running?.connection.url ?? "Workspace MCP"} — ${
+      suspended
+        ? "Access is suspended while stored credentials are verified."
+        : "This window's bridge. Stop it or disable writes from the command palette."
+    }`;
     if (running) status.show();
     else status.hide();
   };
@@ -73,7 +78,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // Only explicit user settings may grant authority; ignore workspace overrides.
   const policy = () =>
     writePreference(settings().inspect("writePolicy")?.globalValue);
-  const port = () => portPreference(settings().inspect("port")?.globalValue);
+  const port = () =>
+    windowPort ?? portPreference(settings().inspect("port")?.globalValue);
   const stop = () => {
     const closing = stopSessions();
     refresh();
@@ -133,7 +139,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const report = (error: unknown) => {
     const message =
       error instanceof Error && "code" in error && error.code === "EADDRINUSE"
-        ? "Workspace MCP port is already in use. Stop the bridge in the other window or choose another user setting for workspaceMcp.port."
+        ? "Workspace MCP port is already in use. Stop the bridge in the other window or run Workspace MCP: Select Port for This Window."
         : error instanceof Error &&
             /^(Workspace MCP port|Workspace MCP adapter|Stored Workspace MCP token|Stored Workspace MCP server identity)/.test(
               error.message,
@@ -212,6 +218,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (running) return Promise.resolve();
     if (cancelStartup) void stopSessions().catch(report);
     const requestedGeneration = ++generation;
+    const requestedWrites = ++promptGeneration;
     let cancel!: () => void;
     const cancelled = new Promise<never>((_, reject) => {
       cancel = () => reject(cancelledStartup);
@@ -354,8 +361,10 @@ export function activate(context: vscode.ExtensionContext): void {
           runningIdentity = identity;
           runningAdapter = adapter;
           access.allowed = true;
-          if (policy() === "allow") started.enableWrites();
-          if (policy() === "ask") void askWrites(started).catch(report);
+          if (requestedWrites === promptGeneration) {
+            if (policy() === "allow") started.enableWrites();
+            if (policy() === "ask") void askWrites(started).catch(report);
+          }
           refresh();
           // An informational toast must never hold the lifecycle or Stop command open.
           void vscode.window
@@ -379,6 +388,46 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   register("workspaceMcp.stop", async () => {
     await stop();
+  });
+  register("workspaceMcp.selectPort", async () => {
+    const requestedGeneration = generation;
+    const requestedPrompt = ++portPromptGeneration;
+    const parsePort = (value: string) =>
+      portPreference(/^\d+$/.test(value.trim()) ? Number(value) : NaN);
+    const value = await vscode.window.showInputBox({
+      title: "Workspace MCP: Select Port for This Window",
+      prompt:
+        "Port 1024–65535. Selecting stops this window's bridge; run Start afterwards. Resets on window reload. No settings are saved.",
+      value: String(
+        windowPort ?? settings().inspect("port")?.globalValue ?? DEFAULT_PORT,
+      ),
+      validateInput: (input) => {
+        try {
+          parsePort(input);
+          return undefined;
+        } catch {
+          return "Enter an integer port from 1024 to 65535.";
+        }
+      },
+    });
+    if (
+      value === undefined ||
+      requestedGeneration !== generation ||
+      requestedPrompt !== portPromptGeneration
+    )
+      return;
+    windowPort = parsePort(value);
+    await stop();
+    void vscode.window.showInformationMessage(
+      `Workspace MCP port ${windowPort} selected for this window. Run Start, then refresh this window's private client configuration.`,
+    );
+  });
+  register("workspaceMcp.disableWrites", async () => {
+    // A response to an older prompt (or delayed persistence) cannot grant again.
+    promptGeneration++;
+    running?.disableWrites();
+    pending?.disableWrites();
+    refresh();
   });
   register("workspaceMcp.enableWrites", async () => {
     const session = running;
@@ -456,7 +505,7 @@ export function activate(context: vscode.ExtensionContext): void {
         },
       ],
       {
-        title: "Connection configuration",
+        title: `Connection configuration — ${session.connection.url}`,
         placeHolder:
           "Contains a private token. Keep it out of repositories and shared logs.",
       },
