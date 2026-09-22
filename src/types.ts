@@ -173,7 +173,10 @@ export namespace Refactoring {
     kind: "quickfix" | "refactor";
   }
   export interface Preview {
-    /** Automatic application is unsupported: public WorkspaceEdit hides operations. */
+    /** At least one visible text edit exists; never implies complete operations. */
+    previewAvailable: boolean;
+    applicationSupported: false;
+    /** Legacy alias for applicationSupported, not preview availability. */
     supported: false;
     applicable: false;
     complete: false;
@@ -224,8 +227,8 @@ export interface ListResult {
   /** Count of omitted symbolic links and unsafe provider entry names. */
   blockedEntries: number;
   /** Omitted entries beyond the scan or response bounds. */
-  omittedEntries?: number;
-  incomplete?: boolean;
+  omittedEntries: number;
+  incomplete: boolean;
   nextCursor?: string;
 }
 export interface SearchResult {
@@ -242,9 +245,9 @@ export interface SearchResult {
   filesSearched: number;
   nextCursor?: string;
   /** Searches observe live files across pages, never an atomic snapshot. */
-  consistency?: "live";
+  consistency: "live";
   /** Cumulative hard limits: omitted work cannot be recovered by continuation. */
-  limits?: string[];
+  limits: string[];
   truncated: boolean;
   incomplete: boolean;
   errors: Array<{ uri: string; message: string }>;

@@ -27,8 +27,12 @@ overflow rejects the preview.
 
 ## Application is unsupported
 
-Every preview reports `supported: false`, `applicable: false`, `complete: false`
-and a reason. These describe automatic application, not text-preview availability:
+Every preview reports `previewAvailable`: true when at least one visible text edit
+is present, false for absent or empty text edits. This does not establish provider
+availability or a complete operation. `applicationSupported: false` explicitly
+states that application is unsupported. The existing `supported: false` remains
+a compatibility alias for application support; `applicable: false` and
+`complete: false` also remain. Reasons explain these limitations:
 
 | Reason                  | Meaning                                                                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -1137,6 +1137,8 @@ export class WorkspaceService implements WorkspaceApi {
         signal?.throwIfAborted();
         this.active();
         const preview: Refactoring.Preview = {
+          previewAvailable: false,
+          applicationSupported: false,
           supported: false,
           applicable: false,
           complete: false,
@@ -1190,6 +1192,7 @@ export class WorkspaceService implements WorkspaceApi {
           });
           this.checkedEdits(document, textEdits);
           preview.documents.push({ ...state(document), edits: textEdits });
+          if (textEdits.length > 0) preview.previewAvailable = true;
         }
         return preview;
       });

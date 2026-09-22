@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import test from "node:test";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startServer } from "../src/server.js";
+import { outputSchema } from "../src/contracts.js";
 import { WorkspaceError, type WorkspaceApi } from "../src/types.js";
 
 const emptyDiagnostics = {
@@ -75,6 +77,8 @@ const workspace: WorkspaceApi = {
     dirty: false,
     providerResult: false,
     preview: {
+      previewAvailable: false,
+      applicationSupported: false,
       supported: false,
       applicable: false,
       complete: false,
@@ -96,6 +100,8 @@ const workspace: WorkspaceApi = {
     entries: [],
     truncated: false,
     blockedEntries: 0,
+    omittedEntries: 0,
+    incomplete: false,
   }),
   read: async ({ uri }) => ({
     uri,
@@ -121,6 +127,8 @@ const workspace: WorkspaceApi = {
     query,
     matches: [],
     filesSearched: 0,
+    consistency: "live",
+    limits: [],
     truncated: false,
     incomplete: false,
     errors: [],
@@ -235,6 +243,26 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "workspace_symbols",
   ]);
   for (const [name, args] of [
+    ["workspace_roots", {}],
+    ["editor_context", {}],
+    ["list_directory", { uri: "memfs:/project" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.abap" }],
+    [
+      "edit_document",
+      {
+        uri: "memfs:/project/a.abap",
+        version: 4,
+        edits: [
+          {
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 0 },
+            },
+            text: "x",
+          },
+        ],
+      },
+    ],
     ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
     [
       "document_symbols",
@@ -877,6 +905,506 @@ for (const toolName of ["edit_document", "save_document"]) {
     assert.notEqual(roots.isError, true);
   });
 }
+
+test("discovery documents tool roles, URI/position conventions and search continuation", async (t) => {
+  const server = await startServer(workspace);
+  t.after(() => server.close());
+  const client = new Client({ name: "contract-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const { tools } = await client.listTools();
+  const find = (name: string) => tools.find((tool) => tool.name === name)!;
+  for (const tool of tools) {
+    assert.ok(tool.outputSchema, `${tool.name} exposes its result contract`);
+    const validate = new AjvJsonSchemaValidator().getValidator(
+      tool.outputSchema,
+    );
+    assert.equal(
+      validate({}).valid,
+      false,
+      `${tool.name} rejects an empty envelope`,
+    );
+    assert.equal(
+      validate({ error: { code: "OPERATION_FAILED", message: "failed" } })
+        .valid,
+      true,
+    );
+
+    for (const [name, property] of Object.entries(
+      tool.inputSchema.properties ?? {},
+    )) {
+      assert.ok(
+        (property as { description?: string }).description,
+        `${tool.name}.${name} has guidance`,
+      );
+      if (name === "version") {
+        assert.equal(
+          (property as { minimum: number }).minimum,
+          1,
+          `${tool.name} requires positive versions`,
+        );
+      }
+    }
+  }
+  const validateRoots = new AjvJsonSchemaValidator().getValidator(
+    find("workspace_roots").outputSchema!,
+  );
+  assert.equal(validateRoots({ result: [] }).valid, true);
+  assert.equal(
+    validateRoots({
+      result: [],
+      error: { code: "OPERATION_FAILED", message: "failed" },
+    }).valid,
+    false,
+  );
+  type Schema = {
+    type?: string;
+    properties?: Record<string, Schema>;
+    required?: string[];
+    items?: Schema;
+  };
+  const resultSchema = (name: string) =>
+    (find(name).outputSchema as Schema).properties!.result!;
+  const readSchema = resultSchema("read_document");
+  for (const field of ["requestedRange", "returnedRange", "truncated"]) {
+    assert.ok(readSchema.properties![field], `${field} is discoverable`);
+    assert.ok(readSchema.required!.includes(field), `${field} is required`);
+  }
+  assert.equal(readSchema.properties!.nextPosition!.type, "object");
+  assert.equal(readSchema.required!.includes("nextPosition"), false);
+  const listSchema = resultSchema("list_directory");
+  for (const [field, type] of [
+    ["omittedEntries", "number"],
+    ["incomplete", "boolean"],
+    ["nextCursor", "string"],
+  ]) {
+    assert.equal(listSchema.properties![field!]!.type, type);
+    assert.equal(listSchema.required!.includes(field!), field !== "nextCursor");
+  }
+  const matchSchema =
+    resultSchema("search_workspace").properties!.matches!.items!;
+  assert.equal(matchSchema.properties!.previewTruncated!.type, "boolean");
+  assert.equal(matchSchema.required!.includes("previewTruncated"), false);
+  const formatSchema = resultSchema("format_document");
+  assert.equal(formatSchema.properties!.editCount!.type, "number");
+  assert.ok(formatSchema.required!.includes("editCount"));
+  assert.equal(formatSchema.required!.includes("edits"), false);
+  for (const name of ["workspace_symbols", "document_symbols"] as const) {
+    const schema = resultSchema(name);
+    for (const field of [
+      "version",
+      "consistency",
+      "nextOffset",
+      "scanned",
+      "scanLimitReached",
+    ]) {
+      assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
+      assert.equal(
+        schema.required!.includes(field),
+        ["consistency", "scanned", "scanLimitReached"].includes(field) ||
+          (name === "document_symbols" && field === "version"),
+      );
+    }
+    const validate = new AjvJsonSchemaValidator().getValidator(
+      find(name).outputSchema!,
+    );
+    const result = {
+      symbols: [],
+      truncated: false,
+      omitted: 0,
+      consistency: "live",
+      scanned: 0,
+      scanLimitReached: false,
+    };
+    assert.equal(
+      validate({ result }).valid,
+      name === "workspace_symbols",
+      "only document symbol results require version",
+    );
+    const withVersion = {
+      result: { ...result, version: 1, futureMetadata: { available: true } },
+    };
+    assert.equal(validate(withVersion).valid, true);
+    assert.deepEqual(outputSchema(name).parse(withVersion), withVersion);
+    if (name === "document_symbols") {
+      for (const version of [0, -1, 1.5]) {
+        const invalid = { result: { ...result, version } };
+        assert.equal(
+          validate(invalid).valid,
+          false,
+          `version ${version} must be a positive integer`,
+        );
+        assert.equal(outputSchema(name).safeParse(invalid).success, false);
+      }
+    }
+    const item = schema.properties!.symbols!.items!;
+    for (const field of ["type", "selectionRange", "fullRangeKnown"]) {
+      assert.ok(item.properties![field]);
+      assert.equal(item.required!.includes(field), field !== "selectionRange");
+    }
+  }
+  for (const name of ["get_diagnostics", "wait_for_diagnostics"]) {
+    const schema = resultSchema(name);
+    for (const field of [
+      "counts",
+      "total",
+      "inspected",
+      "matching",
+      "incomplete",
+      "snapshotId",
+      "nextOffset",
+    ]) {
+      assert.ok(schema.properties![field], `${name}.${field} is discoverable`);
+      assert.equal(schema.required!.includes(field), field !== "nextOffset");
+    }
+    assert.equal(
+      schema.properties!.diagnostics!.items!.properties!.messageTruncated!.type,
+      "boolean",
+    );
+  }
+  // Both the SDK's advertised JSON Schema and the server's Zod parser must
+  // reject missing unconditional metadata, while accepting absent conditionals.
+  const uri = "memfs:/project/a.abap";
+  const point = { line: 0, character: 0 };
+  const range = { start: point, end: point };
+  const diagnostic = {
+    range,
+    severity: "hint",
+    message: "",
+    messageTruncated: false,
+  };
+  const symbol = {
+    name: "x",
+    kind: 0,
+    type: "file",
+    uri,
+    range,
+    fullRangeKnown: false,
+  };
+  const cases = [
+    [
+      "list_directory",
+      await workspace.list({ uri }),
+      ["omittedEntries", "incomplete"],
+      undefined,
+    ],
+    [
+      "search_workspace",
+      await workspace.search({ uri, query: "x" }),
+      ["consistency", "limits"],
+      undefined,
+    ],
+    [
+      "workspace_symbols",
+      {
+        ...(await workspace.workspaceSymbols({ query: "x" })),
+        symbols: [symbol],
+      },
+      ["consistency", "scanned", "scanLimitReached"],
+      ["symbols", "type", "fullRangeKnown"],
+    ],
+    [
+      "document_symbols",
+      { ...(await workspace.documentSymbols({ uri })), symbols: [symbol] },
+      ["consistency", "scanned", "scanLimitReached", "version"],
+      ["symbols", "type", "fullRangeKnown"],
+    ],
+    [
+      "get_diagnostics",
+      { ...(await workspace.diagnostics({ uri })), diagnostics: [diagnostic] },
+      ["counts", "total", "inspected", "matching", "incomplete", "snapshotId"],
+      ["diagnostics", "messageTruncated"],
+    ],
+    [
+      "wait_for_diagnostics",
+      {
+        ...(await workspace.waitForDiagnostics({ uri, version: 1 })),
+        diagnostics: [diagnostic],
+      },
+      ["counts", "total", "inspected", "matching", "incomplete", "snapshotId"],
+      ["diagnostics", "messageTruncated"],
+    ],
+  ] as const;
+  for (const [name, result, required, nested] of cases) {
+    const validate = new AjvJsonSchemaValidator().getValidator(
+      find(name).outputSchema!,
+    );
+    const check = (value: unknown, valid: boolean, reason: string) => {
+      assert.equal(validate(value).valid, valid, `${name} SDK: ${reason}`);
+      assert.equal(
+        outputSchema(name).safeParse(value).success,
+        valid,
+        `${name} Zod: ${reason}`,
+      );
+    };
+    const envelope = {
+      result: { ...result, futureMetadata: { available: true } },
+    };
+    check(envelope, true, "conditional fields may be absent");
+    assert.deepEqual(outputSchema(name).parse(envelope), envelope);
+    for (const field of required) {
+      const incomplete: Record<string, unknown> = { ...result };
+      delete incomplete[field];
+      check({ result: incomplete }, false, `requires ${field}`);
+    }
+    if (nested) {
+      const [collection, ...fields] = nested;
+      for (const field of fields) {
+        const incomplete = structuredClone(result) as unknown as Record<
+          string,
+          Record<string, unknown>[]
+        >;
+        delete incomplete[collection]![0]![field];
+        check({ result: incomplete }, false, `requires ${collection}.${field}`);
+      }
+    }
+  }
+  assert.match(find("workspace_symbols").description!, /name/i);
+  assert.match(find("document_symbols").description!, /outline/i);
+  assert.match(find("search_workspace").description!, /literal/i);
+  assert.match(find("search_workspace").description!, /nextCursor.*cursor/);
+  const properties = find("get_definition").inputSchema.properties as Record<
+    string,
+    { description: string }
+  >;
+  assert.match(properties.uri!.description, /scheme/);
+  assert.match(properties.position!.description, /zero-based UTF-16/i);
+});
+
+test("MCP output contracts validate success, cursor round-trips and structured errors", async (t) => {
+  const cursor = "32f146a4-8c1a-4bd4-b065-7c33eaef98a7";
+  let seenCursor: string | undefined;
+  const server = await startServer({
+    ...workspace,
+    search: async (input) => {
+      seenCursor = input.cursor;
+      return {
+        ...(await workspace.search(input)),
+        nextCursor: input.cursor ? undefined : cursor,
+        matches: [
+          {
+            uri: input.uri,
+            line: 0,
+            character: 0,
+            text: "literal",
+            previewTruncated: true,
+          },
+        ],
+      };
+    },
+    context: async () => ({
+      roots: [],
+      tabs: [],
+      truncated: false,
+      activeEditor: {
+        uri: "vfs:/project/file",
+        version: 1,
+        dirty: false,
+        languageId: "text",
+        selection: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+        selectedText: "",
+        selectionTruncated: false,
+        futureMetadata: { available: true },
+      },
+    }),
+    read: async () => {
+      throw new WorkspaceError("VERSION_CONFLICT", "private provider data");
+    },
+    list: async (input) => ({
+      ...(await workspace.list(input)),
+      nextOffset: 20,
+      totalEntries: 30,
+      omittedEntries: 2,
+      incomplete: true,
+      nextCursor: cursor,
+    }),
+    format: async ({ uri, version }) =>
+      ({ uri, version, dirty: false, applied: true, editCount: 1 }) as never,
+    save: async () =>
+      ({ uri: "vfs:/project/file", version: "invalid", dirty: false }) as never,
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "contract-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  await client.listTools(); // Populate the official client's output validators.
+  const args = { uri: "vfs:/project", query: "literal", include: ["**/*.ts"] };
+  const first = await client.callTool({
+    name: "search_workspace",
+    arguments: args,
+  });
+  assert.equal(
+    (first.structuredContent as { result: { nextCursor: string } }).result
+      .nextCursor,
+    cursor,
+  );
+  const second = await client.callTool({
+    name: "search_workspace",
+    arguments: { ...args, cursor },
+  });
+  assert.equal(second.isError, undefined);
+  assert.equal(
+    (
+      second.structuredContent as {
+        result: { matches: Array<{ previewTruncated: boolean }> };
+      }
+    ).result.matches[0]!.previewTruncated,
+    true,
+  );
+  assert.equal(seenCursor, cursor);
+  const wrongKey = await client.callTool({
+    name: "search_workspace",
+    arguments: { ...args, nextCursor: cursor },
+  });
+  assert.equal(wrongKey.isError, true);
+  const error = await client.callTool({
+    name: "read_document",
+    arguments: { uri: "vfs:/project/file" },
+  });
+  assert.equal(error.isError, true);
+  assert.deepEqual(error.structuredContent, {
+    error: {
+      code: "VERSION_CONFLICT",
+      message:
+        "Document changed or was reopened; read its current version before retrying.",
+    },
+  });
+  const listing = await client.callTool({
+    name: "list_directory",
+    arguments: { uri: "vfs:/project" },
+  });
+  assert.equal(
+    (listing.structuredContent as { result: { nextOffset: number } }).result
+      .nextOffset,
+    20,
+  );
+  assert.deepEqual(listing.structuredContent, {
+    result: {
+      uri: "vfs:/project",
+      entries: [],
+      truncated: false,
+      blockedEntries: 0,
+      nextOffset: 20,
+      totalEntries: 30,
+      omittedEntries: 2,
+      incomplete: true,
+      nextCursor: cursor,
+    },
+  });
+  const context = await client.callTool({
+    name: "editor_context",
+    arguments: {},
+  });
+  assert.deepEqual(
+    (
+      context.structuredContent as {
+        result: { activeEditor: { futureMetadata: { available: boolean } } };
+      }
+    ).result.activeEditor.futureMetadata,
+    { available: true },
+    "nested editor metadata survives output validation",
+  );
+  const formatting = await client.callTool({
+    name: "format_document",
+    arguments: { uri: "vfs:/project/file", version: 1, apply: true },
+  });
+  assert.equal(formatting.isError, undefined);
+  assert.equal(
+    (formatting.structuredContent as { result: { editCount: number } }).result
+      .editCount,
+    1,
+  );
+  const invalid = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: 1 },
+  });
+  assert.equal(
+    invalid.isError,
+    true,
+    "invalid successful output must be rejected",
+  );
+});
+
+test("symbol-read contract validates bounded source and preserves additive metadata before registration", () => {
+  const range = {
+    start: { line: 1, character: 0 },
+    end: { line: 2, character: 1 },
+  };
+  const result = {
+    uri: "vfs:/project/file",
+    version: 3,
+    dirty: true,
+    languageId: "abap",
+    lineCount: 4,
+    startLine: 1,
+    endLine: 3,
+    text: "source",
+    requestedRange: range,
+    returnedRange: range,
+    truncated: false,
+    symbol: {
+      name: "example",
+      kind: 5,
+      containerName: "parent",
+      range,
+      selectionRange: range,
+      futureMetadata: { supported: true },
+    },
+    futureReadMetadata: { count: 1 },
+  };
+  const schema = outputSchema("read_symbol");
+  assert.deepEqual(schema.parse({ result }), { result });
+  const { symbol: _symbol, ...missingSymbol } = result;
+  assert.equal(schema.safeParse({ result: missingSymbol }).success, false);
+  assert.equal(
+    schema.safeParse({
+      result: { ...result, symbol: { ...result.symbol, kind: "invalid" } },
+    }).success,
+    false,
+  );
+});
+
+test("MCP rejects version zero before dispatching a version-checked operation", async (t) => {
+  let called = 0;
+  const server = await startServer({
+    ...workspace,
+    save: async (input) => {
+      called++;
+      return workspace.save(input);
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "version-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const zero = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: 0 },
+  });
+  assert.equal(zero.isError, true);
+  assert.equal(called, 0);
+  const one = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: 1 },
+  });
+  assert.equal(one.isError, undefined);
+  assert.equal(called, 1);
+});
 
 test("read_document exposes exact ranges and budgets and forwards them without mutation", async (t) => {
   const calls: unknown[] = [];
