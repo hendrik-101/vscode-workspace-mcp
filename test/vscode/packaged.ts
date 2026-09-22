@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, isAbsolute, join } from "node:path";
+import { createConnection } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import * as vscode from "vscode";
@@ -37,25 +38,33 @@ async function deadline<T>(operation: PromiseLike<T>): Promise<T> {
 }
 
 async function connectionDetails(): Promise<Connection> {
-  // Drive the real connection command's first (Codex) choice. Repeated accept
-  // handles the cross-process delay before its quick pick becomes visible.
+  // The command and editor-state events cross different RPC paths. Observe the
+  // generated document before invoking the command instead of sampling the
+  // active editor immediately after the command promise resolves.
+  let opened!: (document: vscode.TextDocument) => void;
+  const generated = new Promise<vscode.TextDocument>((resolve) => {
+    opened = resolve;
+  });
+  const subscription = vscode.workspace.onDidOpenTextDocument((document) => {
+    if (
+      document.isUntitled &&
+      document.getText().startsWith("[mcp_servers.workspace_mcp]")
+    )
+      opened(document);
+  });
   const command = vscode.commands.executeCommand("workspaceMcp.connection");
   const timer = setInterval(() => {
     void vscode.commands.executeCommand(
       "workbench.action.acceptSelectedQuickOpenItem",
     );
   }, 100);
+  let document: vscode.TextDocument;
   try {
-    await deadline(command);
+    [, document] = await deadline(Promise.all([command, generated]));
   } finally {
     clearInterval(timer);
+    subscription.dispose();
   }
-  const document = vscode.window.activeTextEditor?.document;
-  assert.ok(
-    document?.isUntitled &&
-      document.getText().startsWith("[mcp_servers.workspace_mcp]"),
-    "Connection command must open the generated Codex configuration",
-  );
   const entries = new Map(
     document
       .getText()
@@ -86,6 +95,7 @@ async function connectionDetails(): Promise<Connection> {
       (value) => typeof value === "string" && value.length > 0,
     ),
   );
+  await vscode.window.showTextDocument(document, { preview: false });
   await vscode.commands.executeCommand(
     "workbench.action.revertAndCloseActiveEditor",
   );
@@ -169,6 +179,25 @@ async function readThroughProtocol(client: Client): Promise<void> {
   );
 }
 
+async function requireListener(): Promise<void> {
+  const port = vscode.workspace
+    .getConfiguration("workspaceMcp")
+    .get<number>("port")!;
+  const socket = createConnection({ host: "127.0.0.1", port });
+  try {
+    await deadline(
+      new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", () =>
+          reject(new Error("Start completed without a listening bridge")),
+        );
+      }),
+    );
+  } finally {
+    socket.destroy();
+  }
+}
+
 export async function run(): Promise<void> {
   const phase = process.env.WORKSPACE_MCP_TEST_PHASE!;
   const statePath = process.env.WORKSPACE_MCP_TEST_STATE!;
@@ -187,6 +216,10 @@ export async function run(): Promise<void> {
   let client: Client | undefined;
   try {
     await deadline(vscode.commands.executeCommand("workspaceMcp.start"));
+    await requireListener();
+    console.log(
+      `Packaged VSIX ${phase}: bridge listening; requesting generated configuration`,
+    );
     const current = await connectionDetails();
     let saved: Saved;
     if (phase === "install") {

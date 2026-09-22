@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { appendFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { build } from "esbuild";
-import { createVSIX } from "@vscode/vsce";
+import { createVSIX, listFiles, PackageManager } from "@vscode/vsce";
 import {
   resolveCliArgsFromVSCodeExecutablePath,
   runTests,
@@ -27,16 +27,14 @@ export async function testPackaged({
   // with different adapter bytes to exercise a real VS Code installer upgrade.
   const predecessor = join(temporary, "predecessor");
   await mkdir(predecessor);
-  for (const path of [
-    "dist",
-    "docs",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
-    "SECURITY.md",
-    ".vscodeignore",
-  ]) {
-    await cp(join(project, path), join(predecessor, path), { recursive: true });
+  const packagedFiles = await listFiles({
+    cwd: project,
+    packageManager: PackageManager.None,
+  });
+  for (const path of [...packagedFiles, ".vscodeignore"]) {
+    const destination = join(predecessor, path);
+    await mkdir(dirname(destination), { recursive: true });
+    await cp(join(project, path), destination);
   }
   await writeFile(
     join(predecessor, "package.json"),
