@@ -97,6 +97,12 @@ export async function installAdapter(
     .sort();
   const latest = bundles.at(-1);
   if (latest) await verifyBundle(join(directory, latest), latest.slice(17, 81));
+  // Only reuse the selected, verified generation. An older extension must still
+  // publish its bundle again when another version has since been selected.
+  if (hasLauncher && latest?.slice(17, 81) === id) {
+    checkCurrent();
+    return entry.fsPath;
+  }
   const revision = latest ? BigInt(`0x${latest.slice(0, 16)}`) + 1n : 1n;
   if (revision > 0xffffffffffffffffn)
     throw new Error("Workspace MCP adapter storage revision limit reached.");
