@@ -1,37 +1,9 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { transformSync } from "esbuild";
 import * as contracts from "../src/types";
-import type { WorkspaceService } from "../src/workspace";
-
-class Uri {
-  constructor(private readonly value: URL) {}
-  static parse(value: string) {
-    return new Uri(new URL(value));
-  }
-  get scheme() {
-    return this.value.protocol.slice(0, -1);
-  }
-  get authority() {
-    return this.value.host;
-  }
-  get path() {
-    return this.value.pathname;
-  }
-  get query() {
-    return this.value.search.slice(1);
-  }
-  get fragment() {
-    return this.value.hash.slice(1);
-  }
-  toString() {
-    return this.value.toString();
-  }
-}
+import { Uri } from "./support/values";
+import { loadWorkspace } from "./support/workspace";
 
 function diagnostic(index: number, severity = index % 4) {
   return {
@@ -98,17 +70,9 @@ function fixture(hardDeadlineMs = 25_000) {
       getDiagnostics: () => diagnostics,
     },
   };
-  const module = {
-    exports: {} as { WorkspaceService: new () => WorkspaceService },
-  };
-  runInNewContext(
-    transformSync(readFileSync("src/workspace.ts", "utf8"), {
-      loader: "ts",
-      format: "cjs",
-    }).code,
+  const WorkspaceService = loadWorkspace(
+    vscode,
     {
-      module,
-      exports: module.exports,
       AbortController,
       setTimeout: (callback: () => void, ms: number) => {
         const timer = setTimeout(
@@ -125,16 +89,10 @@ function fixture(hardDeadlineMs = 25_000) {
         timers.delete(timer);
         clearTimeout(timer);
       },
-      require: (id: string) => {
-        if (id === "vscode") return vscode;
-        if (id === "node:buffer") return { Buffer };
-        if (id === "node:crypto") return { createHash, randomUUID };
-        if (id === "./types") return contracts;
-        throw new Error(`Unexpected import: ${id}`);
-      },
     },
+    { createHash, randomUUID },
   );
-  const service = new module.exports.WorkspaceService();
+  const service = new WorkspaceService();
   return {
     service,
     diagnostics,

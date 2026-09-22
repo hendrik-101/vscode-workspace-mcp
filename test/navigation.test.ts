@@ -1,55 +1,13 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { transformSync } from "esbuild";
-import * as contracts from "../src/types";
-import type { WorkspaceService } from "../src/workspace";
-
-/** Minimal URI fixture for deterministic workspace API boundary tests. */
-class Uri {
-  private constructor(private readonly value: URL) {}
-  static from(value: { scheme: string; path: string }): Uri {
-    return Uri.parse(`${value.scheme}:${value.path}`);
-  }
-  static parse(value: string): Uri {
-    return new Uri(new URL(value));
-  }
-  get scheme() {
-    return this.value.protocol.slice(0, -1);
-  }
-  get authority() {
-    return this.value.host;
-  }
-  get path() {
-    return this.value.pathname;
-  }
-  get query() {
-    return this.value.search.slice(1);
-  }
-  get fragment() {
-    return this.value.hash.slice(1);
-  }
-  toString() {
-    return this.value.toString();
-  }
-}
+import { Uri, Position, Range as ValueRange } from "./support/values";
+import { loadWorkspace } from "./support/workspace";
 
 function loadService(
   vscode: unknown,
   collections?: Array<Map<unknown, unknown> | Set<unknown>>,
-): WorkspaceService {
-  const exports = {} as { WorkspaceService: new () => WorkspaceService };
-  const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
-    loader: "ts",
-    format: "cjs",
-  }).code;
-  const module = { exports };
-  runInNewContext(code, {
-    module,
-    exports,
+) {
+  const WorkspaceService = loadWorkspace(vscode, {
     Map: class extends Map<unknown, unknown> {
       constructor(entries?: Iterable<readonly [unknown, unknown]> | null) {
         super(entries);
@@ -62,34 +20,11 @@ function loadService(
         collections?.push(this);
       }
     },
-    require: (id: string) => {
-      if (id === "vscode") return vscode;
-      if (id === "node:buffer") return { Buffer };
-      if (id === "node:crypto") return { randomUUID };
-      if (id === "./types") return contracts;
-      throw new Error(`Unexpected import: ${id}`);
-    },
   });
-  return new module.exports.WorkspaceService();
+  return new WorkspaceService();
 }
 
-class Position {
-  constructor(
-    public line: number,
-    public character: number,
-  ) {}
-  isAfter(other: Position) {
-    return (
-      this.line > other.line ||
-      (this.line === other.line && this.character > other.character)
-    );
-  }
-}
-class Range {
-  constructor(
-    public start: Position,
-    public end: Position,
-  ) {}
+class Range extends ValueRange {
   contains(other: Range) {
     return !this.start.isAfter(other.start) && !other.end.isAfter(this.end);
   }
@@ -526,8 +461,8 @@ test("overflow releases observer registration and abort listener before a pendin
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(abortListeners, 1);
   const observers = (
-    f.service as unknown as { navigationObservers: Set<unknown> }
-  ).navigationObservers;
+    f.service as unknown as { documentObservers: Set<unknown> }
+  ).documentObservers;
   assert.equal(observers.size, 1);
   for (let index = 0; index < 1001; index++) {
     f.change({

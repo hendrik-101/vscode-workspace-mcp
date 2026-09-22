@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SYMBOL_TYPES } from "./types.js";
 
 // Keep output shapes concise: safety limits live in workspace operations, while
 // these schemas describe returned fields and distinguish success from errors.
@@ -15,35 +16,7 @@ const root = z.looseObject({ uri: text, name: text, index: number });
 const symbol = z.looseObject({
   name: text,
   kind: number,
-  type: z.enum([
-    "file",
-    "module",
-    "namespace",
-    "package",
-    "class",
-    "method",
-    "property",
-    "field",
-    "constructor",
-    "enum",
-    "interface",
-    "function",
-    "variable",
-    "constant",
-    "string",
-    "number",
-    "boolean",
-    "array",
-    "object",
-    "key",
-    "null",
-    "enummember",
-    "struct",
-    "event",
-    "operator",
-    "typeparameter",
-    "unknown",
-  ]),
+  type: z.enum([...SYMBOL_TYPES, "unknown"]),
   selectionRange: range.optional(),
   fullRangeKnown: boolean,
   uri: text,

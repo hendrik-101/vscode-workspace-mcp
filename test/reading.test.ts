@@ -1,55 +1,10 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { transformSync } from "esbuild";
 import * as contracts from "../src/types";
-import type { WorkspaceService } from "../src/workspace";
+import { makeDocument } from "./support/document";
+import { Uri, Position, Range } from "./support/values";
+import { loadWorkspace } from "./support/workspace";
 
-class Uri {
-  constructor(private readonly value: URL) {}
-  static parse(value: string) {
-    return new Uri(new URL(value));
-  }
-  get scheme() {
-    return this.value.protocol.slice(0, -1);
-  }
-  get authority() {
-    return this.value.host;
-  }
-  get path() {
-    return this.value.pathname;
-  }
-  get query() {
-    return this.value.search.slice(1);
-  }
-  get fragment() {
-    return this.value.hash.slice(1);
-  }
-  toString() {
-    return this.value.toString();
-  }
-}
-class Position {
-  constructor(
-    public line: number,
-    public character: number,
-  ) {}
-  isAfter(other: Position) {
-    return (
-      this.line > other.line ||
-      (this.line === other.line && this.character > other.character)
-    );
-  }
-}
-class Range {
-  constructor(
-    public start: Position,
-    public end: Position,
-  ) {}
-}
 const at = (line: number, character = 0) => ({ line, character });
 const range = (start: contracts.Position, end: contracts.Position) => ({
   start,
@@ -61,45 +16,8 @@ const plain = <T>(value: T): T =>
 function fixture(text: string) {
   const root = Uri.parse("vfs-test://host/project?tenant=one");
   const uri = Uri.parse("vfs-test://host/project/main.txt?tenant=one");
-  const lines = text.split(/\r\n|\n|\r/);
-  const starts = [0];
-  for (const match of text.matchAll(/\r\n|\n|\r/g))
-    starts.push(match.index! + match[0].length);
   let onRead = () => {};
-  const document = {
-    uri,
-    version: 2,
-    isDirty: true,
-    isClosed: false,
-    languageId: "text",
-    lineCount: lines.length,
-    lineAt(line: number) {
-      return {
-        text: lines[line]!,
-        range: new Range(
-          new Position(line, 0),
-          new Position(line, lines[line]!.length),
-        ),
-      };
-    },
-    offsetAt(p: contracts.Position) {
-      return starts[p.line]! + p.character;
-    },
-    positionAt(offset: number) {
-      let line = starts.length - 1;
-      while (starts[line]! > offset) line--;
-      return new Position(
-        line,
-        Math.min(offset - starts[line]!, lines[line]!.length),
-      );
-    },
-    getText(value?: Range) {
-      onRead();
-      return value
-        ? text.slice(this.offsetAt(value.start), this.offsetAt(value.end))
-        : text;
-    },
-  };
+  const document = makeDocument(uri, text, () => onRead());
   const vscode = {
     Uri,
     Position,
@@ -116,27 +34,9 @@ function fixture(text: string) {
       },
     },
   };
-  const exports = {} as { WorkspaceService: new () => WorkspaceService };
-  const module = { exports };
-  runInNewContext(
-    transformSync(readFileSync("src/workspace.ts", "utf8"), {
-      loader: "ts",
-      format: "cjs",
-    }).code,
-    {
-      module,
-      exports,
-      require: (id: string) => {
-        if (id === "vscode") return vscode;
-        if (id === "node:buffer") return { Buffer };
-        if (id === "node:crypto") return { randomUUID };
-        if (id === "./types") return contracts;
-        throw new Error(`Unexpected import: ${id}`);
-      },
-    },
-  );
+  const WorkspaceService = loadWorkspace(vscode);
   return {
-    service: new module.exports.WorkspaceService(),
+    service: new WorkspaceService(),
     document,
     vscode,
     uri: uri.toString(),

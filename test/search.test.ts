@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
-import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
-import { transformSync } from "esbuild";
 import test from "node:test";
 import * as contracts from "../src/types";
-import type { WorkspaceService } from "../src/workspace";
+import { loadWorkspace } from "./support/workspace";
 
 class Uri {
   constructor(private value: URL) {}
@@ -98,37 +94,24 @@ function fixture(files: Record<string, string>, json?: typeof JSON) {
       },
     },
   };
-  const module = {
-    exports: {} as { WorkspaceService: new () => WorkspaceService },
-  };
-  const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
-    loader: "ts",
-    format: "cjs",
-  }).code;
-  runInNewContext(code, {
-    module,
-    exports: module.exports,
-    ...(json ? { JSON: json } : {}),
-    Date: class extends Date {
-      static now() {
-        return now;
-      }
+  const WorkspaceService = loadWorkspace(
+    {
+      Uri,
+      workspace,
+      FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
     },
-    require: (id: string) => {
-      if (id === "vscode")
-        return {
-          Uri,
-          workspace,
-          FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
-        };
-      if (id === "node:crypto") return crypto;
-      if (id === "node:buffer") return { Buffer };
-      if (id === "./types") return contracts;
-      throw Error(id);
+    {
+      ...(json ? { JSON: json } : {}),
+      Date: class extends Date {
+        static now() {
+          return now;
+        }
+      },
     },
-  });
+    crypto,
+  );
   return {
-    service: new module.exports.WorkspaceService(),
+    service: new WorkspaceService(),
     root: root.toString(),
     documents,
     workspace,

@@ -371,7 +371,7 @@ function createMcpServer(
     (args) => workspace.save(args, signal),
     false,
   );
-  const diagnosticOptions = {
+  const paginationOptions = {
     maxResults: z
       .number()
       .int()
@@ -379,12 +379,6 @@ function createMcpServer(
       .max(100)
       .optional()
       .describe("Maximum results per page; default 20, maximum 100."),
-    severity: z
-      .enum(["error", "warning", "information", "hint"])
-      .optional()
-      .describe(
-        "Return only this severity; omit for all severities. Counts remain unfiltered.",
-      ),
     offset: z
       .number()
       .int()
@@ -393,6 +387,15 @@ function createMcpServer(
       .optional()
       .describe(
         "Filtered result offset; default 0. Continue with nextOffset and unchanged filters.",
+      ),
+  };
+  const diagnosticOptions = {
+    ...paginationOptions,
+    severity: z
+      .enum(["error", "warning", "information", "hint"])
+      .optional()
+      .describe(
+        "Return only this severity; omit for all severities. Counts remain unfiltered.",
       ),
     snapshotId: z
       .string()
@@ -458,22 +461,7 @@ function createMcpServer(
       .describe(
         "VS Code symbol kind number (0–25) or lowercase type name; omit for all kinds.",
       ),
-    maxResults: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe("Maximum results per page; default 20, maximum 100."),
-    offset: z
-      .number()
-      .int()
-      .min(0)
-      .max(1000)
-      .optional()
-      .describe(
-        "Filtered result offset; default 0. Continue with nextOffset and unchanged filters.",
-      ),
+    ...paginationOptions,
   };
   tool(
     "workspace_symbols",
