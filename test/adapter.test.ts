@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import test, { type TestContext } from "node:test";
@@ -168,7 +168,7 @@ test("a failed publication preserves the previous usable adapter", async (t) => 
   await f.bundle("second");
   const rename = f.api.rename;
   f.api.rename = async (from, to, options) => {
-    if (/\/[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(to.fsPath))
+    if (/^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(basename(to.fsPath)))
       throw new Error("disk unavailable");
     return rename(from, to, options);
   };
@@ -223,7 +223,7 @@ test("a damaged staged bundle never replaces the working generation", async (t) 
   f.api.writeFile = (uri, contents) =>
     write(
       uri,
-      uri.fsPath.endsWith("/stdio.cjs")
+      basename(uri.fsPath) === "stdio.cjs"
         ? Buffer.from('console.log("damaged");')
         : contents,
     );
@@ -260,7 +260,8 @@ for (const phase of ["before", "after"] as const)
     const release = deferred();
     const rename = f.api.rename;
     f.api.rename = async (from, to, options) => {
-      if (!from.fsPath.includes("/.install-")) return rename(from, to, options);
+      if (!basename(from.fsPath).startsWith(".install-"))
+        return rename(from, to, options);
       if (phase === "after") await rename(from, to, options);
       entered.resolve();
       await release.promise;
@@ -292,7 +293,7 @@ test("rolling back a cancelled publication preserves another window's same-versi
   const rename = first.api.rename;
   first.api.rename = async (from, to, options) => {
     await rename(from, to, options);
-    if (from.fsPath.includes("/.install-")) {
+    if (basename(from.fsPath).startsWith(".install-")) {
       published.resolve();
       await release.promise;
     }
@@ -316,7 +317,7 @@ test("cancellation during staging cleanup also rolls back the publication", asyn
   const remove = f.api.delete;
   f.api.delete = async (uri) => {
     await remove(uri);
-    if (uri.fsPath.includes("/.install-")) cancelled = true;
+    if (basename(uri.fsPath).startsWith(".install-")) cancelled = true;
   };
   await assert.rejects(
     f.install(f.context, () => {
@@ -336,7 +337,7 @@ test("cancelled preparation stays unselectable when deletion fails", async (t) =
   const rename = f.api.rename;
   f.api.rename = async (from, to, options) => {
     await rename(from, to, options);
-    if (from.fsPath.includes("/.install-")) {
+    if (basename(from.fsPath).startsWith(".install-")) {
       orphan = to.fsPath;
       cancelled = true;
     }

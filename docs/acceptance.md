@@ -8,6 +8,18 @@ activation and `abap` filesystem-provider registration, then runs synthetic VFS
 tests with ADT loaded. This does not verify real ABAP listing, reading or saving.
 Third-party setup/telemetry policy: [development rules](development.md).
 
+## Packaged extension
+
+CI runs unit, VS Code and packaged tests on Linux, Windows and macOS; `verify`
+requires every platform. Run `npm run test:vscode -- --packaged` (with
+`xvfb-run -a` on headless Linux) to install VSIX archives into a clean profile.
+The installed extension starts the bridge; a real stdio client reads roots and
+an unsaved buffer, verifies Stop revokes access and reconnects after restart.
+A synthetic 0.0.0 predecessor with different adapter bytes upgrades to the
+current VSIX, followed by uninstall/reinstall. Saved configuration must work
+unchanged and the stable launcher must select the installed payload. This tests
+the installer mechanism, not compatibility with a historical released version.
+
 ## Manual backend/client checks
 
 Use a disposable object and authorized SAP development user. Keep private sources,
