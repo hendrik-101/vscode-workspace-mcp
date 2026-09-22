@@ -102,7 +102,10 @@ async function connectionDetails(): Promise<Connection> {
   return connection;
 }
 
-async function connect(connection: Connection): Promise<Client> {
+async function connect(connection: Connection): Promise<{
+  client: Client;
+  closeAndVerify(): Promise<void>;
+}> {
   const client = new Client({ name: "packaged-smoke", version: "1" });
   const transport = new StdioClientTransport({
     command: process.env.WORKSPACE_MCP_TEST_NODE!,
@@ -110,12 +113,16 @@ async function connect(connection: Connection): Promise<Client> {
     env: connection.env,
     stderr: "pipe",
   });
+  assert.ok(transport.stderr, "Capture the adapter stderr stream");
+  const drained = new Promise<void>((resolve) => {
+    transport.stderr!.once("end", resolve);
+  });
   let stderr = "";
   let markerObserved!: () => void;
   const marker = new Promise<void>((resolve) => {
     markerObserved = resolve;
   });
-  transport.stderr?.on("data", (data: Buffer) => {
+  transport.stderr.on("data", (data: Buffer) => {
     stderr += data.toString();
     if (stderr.includes("synthetic-predecessor-adapter")) markerObserved();
   });
@@ -125,12 +132,18 @@ async function connect(connection: Connection): Promise<Client> {
     // later. Wait for that independent stream only in the predecessor phase.
     if (process.env.WORKSPACE_MCP_TEST_PHASE === "install")
       await deadline(marker);
-    assert.equal(
-      stderr.includes("synthetic-predecessor-adapter"),
-      process.env.WORKSPACE_MCP_TEST_PHASE === "install",
-      "The saved launcher must execute the current payload, not a previously installed adapter",
-    );
-    return client;
+    return {
+      client,
+      async closeAndVerify() {
+        await deadline(client.close());
+        await deadline(drained);
+        assert.equal(
+          stderr.includes("synthetic-predecessor-adapter"),
+          process.env.WORKSPACE_MCP_TEST_PHASE === "install",
+          "The saved launcher must execute the current payload, not a previously installed adapter",
+        );
+      },
+    };
   } catch (error) {
     await transport.close();
     throw error;
@@ -229,7 +242,7 @@ export async function run(): Promise<void> {
     process.env.WORKSPACE_MCP_TEST_VERSION,
   );
   await extension.activate();
-  let client: Client | undefined;
+  let session: Awaited<ReturnType<typeof connect>> | undefined;
   try {
     await deadline(vscode.commands.executeCommand("workspaceMcp.start"));
     await requireListener();
@@ -295,12 +308,12 @@ export async function run(): Promise<void> {
         "Upgrade must replace the synthetic predecessor payload",
       );
     }
-    client = await connect(saved.connection);
-    await readThroughProtocol(client);
+    session = await connect(saved.connection);
+    await readThroughProtocol(session.client);
     await deadline(vscode.commands.executeCommand("workspaceMcp.stop"));
     try {
       const response = await deadline(
-        client.callTool({ name: "workspace_roots", arguments: {} }),
+        session.client.callTool({ name: "workspace_roots", arguments: {} }),
       );
       assert.equal(
         response.isError,
@@ -316,16 +329,19 @@ export async function run(): Promise<void> {
         "Stop must fail promptly rather than leave a request hanging",
       );
     }
-    await client.close();
-    client = undefined;
+    await session.closeAndVerify();
+    session = undefined;
     await deadline(vscode.commands.executeCommand("workspaceMcp.start"));
-    client = await connect(saved.connection);
-    await readThroughProtocol(client);
-    console.log(
-      `Packaged VSIX ${phase}: installed extension, stdio roots/live read, stop/restart, stable configuration passed`,
-    );
+    session = await connect(saved.connection);
+    await readThroughProtocol(session.client);
   } finally {
-    await client?.close();
-    await vscode.commands.executeCommand("workspaceMcp.stop");
+    try {
+      await session?.closeAndVerify();
+    } finally {
+      await vscode.commands.executeCommand("workspaceMcp.stop");
+    }
   }
+  console.log(
+    `Packaged VSIX ${phase}: installed extension, stdio roots/live read, stop/restart, stable configuration passed`,
+  );
 }
