@@ -43,7 +43,15 @@ export async function installAdapter(
   context: Pick<vscode.ExtensionContext, "extensionUri" | "globalStorageUri">,
   checkCurrent: () => void = () => {},
 ): Promise<string> {
-  if (context.globalStorageUri.scheme !== "file")
+  // Desktop VS Code exposes its disk-backed profile storage as vscode-userdata.
+  // Keep that provider URI for file operations; only this known local mapping
+  // may supply the native path used by the launcher and atomic commit below.
+  const localUserData =
+    context.globalStorageUri.scheme === "vscode-userdata" &&
+    !context.globalStorageUri.authority &&
+    vscode.env.uiKind === vscode.UIKind.Desktop &&
+    !vscode.env.remoteName;
+  if (context.globalStorageUri.scheme !== "file" && !localUserData)
     throw new Error(
       "Workspace MCP adapter requires local file storage on the extension host.",
     );

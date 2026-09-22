@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import test, { type TestContext } from "node:test";
@@ -22,15 +22,30 @@ function deferred() {
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(join(tmpdir(), "workspace-mcp-adapter-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const disk = (value: URL) =>
+    new URL(value.href.replace(/^vscode-userdata:/, "file:"));
+  const env = { uiKind: 1, remoteName: undefined as string | undefined };
   const uri = (value: URL): vscode.Uri =>
     ({
       scheme: value.protocol.slice(0, -1),
-      fsPath: value.protocol === "file:" ? fileURLToPath(value) : "",
+      authority: value.host,
+      fsPath: ["file:", "vscode-userdata:"].includes(value.protocol)
+        ? fileURLToPath(disk(value))
+        : "",
       toString: () => value.href,
     }) as vscode.Uri;
   const extensionUri = uri(pathToFileURL(join(root, "extension")));
-  const globalStorageUri = uri(pathToFileURL(join(root, "storage")));
-  const file = (resource: vscode.Uri) => new URL(resource.toString());
+  const storageUri = (scheme: string) =>
+    uri(
+      new URL(
+        pathToFileURL(join(root, "storage")).href.replace(
+          /^file:/,
+          `${scheme}:`,
+        ),
+      ),
+    );
+  const globalStorageUri = storageUri("file");
+  const file = (resource: vscode.Uri) => disk(new URL(resource.toString()));
   const local = { mkdirSync: (path: string) => mkdirSync(path) };
   const api = {
     stat: async (resource: vscode.Uri) => {
@@ -98,6 +113,8 @@ async function fixture(t: TestContext) {
         if (id === "vscode")
           return {
             FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
+            UIKind: { Desktop: 1, Web: 2 },
+            env,
             Uri: {
               joinPath: (base: vscode.Uri, ...parts: string[]) =>
                 uri(new URL(parts.join("/"), `${base.toString()}/`)),
@@ -122,6 +139,8 @@ async function fixture(t: TestContext) {
   await bundle("first");
   return {
     root,
+    env,
+    storageUri,
     api,
     local,
     bundle,
@@ -168,7 +187,7 @@ test("a failed publication preserves the previous usable adapter", async (t) => 
   await f.bundle("second");
   const rename = f.api.rename;
   f.api.rename = async (from, to, options) => {
-    if (/\/[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(to.fsPath))
+    if (/^[a-f0-9]{16}-[a-f0-9]{64}-[a-f0-9]{32}$/.test(basename(to.fsPath)))
       throw new Error("disk unavailable");
     return rename(from, to, options);
   };
@@ -310,7 +329,7 @@ test("a damaged staged bundle never replaces the working generation", async (t) 
   f.api.writeFile = (uri, contents) =>
     write(
       uri,
-      uri.fsPath.endsWith("/stdio.cjs")
+      basename(uri.fsPath) === "stdio.cjs"
         ? Buffer.from('console.log("damaged");')
         : contents,
     );
@@ -347,7 +366,8 @@ for (const phase of ["before", "after"] as const)
     const release = deferred();
     const rename = f.api.rename;
     f.api.rename = async (from, to, options) => {
-      if (!from.fsPath.includes("/.install-")) return rename(from, to, options);
+      if (!basename(from.fsPath).startsWith(".install-"))
+        return rename(from, to, options);
       if (phase === "after") await rename(from, to, options);
       entered.resolve();
       await release.promise;
@@ -379,7 +399,7 @@ test("rolling back a cancelled publication preserves another window's same-versi
   const rename = first.api.rename;
   first.api.rename = async (from, to, options) => {
     await rename(from, to, options);
-    if (from.fsPath.includes("/.install-")) {
+    if (basename(from.fsPath).startsWith(".install-")) {
       published.resolve();
       await release.promise;
     }
@@ -403,7 +423,7 @@ test("cancellation during staging cleanup also rolls back the publication", asyn
   const remove = f.api.delete;
   f.api.delete = async (uri) => {
     await remove(uri);
-    if (uri.fsPath.includes("/.install-")) cancelled = true;
+    if (basename(uri.fsPath).startsWith(".install-")) cancelled = true;
   };
   await assert.rejects(
     f.install(f.context, () => {
@@ -423,7 +443,7 @@ test("cancelled preparation stays unselectable when deletion fails", async (t) =
   const rename = f.api.rename;
   f.api.rename = async (from, to, options) => {
     await rename(from, to, options);
-    if (from.fsPath.includes("/.install-")) {
+    if (basename(from.fsPath).startsWith(".install-")) {
       orphan = to.fsPath;
       cancelled = true;
     }
@@ -490,6 +510,39 @@ test("launcher and installer ignore marker files and symbolic links", async (t) 
   await f.bundle("second");
   await f.install(f.context);
   assert.equal(f.launch(path), "second");
+});
+
+test("desktop userdata storage upgrades the adapter at the existing file-storage path", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  assert.equal(f.launch(path), "first");
+  f.context.globalStorageUri = f.storageUri("vscode-userdata");
+  await f.bundle("second");
+  assert.equal(await f.install(f.context), path);
+  assert.equal(f.launch(path), "second");
+});
+
+for (const host of ["web", "remote"] as const)
+  test(`${host} userdata storage is rejected before writing an executable`, async (t) => {
+    const f = await fixture(t);
+    f.context.globalStorageUri = f.storageUri("vscode-userdata");
+    if (host === "web") f.env.uiKind = 2;
+    else f.env.remoteName = "ssh-remote";
+    await assert.rejects(f.install(f.context), /local file/);
+    await assert.rejects(fs.stat(f.context.globalStorageUri.fsPath), {
+      code: "ENOENT",
+    });
+  });
+
+test("userdata storage with an authority is rejected before native path use", async (t) => {
+  const f = await fixture(t);
+  f.context.globalStorageUri = Object.assign(f.storageUri("vscode-userdata"), {
+    authority: "server",
+  });
+  await assert.rejects(f.install(f.context), /local file/);
+  await assert.rejects(fs.stat(f.context.globalStorageUri.fsPath), {
+    code: "ENOENT",
+  });
 });
 
 test("non-file storage is rejected before writing or producing an executable path", async (t) => {
