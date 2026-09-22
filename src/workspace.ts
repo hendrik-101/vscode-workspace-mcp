@@ -35,6 +35,8 @@ import {
   type Position,
   type ReadInput,
   type ReadResult,
+  type ReadSymbolInput,
+  type ReadSymbolResult,
   type RootInfo,
   type SaveInput,
   type SearchInput,
@@ -227,6 +229,13 @@ function parseUri(value: string): vscode.Uri {
     );
   }
   return uri;
+}
+
+function splitsSurrogate(text: string, offset: number): boolean {
+  return (
+    /[\ud800-\udbff]/.test(text.charAt(offset - 1)) &&
+    /[\udc00-\udfff]/.test(text.charAt(offset))
+  );
 }
 
 function position(value: vscode.Position): Position {
@@ -1648,10 +1657,7 @@ export class WorkspaceService implements WorkspaceApi {
     }
     const start = document.offsetAt(wanted.start);
     const end = document.offsetAt(wanted.end);
-    const splitsSurrogate = (offset: number) =>
-      /[\ud800-\udbff]/.test(original.charAt(offset - 1)) &&
-      /[\udc00-\udfff]/.test(original.charAt(offset));
-    if (splitsSurrogate(start) || splitsSurrogate(end))
+    if (splitsSurrogate(original, start) || splitsSurrogate(original, end))
       fail(
         "INVALID_ARGUMENT",
         "Read positions must not split a surrogate pair.",
@@ -1666,7 +1672,7 @@ export class WorkspaceService implements WorkspaceApi {
     );
     // VS Code positions cannot represent the middle of CRLF; keep both units together.
     if (
-      splitsSurrogate(finish) ||
+      splitsSurrogate(original, finish) ||
       (original[finish - 1] === "\r" && original[finish] === "\n")
     )
       finish--;
@@ -1688,6 +1694,216 @@ export class WorkspaceService implements WorkspaceApi {
       truncated,
       ...(truncated ? { nextPosition: returnedRange.end } : {}),
     };
+  }
+
+  /** Resolve a complete provider body before delegating bounded text pagination. */
+  async readSymbol(
+    input: ReadSymbolInput,
+    signal?: AbortSignal,
+  ): Promise<ReadSymbolResult> {
+    signal?.throwIfAborted();
+    this.active();
+    integer(input.version, "version", 1);
+    for (const name of [input.name, input.containerName]) {
+      if (
+        name !== undefined &&
+        (typeof name !== "string" || name.length > MAX_SELECTION)
+      )
+        fail(
+          "INVALID_ARGUMENT",
+          "Symbol selectors must contain at most 4096 characters.",
+        );
+    }
+    if (!input.name)
+      fail("INVALID_ARGUMENT", "An exact symbol name is required.");
+    const uri = parseUri(input.uri);
+    const document = await this.document(uri, signal);
+    this.expected(document, input.version);
+    const original = this.text(document);
+    for (const value of [input.position, input.startPosition]) {
+      if (value === undefined) continue;
+      const checked = this.exactPosition(document, value);
+      if (splitsSurrogate(original, document.offsetAt(checked)))
+        fail(
+          "INVALID_ARGUMENT",
+          "Read positions must not split a surrogate pair.",
+        );
+    }
+    const current = () => {
+      signal?.throwIfAborted();
+      this.currentRoot(uri);
+      this.expected(document, input.version);
+      if (
+        document.isClosed ||
+        !vscode.workspace.textDocuments.includes(document)
+      )
+        fail(
+          "VERSION_CONFLICT",
+          "The symbol source was closed or replaced. Read it again.",
+        );
+    };
+    current();
+    type ProviderSymbol = vscode.DocumentSymbol | vscode.SymbolInformation;
+    const items = await vscode.commands.executeCommand<ProviderSymbol[]>(
+      "vscode.executeDocumentSymbolProvider",
+      uri,
+    );
+    current();
+    const stack: Array<{
+      items: ProviderSymbol[];
+      index: number;
+      container?: string;
+      nested: boolean;
+    }> = [{ items: items ?? [], index: 0, nested: false }];
+    let visited = 0;
+    let matches = 0;
+    let unavailable = false;
+    let selected: ReadSymbolResult["symbol"] | undefined;
+    while (stack.length) {
+      const frame = stack[stack.length - 1]!;
+      if (frame.index === frame.items.length) {
+        stack.pop();
+        continue;
+      }
+      if (++visited > MAX_LIST_ENTRIES)
+        fail(
+          "SYMBOL_RESOLUTION_INCOMPLETE",
+          "Symbol traversal exceeded 1000 nodes; use an explicit document range.",
+        );
+      const item = frame.items[frame.index++]!;
+      if (!item || typeof item !== "object") continue;
+      // The native command may return hybrid DocumentSymbol/SymbolInformation objects.
+      // A location alone is never evidence of a full body.
+      let locationAvailable = true;
+      if ("location" in item) {
+        try {
+          const target = item.location?.uri?.toString();
+          if (typeof target !== "string" || target.length > 8192)
+            throw new Error("Invalid provider URI");
+          parseUri(target);
+          if (target !== uri.toString()) continue;
+        } catch {
+          locationAvailable = false;
+        }
+      }
+      const hierarchical = "selectionRange" in item || "children" in item;
+      const container = hierarchical
+        ? frame.container
+        : (item as vscode.SymbolInformation).containerName;
+      const containerKnown = hierarchical
+        ? !frame.nested ||
+          (typeof container === "string" && container.length > 0)
+        : typeof container === "string";
+      if ("children" in item && item.children?.length)
+        stack.push({
+          items: item.children,
+          index: 0,
+          container: item.name,
+          nested: true,
+        });
+      if (
+        item.name !== input.name ||
+        (containerKnown &&
+          input.containerName !== undefined &&
+          input.containerName !== (container ?? ""))
+      )
+        continue;
+      let full: vscode.Range;
+      let selection: vscode.Range;
+      try {
+        const symbol = item as vscode.DocumentSymbol;
+        // A usable start can exclude an overload even when its end is malformed.
+        // An unusable start cannot prove exclusion and still fails closed below.
+        const selectionStart = this.exactPosition(
+          document,
+          hierarchical
+            ? symbol.selectionRange.start
+            : (item as vscode.SymbolInformation).location.range.start,
+        );
+        if (splitsSurrogate(original, document.offsetAt(selectionStart)))
+          throw new Error("Provider selection start splits a surrogate pair");
+        if (
+          input.position &&
+          (input.position.line !== selectionStart.line ||
+            input.position.character !== selectionStart.character)
+        )
+          continue;
+        if (!hierarchical || !containerKnown || !locationAvailable) {
+          unavailable = true;
+          continue;
+        }
+        integer(symbol.kind, "symbol kind");
+        selection = this.exactRange(document, symbol.selectionRange);
+        full = this.exactRange(document, symbol.range);
+        // The selection start was checked before exclusion; validate every remaining endpoint.
+        for (const endpoint of [full.start, full.end, selection.end]) {
+          if (splitsSurrogate(original, document.offsetAt(endpoint)))
+            throw new Error("Provider range splits a surrogate pair");
+        }
+        if (
+          full.start.isAfter(selection.start) ||
+          selection.end.isAfter(full.end)
+        )
+          throw new Error("Selection outside full range");
+        // VS Code synthesizes equal ranges for legacy flat provider results.
+        // Reject that indistinguishable shape, including genuine equal-range symbols.
+        if (
+          document.offsetAt(full.start) ===
+            document.offsetAt(selection.start) &&
+          document.offsetAt(full.end) === document.offsetAt(selection.end)
+        )
+          throw new Error("Full range provenance unavailable");
+      } catch {
+        unavailable = true;
+        continue;
+      }
+      matches++;
+      selected = {
+        name: item.name.slice(0, MAX_PREVIEW),
+        kind: item.kind,
+        ...(container
+          ? { containerName: container.slice(0, MAX_PREVIEW) }
+          : {}),
+        range: range(full),
+        selectionRange: range(selection),
+      };
+    }
+    if (unavailable)
+      fail(
+        "SYMBOL_RANGE_UNAVAILABLE",
+        "The provider did not establish a full symbol range. Use an explicit document range.",
+      );
+    if (matches > 1)
+      fail(
+        "SYMBOL_AMBIGUOUS",
+        "Multiple symbols match. Specify the immediate parent or exact identifier start.",
+      );
+    if (!selected)
+      fail(
+        "SYMBOL_NOT_FOUND",
+        "No provider symbol matches. Check the exact name and selector; provider availability is unknown.",
+      );
+    const start = this.exactPosition(
+      document,
+      input.startPosition ?? selected.range.start,
+    );
+    const full = this.exactRange(document, selected.range);
+    if (full.start.isAfter(start) || start.isAfter(full.end))
+      fail(
+        "INVALID_ARGUMENT",
+        "startPosition must be inside the selected symbol range.",
+      );
+    current();
+    const result = await this.read({
+      uri: input.uri,
+      version: input.version,
+      range: { start: position(start), end: selected.range.end },
+      maxLines: input.maxLines,
+      maxChars: input.maxChars,
+    });
+    // read() loads asynchronously: reject a same-version replacement document too.
+    current();
+    return { ...result, symbol: selected };
   }
 
   /** Progressive live search. Cursors retain traversal positions, never source text. */

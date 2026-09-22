@@ -10,6 +10,7 @@ import {
 import { navigationTools } from "./navigation";
 import { MemoryProvider } from "./memory-provider";
 import { progressiveSearch } from "./search";
+import { readSymbolTools } from "./read-symbol";
 
 const uri = (value: string): vscode.Uri => vscode.Uri.parse(value);
 const range = (start: number, end: number) => ({
@@ -225,6 +226,7 @@ export async function run(): Promise<void> {
 
     await refactoringTools(provider, first, second, outside, linkedFile);
     await ideTools(provider, first, outside, linkedFile);
+    await readSymbolTools(provider, first);
     await navigationTools(provider, first, outside);
     const initial = await service.read({ uri: file.toString() });
     await rejectsCode(

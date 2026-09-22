@@ -38,6 +38,27 @@ export interface ReadInput extends UriInput {
   /** Maximum UTF-16 code units including line endings: 2–64000, default 16000. */
   maxChars?: number;
 }
+export interface ReadSymbolInput extends UriInput {
+  version: number;
+  name: string;
+  /** Exact immediate parent name, not a qualified ancestor path. */
+  containerName?: string;
+  /** Exact identifier selection start, for overload disambiguation. */
+  position?: Position;
+  /** Residual page start inside the provider-reported full range. */
+  startPosition?: Position;
+  maxLines?: number;
+  maxChars?: number;
+}
+export interface ReadSymbolResult extends ReadResult {
+  symbol: {
+    name: string;
+    kind: number;
+    containerName?: string;
+    range: TextRange;
+    selectionRange: TextRange;
+  };
+}
 export interface SearchInput extends UriInput {
   query: string;
   maxResults?: number;
@@ -339,6 +360,10 @@ export interface WorkspaceApi {
   context(): Promise<ContextResult>;
   list(input: ListInput): Promise<ListResult>;
   read(input: ReadInput): Promise<ReadResult>;
+  readSymbol(
+    input: ReadSymbolInput,
+    signal?: AbortSignal,
+  ): Promise<ReadSymbolResult>;
   search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
   edit(input: EditInput, signal?: AbortSignal): Promise<DocumentState>;
   save(input: SaveInput, signal?: AbortSignal): Promise<DocumentState>;
@@ -350,6 +375,10 @@ export interface WorkspaceApi {
 }
 
 export type WorkspaceErrorCode =
+  | "SYMBOL_NOT_FOUND"
+  | "SYMBOL_AMBIGUOUS"
+  | "SYMBOL_RANGE_UNAVAILABLE"
+  | "SYMBOL_RESOLUTION_INCOMPLETE"
   | "SEARCH_INVALIDATED"
   | "DIAGNOSTICS_CHANGED"
   | "SESSION_STOPPED"

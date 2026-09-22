@@ -122,6 +122,21 @@ const workspace: WorkspaceApi = {
     },
     truncated: false,
   }),
+  readSymbol: async (input) => ({
+    ...(await workspace.read(input)),
+    symbol: {
+      name: input.name,
+      kind: 5,
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 14 },
+      },
+      selectionRange: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 6 },
+      },
+    },
+  }),
   search: async ({ uri, query }) => ({
     uri,
     query,
@@ -234,6 +249,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "preview_code_actions",
     "preview_rename",
     "read_document",
+    "read_symbol",
     "save_document",
     "search_workspace",
     "show_diff",
@@ -1456,4 +1472,137 @@ test("read_document exposes exact ranges and budgets and forwards them without m
     );
   }
   assert.equal(calls.length, 1);
+});
+
+test("read_symbol requires version and forwards exact selectors, continuation and budgets", async (t) => {
+  const calls: unknown[] = [];
+  let receivedSignal: AbortSignal | undefined;
+  const server = await startServer({
+    ...workspace,
+    readSymbol: async (input, signal) => {
+      calls.push(input);
+      receivedSignal = signal;
+      return {
+        ...(await workspace.read(input)),
+        symbol: {
+          name: input.name,
+          kind: 5,
+          containerName: input.containerName,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 2, character: 1 },
+          },
+          selectionRange: {
+            start: { line: 0, character: 9 },
+            end: { line: 0, character: 15 },
+          },
+        },
+      };
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "read-symbol-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const input = {
+    uri: "memfs:/project/a.abap",
+    version: 4,
+    name: "method",
+    containerName: "Class",
+    position: { line: 0, character: 9 },
+    startPosition: { line: 1, character: 0 },
+    maxLines: 1,
+    maxChars: 2,
+  };
+  assert.equal(
+    (await client.callTool({ name: "read_symbol", arguments: input })).isError,
+    undefined,
+  );
+  assert.deepEqual(calls, [input]);
+  assert.ok(receivedSignal instanceof AbortSignal);
+  const tool = (await client.listTools()).tools.find(
+    (tool) => tool.name === "read_symbol",
+  );
+  assert.equal(tool?.annotations?.readOnlyHint, true);
+  const properties = tool?.inputSchema.properties as Record<
+    string,
+    { description?: string }
+  >;
+  for (const name of Object.keys(input))
+    assert.ok(
+      properties[name]?.description,
+      `read_symbol.${name} needs a description`,
+    );
+  for (const invalid of [
+    { version: undefined },
+    { version: 0 },
+    { name: "" },
+    { name: "x".repeat(4097) },
+    { maxLines: 0 },
+    { maxLines: 1001 },
+    { maxChars: 1 },
+    { maxChars: 64001 },
+    { position: { line: -1, character: 0 } },
+    { startPosition: { line: 0, character: -1 } },
+    {
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+    },
+  ])
+    assert.equal(
+      (
+        await client.callTool({
+          name: "read_symbol",
+          arguments: { ...input, ...invalid },
+        })
+      ).isError,
+      true,
+    );
+  assert.equal(calls.length, 1);
+});
+
+test("symbol resolution errors keep actionable codes while redacting provider details", async (t) => {
+  let code:
+    | "SYMBOL_NOT_FOUND"
+    | "SYMBOL_AMBIGUOUS"
+    | "SYMBOL_RANGE_UNAVAILABLE"
+    | "SYMBOL_RESOLUTION_INCOMPLETE" = "SYMBOL_NOT_FOUND";
+  const server = await startServer({
+    ...workspace,
+    readSymbol: async () => {
+      throw new WorkspaceError(code, "secret provider source");
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "read-symbol-errors", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  for (const value of [
+    "SYMBOL_NOT_FOUND",
+    "SYMBOL_AMBIGUOUS",
+    "SYMBOL_RANGE_UNAVAILABLE",
+    "SYMBOL_RESOLUTION_INCOMPLETE",
+  ] as const) {
+    code = value;
+    const result = await client.callTool({
+      name: "read_symbol",
+      arguments: { uri: "memfs:/project/a.abap", version: 4, name: "method" },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(
+      (result.structuredContent as { error: { code: string } }).error.code,
+      value,
+    );
+    assert.doesNotMatch(JSON.stringify(result), /secret provider source/);
+  }
 });

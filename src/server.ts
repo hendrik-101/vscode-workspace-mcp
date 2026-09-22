@@ -41,6 +41,14 @@ const preserveFocus = z
   .optional()
   .describe("Keep keyboard focus in the current editor; default true.");
 const errors: Record<string, string> = {
+  SYMBOL_NOT_FOUND:
+    "No provider symbol matches. Check the exact name and selectors; provider availability is unknown.",
+  SYMBOL_AMBIGUOUS:
+    "Multiple symbols match. Specify containerName or the exact identifier selection start as position.",
+  SYMBOL_RANGE_UNAVAILABLE:
+    "The provider did not establish a full symbol range. Use read_document with an explicit range.",
+  SYMBOL_RESOLUTION_INCOMPLETE:
+    "Symbol traversal exceeded 1000 nodes. Use read_document with an explicit range.",
   DIAGNOSTICS_CHANGED:
     "Diagnostics or continuation options changed. Restart without offset and snapshotId.",
   SEARCH_INVALIDATED:
@@ -221,6 +229,57 @@ function createMcpServer(
         "range is mutually exclusive with startLine/endLine",
       ),
     (args) => workspace.read(args),
+  );
+  tool(
+    "read_symbol",
+    "Read a bounded page of one provider-reported full symbol body. Requires current version and exact name; optional containerName is the immediate parent and position is the exact identifier selection start. Duplicate matches fail. Flat or indistinguishable full/selection ranges cannot establish bodies. Both read_document budgets apply (default 200 lines/16000 UTF-16 units). Continue with the same URI, version and selector plus nextPosition as startPosition; each call resolves the provider again.",
+    z.strictObject({
+      uri: uri.describe(
+        "Complete admitted workspace document URI, including its scheme.",
+      ),
+      version: index
+        .min(1)
+        .describe(
+          "Required current live document version; rejects stale symbol ranges.",
+        ),
+      name: z
+        .string()
+        .min(1)
+        .max(4096)
+        .describe("Exact provider symbol name; matching is case-sensitive."),
+      containerName: z
+        .string()
+        .max(4096)
+        .optional()
+        .describe(
+          "Exact immediate parent name; an empty string selects top-level symbols.",
+        ),
+      position: position
+        .optional()
+        .describe(
+          "Exact zero-based UTF-16 identifier selection start, to disambiguate same-name symbols.",
+        ),
+      startPosition: position
+        .optional()
+        .describe(
+          "Residual page start within the selected full body; pass nextPosition to continue.",
+        ),
+      maxLines: index
+        .min(1)
+        .max(1000)
+        .optional()
+        .describe(
+          "Maximum source lines per page, counting a partial first line; default 200, maximum 1000.",
+        ),
+      maxChars: index
+        .min(2)
+        .max(64000)
+        .optional()
+        .describe(
+          "Maximum UTF-16 code units per page including line endings; default 16000, maximum 64000, minimum 2.",
+        ),
+    }),
+    (args, requestSignal) => workspace.readSymbol(args, requestSignal),
   );
   tool(
     "search_workspace",

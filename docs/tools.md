@@ -44,6 +44,11 @@ validates edit ranges, overlap and size too. Empty edits may mean the text is
 already formatted or no formatter is available. Provider availability and
 behavior with SAP ADT require acceptance testing on an actual backend.
 
+`read_symbol({uri, version, name})` reads a unique provider-reported full body
+with optional immediate `containerName` and identifier-start `position`.
+It uses [bounded document pagination](reading.md); see [symbol reads](read-symbol.md)
+for continuation, ambiguity and conservative full-range availability rules.
+
 ## Additional tools
 
 - [Search filters and continuation](search.md)
