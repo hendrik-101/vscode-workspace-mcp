@@ -44,33 +44,6 @@ export async function testPackaged({
     join(predecessor, "dist/stdio.cjs"),
     '\nprocess.stderr.write("synthetic-predecessor-adapter\\n");\n',
   );
-  // Temporary diagnostic on the synthetic predecessor only. Never log error
-  // messages, stack text, credentials or configuration values other than port.
-  const entry = join(predecessor, "dist/extension.cjs");
-  const source = await readFile(entry, "utf8");
-  const diagnostic = (label, error) => `
-    console.error(${JSON.stringify(label)}, {
-      name: ["Error", "TypeError", "RangeError", "FileSystemError"].includes(${error}?.name) ? ${error}.name : "other",
-      code: typeof ${error}?.code === "string" && (/^[A-Z][A-Z0-9_]{0,63}$/.test(${error}.code) || ["FileNotFound", "FileExists", "FileNotADirectory", "FileIsADirectory", "NoPermissions", "Unavailable", "Unknown"].includes(${error}.code)) ? ${error}.code : "none",
-      category: ["Workspace MCP adapter", "Workspace MCP port", "Stored Workspace MCP token", "Stored Workspace MCP server identity"].find(prefix => typeof ${error}?.message === "string" && ${error}.message.startsWith(prefix)) || "other",
-      offsets: typeof ${error}?.stack === "string" ? ${error}.stack.split("\\n").slice(1).map(frame => frame.match(/:(\\d+):(\\d+)\\)?$/)?.slice(1)).filter(Boolean) : []
-    });`;
-  let instrumented = source;
-  for (const [boundary, label] of [
-    [/const report = \((\w+)\) => \{/, "Packaged predecessor startup failure"],
-    [
-      /installAdapter\(context, checkCurrent\)\.catch\(\s*\((\w+)\) => \{/,
-      "Packaged predecessor adapter failure",
-    ],
-  ]) {
-    if (!boundary.test(instrumented))
-      throw new Error("Missing predecessor diagnostic boundary");
-    instrumented = instrumented.replace(
-      boundary,
-      (match, error) => match + diagnostic(label, error),
-    );
-  }
-  await writeFile(entry, instrumented);
   const previous = join(temporary, "previous.vsix");
   await createVSIX({
     cwd: predecessor,
@@ -91,7 +64,10 @@ export async function testPackaged({
       activationEvents: [],
     }),
   );
-  await writeFile(join(harness, "empty.cjs"), "exports.activate = () => {};\n");
+  await writeFile(
+    join(harness, "empty.cjs"),
+    "exports.activate = context => ({ storageScheme: context.globalStorageUri.scheme });\n",
+  );
   const suite = join(harness, "suite.cjs");
   await build({
     entryPoints: [join(project, "test/vscode/packaged.ts")],

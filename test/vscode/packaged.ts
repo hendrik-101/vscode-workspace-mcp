@@ -200,6 +200,13 @@ async function requireListener(): Promise<void> {
 
 export async function run(): Promise<void> {
   const phase = process.env.WORKSPACE_MCP_TEST_PHASE!;
+  const harness = vscode.extensions.getExtension<{ storageScheme: string }>(
+    "test-only.workspace-mcp-packaged-test",
+  );
+  assert.ok(harness);
+  const { storageScheme } = await harness.activate();
+  console.log("Packaged host profile storage scheme:", storageScheme);
+  assert.ok(["file", "vscode-userdata"].includes(storageScheme));
   const statePath = process.env.WORKSPACE_MCP_TEST_STATE!;
   const extension = vscode.extensions.getExtension(
     "hendrik-101.vscode-workspace-mcp",
@@ -213,14 +220,6 @@ export async function run(): Promise<void> {
     process.env.WORKSPACE_MCP_TEST_VERSION,
   );
   await extension.activate();
-  const port = vscode.workspace
-    .getConfiguration("workspaceMcp")
-    .inspect<number>("port");
-  console.log("Packaged host startup context", {
-    trusted: vscode.workspace.isTrusted,
-    defaultPort: port?.defaultValue,
-    globalPort: port?.globalValue,
-  });
   let client: Client | undefined;
   try {
     await deadline(vscode.commands.executeCommand("workspaceMcp.start"));

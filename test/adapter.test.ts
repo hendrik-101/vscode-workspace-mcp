@@ -22,15 +22,30 @@ function deferred() {
 async function fixture(t: TestContext) {
   const root = await fs.mkdtemp(join(tmpdir(), "workspace-mcp-adapter-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const disk = (value: URL) =>
+    new URL(value.href.replace(/^vscode-userdata:/, "file:"));
+  const env = { uiKind: 1, remoteName: undefined as string | undefined };
   const uri = (value: URL): vscode.Uri =>
     ({
       scheme: value.protocol.slice(0, -1),
-      fsPath: value.protocol === "file:" ? fileURLToPath(value) : "",
+      authority: value.host,
+      fsPath: ["file:", "vscode-userdata:"].includes(value.protocol)
+        ? fileURLToPath(disk(value))
+        : "",
       toString: () => value.href,
     }) as vscode.Uri;
   const extensionUri = uri(pathToFileURL(join(root, "extension")));
-  const globalStorageUri = uri(pathToFileURL(join(root, "storage")));
-  const file = (resource: vscode.Uri) => new URL(resource.toString());
+  const storageUri = (scheme: string) =>
+    uri(
+      new URL(
+        pathToFileURL(join(root, "storage")).href.replace(
+          /^file:/,
+          `${scheme}:`,
+        ),
+      ),
+    );
+  const globalStorageUri = storageUri("file");
+  const file = (resource: vscode.Uri) => disk(new URL(resource.toString()));
   const local = { mkdirSync: (path: string) => mkdirSync(path) };
   const api = {
     stat: async (resource: vscode.Uri) => {
@@ -98,6 +113,8 @@ async function fixture(t: TestContext) {
         if (id === "vscode")
           return {
             FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
+            UIKind: { Desktop: 1, Web: 2 },
+            env,
             Uri: {
               joinPath: (base: vscode.Uri, ...parts: string[]) =>
                 uri(new URL(parts.join("/"), `${base.toString()}/`)),
@@ -122,6 +139,8 @@ async function fixture(t: TestContext) {
   await bundle("first");
   return {
     root,
+    env,
+    storageUri,
     api,
     local,
     bundle,
@@ -404,6 +423,39 @@ test("launcher and installer ignore marker files and symbolic links", async (t) 
   await f.bundle("second");
   await f.install(f.context);
   assert.equal(f.launch(path), "second");
+});
+
+test("desktop userdata storage upgrades the adapter at the existing file-storage path", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  assert.equal(f.launch(path), "first");
+  f.context.globalStorageUri = f.storageUri("vscode-userdata");
+  await f.bundle("second");
+  assert.equal(await f.install(f.context), path);
+  assert.equal(f.launch(path), "second");
+});
+
+for (const host of ["web", "remote"] as const)
+  test(`${host} userdata storage is rejected before writing an executable`, async (t) => {
+    const f = await fixture(t);
+    f.context.globalStorageUri = f.storageUri("vscode-userdata");
+    if (host === "web") f.env.uiKind = 2;
+    else f.env.remoteName = "ssh-remote";
+    await assert.rejects(f.install(f.context), /local file/);
+    await assert.rejects(fs.stat(f.context.globalStorageUri.fsPath), {
+      code: "ENOENT",
+    });
+  });
+
+test("userdata storage with an authority is rejected before native path use", async (t) => {
+  const f = await fixture(t);
+  f.context.globalStorageUri = Object.assign(f.storageUri("vscode-userdata"), {
+    authority: "server",
+  });
+  await assert.rejects(f.install(f.context), /local file/);
+  await assert.rejects(fs.stat(f.context.globalStorageUri.fsPath), {
+    code: "ENOENT",
+  });
 });
 
 test("non-file storage is rejected before writing or producing an executable path", async (t) => {
