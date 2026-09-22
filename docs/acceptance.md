@@ -13,7 +13,8 @@ Third-party setup/telemetry policy: [development rules](development.md).
 CI runs unit, VS Code and packaged tests on Linux, Windows and macOS; `verify`
 requires every platform. Run `npm run test:vscode -- --packaged` (with
 `xvfb-run -a` on headless Linux) to install VSIX archives into a clean profile.
-The installed extension starts the bridge; a real stdio client reads roots and
+A separate test harness runs in a normal VS Code host so profile secrets persist
+across launches. The installed extension starts the bridge; a real stdio client reads roots and
 an unsaved buffer, verifies Stop revokes access and reconnects after restart.
 A synthetic 0.0.0 predecessor with different adapter bytes upgrades to the
 current VSIX, followed by uninstall/reinstall. Saved configuration must work

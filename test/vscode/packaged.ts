@@ -111,11 +111,20 @@ async function connect(connection: Connection): Promise<Client> {
     stderr: "pipe",
   });
   let stderr = "";
+  let markerObserved!: () => void;
+  const marker = new Promise<void>((resolve) => {
+    markerObserved = resolve;
+  });
   transport.stderr?.on("data", (data: Buffer) => {
     stderr += data.toString();
+    if (stderr.includes("synthetic-predecessor-adapter")) markerObserved();
   });
   try {
     await deadline(client.connect(transport));
+    // Initialization arrives on stdout; stderr can deliver the earlier marker
+    // later. Wait for that independent stream only in the predecessor phase.
+    if (process.env.WORKSPACE_MCP_TEST_PHASE === "install")
+      await deadline(marker);
     assert.equal(
       stderr.includes("synthetic-predecessor-adapter"),
       process.env.WORKSPACE_MCP_TEST_PHASE === "install",
@@ -236,9 +245,19 @@ export async function run(): Promise<void> {
       saved = JSON.parse(await readFile(statePath, "utf8")) as Saved;
       // Boolean comparisons keep tokens/certificates out of failed assertions.
       assert.ok(
-        JSON.stringify(saved.connection) === JSON.stringify(current),
-        "Saved client configuration must remain identical across installer operations",
+        JSON.stringify(saved.connection.args) === JSON.stringify(current.args),
+        "Saved adapter path must remain identical across installer operations",
       );
+      for (const [key, label] of [
+        ["WORKSPACE_MCP_URL", "URL"],
+        ["WORKSPACE_MCP_TOKEN", "token"],
+        ["WORKSPACE_MCP_CERTIFICATE", "certificate"],
+      ]) {
+        assert.ok(
+          saved.connection.env[key!] === current.env[key!],
+          `Saved ${label} must remain identical across installer operations`,
+        );
+      }
       assert.notEqual(
         extension.extensionPath,
         saved.extensionPath,

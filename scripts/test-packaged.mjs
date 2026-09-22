@@ -1,14 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { build } from "esbuild";
 import { createVSIX, listFiles, PackageManager } from "@vscode/vsce";
-import {
-  resolveCliArgsFromVSCodeExecutablePath,
-  runTests,
-} from "@vscode/test-electron";
+import { resolveCliArgsFromVSCodeExecutablePath } from "@vscode/test-electron";
 
-/** Install actual archives; only the empty test harness is a development extension. */
+/** Install actual archives; only the test harness is a development extension. */
 export async function testPackaged({
   project,
   temporary,
@@ -60,13 +57,37 @@ export async function testPackaged({
       publisher: "test-only",
       version: "0.0.0",
       engines: { vscode: manifest.engines.vscode },
-      main: "empty.cjs",
-      activationEvents: [],
+      main: "harness.cjs",
+      activationEvents: ["onStartupFinished"],
     }),
   );
   await writeFile(
-    join(harness, "empty.cjs"),
-    "exports.activate = context => ({ storageScheme: context.globalStorageUri.scheme });\n",
+    join(harness, "harness.cjs"),
+    `const vscode = require("vscode");
+const { writeFile } = require("node:fs/promises");
+exports.activate = context => {
+  setImmediate(async () => {
+    let passed = false;
+    try {
+      await require("./suite.cjs").run();
+      passed = true;
+    } catch (error) {
+      console.error("Packaged fixture failed", {
+        name: ["Error", "AssertionError", "TypeError"].includes(error?.name) ? error.name : "other",
+        code: typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code) ? error.code : "none",
+        offsets: typeof error?.stack === "string" ? error.stack.split("\\n").slice(1).map(frame => frame.match(/:(\\d+):(\\d+)\\)?$/)?.slice(1)).filter(Boolean) : []
+      });
+    } finally {
+      try {
+        await writeFile(process.env.WORKSPACE_MCP_TEST_RESULT, JSON.stringify({ phase: process.env.WORKSPACE_MCP_TEST_PHASE, passed }));
+      } finally {
+        await vscode.commands.executeCommand("workbench.action.quit");
+      }
+    }
+  });
+  return { storageScheme: context.globalStorageUri.scheme };
+};
+`,
   );
   const suite = join(harness, "suite.cjs");
   await build({
@@ -89,6 +110,7 @@ export async function testPackaged({
       "--no-sandbox",
       "--disable-telemetry",
       "--disable-crash-reporter",
+      `--shared-data-dir=${join(temporary, "shared-data")}`,
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensions}`,
       ...args,
@@ -115,28 +137,51 @@ export async function testPackaged({
         `${manifest.publisher}.${manifest.name}`,
       );
     install("--install-extension", vsix, "--force");
-    await runTests({
-      vscodeExecutablePath,
-      extensionDevelopmentPath: harness,
-      extensionTestsPath: suite,
-      extensionTestsEnv: {
-        WORKSPACE_MCP_TEST_PHASE: phase,
-        WORKSPACE_MCP_TEST_VERSION: version,
-        WORKSPACE_MCP_TEST_STATE: join(temporary, "private-connection.json"),
-        WORKSPACE_MCP_TEST_EXTENSIONS: extensions,
-        WORKSPACE_MCP_TEST_NODE: process.execPath,
-      },
-      launchArgs: [
-        workspaceFile,
-        "--no-sandbox",
-        "--disable-gpu",
-        "--disable-workspace-trust",
-        "--skip-welcome",
-        "--skip-release-notes",
-        "--password-store=basic",
-        `--user-data-dir=${userData}`,
-        `--extensions-dir=${extensions}`,
-      ],
+    const resultPath = join(temporary, `${phase}-result.json`);
+    // VS Code deliberately uses in-memory storage with --extensionTestsPath.
+    // A normal host and graceful quit exercise real SecretStorage persistence.
+    const args = [
+      workspaceFile,
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-workspace-trust",
+      "--skip-welcome",
+      "--skip-release-notes",
+      "--password-store=basic",
+      "--disable-telemetry",
+      "--disable-crash-reporter",
+      `--extensionDevelopmentPath=${harness}`,
+      `--shared-data-dir=${join(temporary, "shared-data")}`,
+      `--user-data-dir=${userData}`,
+      `--extensions-dir=${extensions}`,
+    ];
+    await new Promise((resolve, reject) => {
+      const child = spawn(vscodeExecutablePath, args, {
+        stdio: "inherit",
+        timeout: 180_000,
+        env: {
+          ...process.env,
+          WORKSPACE_MCP_TEST_PHASE: phase,
+          WORKSPACE_MCP_TEST_VERSION: version,
+          WORKSPACE_MCP_TEST_STATE: join(temporary, "private-connection.json"),
+          WORKSPACE_MCP_TEST_EXTENSIONS: extensions,
+          WORKSPACE_MCP_TEST_NODE: process.execPath,
+          WORKSPACE_MCP_TEST_RESULT: resultPath,
+        },
+      });
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
+        if (code === 0 && !signal) resolve();
+        else
+          reject(
+            new Error(
+              `Packaged ${phase} host exited with code ${code}, signal ${signal}`,
+            ),
+          );
+      });
     });
+    const result = JSON.parse(await readFile(resultPath, "utf8"));
+    if (result.phase !== phase || result.passed !== true)
+      throw new Error(`Packaged ${phase} fixture did not pass`);
   }
 }
