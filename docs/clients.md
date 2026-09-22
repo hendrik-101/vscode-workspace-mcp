@@ -24,11 +24,14 @@ a stable path provides no remote access. Unavailable or non-local storage makes
 Start fail visibly.
 
 Only the packaged adapter and third-party notices are installed, without downloads
-or credentials. Each Start retains a copy (about 1.7 MB), even for the same version,
-so updates cannot remove code another client is loading. Only committed copies are
-selected; cancelled preparation stays unused even if cleanup fails. Nothing is
-automatically pruned. To reclaim space, stop every bridge and client using this
-storage, remove only its `adapter-v1` directory, then Start to recreate the same path.
+or credentials. Start verifies and reuses the selected copy when both files match
+the extension's bundle and the stable launcher is intact. Repeated Starts then add
+no copies. Updates, switching back to another version, or concurrent installations
+may retain additional copies (about 1.7 MB each), so code another client is loading
+remains available. Only committed copies are selected; cancelled preparation stays
+unused even if cleanup fails. Historical copies are never automatically pruned.
+To reclaim space, stop every bridge and client using this storage, remove only its
+`adapter-v1` directory, then Start to recreate the same path.
 
 Windows sharing storage use the most recently published compatible protocol-v1
 adapter. Cancelling Start before installation commits preserves the selected

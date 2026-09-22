@@ -176,6 +176,93 @@ test("a failed publication preserves the previous usable adapter", async (t) => 
   assert.equal(f.launch(path), "first");
 });
 
+test("repeated Starts reuse the verified selected bundle without storage writes", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  const directory = join(f.context.globalStorageUri.fsPath, "adapter-v1");
+  const before = await fs.readdir(directory);
+  const unexpectedWrite = () => {
+    throw new Error("unexpected storage mutation");
+  };
+  f.api.createDirectory = unexpectedWrite;
+  f.api.writeFile = unexpectedWrite;
+  f.api.rename = unexpectedWrite;
+  f.local.mkdirSync = unexpectedWrite;
+  for (let start = 0; start < 3; start++)
+    assert.equal(await f.install(f.context), path);
+  assert.deepEqual(await fs.readdir(directory), before);
+  assert.equal(f.launch(path), "first");
+});
+
+test("changed notices publish a new bundle even when adapter code is identical", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await fs.writeFile(
+    join(f.context.extensionUri.fsPath, "dist/THIRD_PARTY_NOTICES.txt"),
+    "updated notices",
+  );
+  assert.equal(await f.install(f.context), path);
+  const directory = join(f.context.globalStorageUri.fsPath, "adapter-v1");
+  const selected = (await fs.readdir(directory))
+    .filter((entry) => entry.endsWith(".ready"))
+    .sort()
+    .at(-1)!
+    .slice(0, -6);
+  assert.equal(
+    await fs.readFile(
+      join(directory, selected, "THIRD_PARTY_NOTICES.txt"),
+      "utf8",
+    ),
+    "updated notices",
+  );
+  assert.equal(f.launch(path), "first");
+});
+
+test("an older extension selects its bundle again instead of reusing unselected history", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await f.bundle("second");
+  await f.install(f.context);
+  assert.equal(f.launch(path), "second");
+  await f.bundle("first");
+  assert.equal(await f.install(f.context), path);
+  assert.equal(f.launch(path), "first");
+});
+
+test("a missing launcher is restored even when the selected bundle is identical", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  await fs.unlink(path);
+  assert.equal(await f.install(f.context), path);
+  assert.equal(f.launch(path), "first");
+});
+
+test("cancellation during stored bundle verification prevents reuse from succeeding", async (t) => {
+  const f = await fixture(t);
+  const path = await f.install(f.context);
+  const directory = join(f.context.globalStorageUri.fsPath, "adapter-v1");
+  const before = await fs.readdir(directory);
+  let cancelled = false;
+  const read = f.api.readFile;
+  f.api.readFile = async (uri) => {
+    const bytes = await read(uri);
+    if (
+      uri.fsPath.endsWith("/THIRD_PARTY_NOTICES.txt") &&
+      uri.fsPath.startsWith(directory)
+    )
+      cancelled = true;
+    return bytes;
+  };
+  await assert.rejects(
+    f.install(f.context, () => {
+      if (cancelled) throw new Error("cancelled");
+    }),
+    /cancelled/,
+  );
+  assert.deepEqual(await fs.readdir(directory), before);
+  assert.equal(f.launch(path), "first");
+});
+
 test("concurrent compatible installations leave a complete runnable adapter", async (t) => {
   const f = await fixture(t);
   const paths = await Promise.all([f.install(f.context), f.install(f.context)]);
