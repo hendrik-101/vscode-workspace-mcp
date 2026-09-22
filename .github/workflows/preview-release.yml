@@ -1,0 +1,96 @@
+name: Prepare preview release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full reviewed main commit SHA
+        required: true
+        type: string
+      version:
+        description: Numeric version matching package.json and CHANGELOG.md
+        required: true
+        type: string
+      acceptance:
+        description: Redacted evidence of real SAP and native-client acceptance at this revision
+        required: true
+        type: string
+      security:
+        description: Actual Codex Security repository scan revision and result reference
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_SHA: ${{ inputs.commit }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      ACCEPTANCE_EVIDENCE: ${{ inputs.acceptance }}
+      SECURITY_EVIDENCE: ${{ inputs.security }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select reviewed main revision
+        shell: bash
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          git checkout --detach "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate release metadata
+        run: node scripts/prepare-release.mjs "$RELEASE_VERSION"
+      - name: Require unused version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
+            echo "Version already tagged" >&2
+            exit 1
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name' > /tmp/release-tags
+          if grep -Fxq "v$RELEASE_VERSION" /tmp/release-tags; then
+            echo "Release already exists, including a possible draft" >&2
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run check
+      - run: npm run format:check
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+      - run: xvfb-run -a npm run test:vscode
+      - run: xvfb-run -a npm run test:vscode -- --adt
+      - name: Package preview and checksum
+        run: |
+          npm run build
+          npx --no-install vsce package --no-dependencies --pre-release --out "artifacts/workspace-mcp-$RELEASE_VERSION.vsix"
+          cd artifacts
+          sha256sum "workspace-mcp-$RELEASE_VERSION.vsix" > "workspace-mcp-$RELEASE_VERSION.vsix.sha256"
+      - name: Create draft prerelease for owner review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$RELEASE_VERSION" \
+            "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" \
+            "artifacts/workspace-mcp-$RELEASE_VERSION.vsix.sha256" \
+            --target "$RELEASE_SHA" --draft --prerelease \
+            --title "Workspace MCP $RELEASE_VERSION preview" \
+            --notes-file artifacts/release-notes.md

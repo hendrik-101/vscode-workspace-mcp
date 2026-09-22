@@ -104,5 +104,19 @@
     "prettier": "3.9.8",
     "tsx": "4.23.13",
     "typescript": "7.0.2"
-  }
+  },
+  "homepage": "https://github.com/hendrik-101/vscode-workspace-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/hendrik-101/vscode-workspace-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "workspace",
+    "virtual-workspace",
+    "SAP",
+    "ADT",
+    "Codex",
+    "Claude"
+  ],
+  "icon": "media/icon.png"
 }

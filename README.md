@@ -34,7 +34,9 @@ as the VS Code extension host; hosted web sessions cannot connect directly.
 
 Use **Workspace MCP: Stop** to disconnect. See [client setup](docs/clients.md)
 for client-specific instructions, write policies, ports and remote-host limitations.
-There is no Marketplace release; CI artifacts expire after 14 days.
+There is no Marketplace release; CI artifacts expire after 14 days. A manual
+[preview release workflow](docs/releases.md) can prepare versioned VSIX drafts
+after acceptance and Security gates; it does not publish to the Marketplace.
 
 ## Build from source
 
@@ -57,6 +59,7 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 | `editor_context`                                | Scoped active editor, selection and open text tabs                       |
 | `list_directory`                                | Entries through `workspace.fs.readDirectory`                             |
 | `read_document`                                 | Live text, version and dirty state; optional line range                  |
+| `read_symbol`                                   | Version-checked symbol bodies with bounded continuation                  |
 | `search_workspace`                              | Bounded literal search with filters and continuation cursors             |
 | `edit_document`                                 | Version-checked text edits; leaves the buffer unsaved                    |
 | `save_document`                                 | Separate version-checked save; may trigger provider dialogs              |
@@ -82,3 +85,5 @@ See the [tool reference](docs/tools.md) for parameters and limits.
 - [Development, tests and review rules](docs/development.md)
 - [Architecture](docs/design.md) and [security](SECURITY.md)
 - [SAP acceptance checks](docs/acceptance.md)
+- [Support and issue reporting](SUPPORT.md)
+- [Preview releases and Marketplace gates](docs/releases.md)
