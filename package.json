@@ -101,7 +101,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "selfsigned": "5.5.0",
-    "undici": "7.29.1",
+    "undici": "8.11.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
