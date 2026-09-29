@@ -266,7 +266,7 @@ test("cancellation during stored bundle verification prevents reuse from succeed
   f.api.readFile = async (uri) => {
     const bytes = await read(uri);
     if (
-      uri.fsPath.endsWith("/THIRD_PARTY_NOTICES.txt") &&
+      basename(uri.fsPath) === "THIRD_PARTY_NOTICES.txt" &&
       uri.fsPath.startsWith(directory)
     )
       cancelled = true;

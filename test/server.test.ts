@@ -55,7 +55,13 @@ test("rejects unauthenticated, browser, wrong-host and unexpected route requests
   assert.equal((await http(server.url, auth, "", "GET")).status, 405);
   assert.equal((await http(server.url, auth, "not JSON")).status, 400);
   assert.equal(
-    (await http(server.url, auth, "x".repeat(1024 * 1024 + 1))).status,
+    (
+      await http(
+        server.url,
+        { ...auth, "Content-Length": String(1024 * 1024 + 1) },
+        "not JSON",
+      )
+    ).status,
     413,
   );
 });

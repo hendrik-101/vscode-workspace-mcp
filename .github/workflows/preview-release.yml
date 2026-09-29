@@ -33,7 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     env:
       RELEASE_SHA: ${{ inputs.commit }}
       RELEASE_VERSION: ${{ inputs.version }}
@@ -58,19 +60,6 @@ jobs:
           cache: npm
       - name: Validate release metadata
         run: node scripts/prepare-release.mjs "$RELEASE_VERSION"
-      - name: Require unused version
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
-            echo "Version already tagged" >&2
-            exit 1
-          fi
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name' > /tmp/release-tags
-          if grep -Fxq "v$RELEASE_VERSION" /tmp/release-tags; then
-            echo "Release already exists, including a possible draft" >&2
-            exit 1
-          fi
       - run: npm ci
       - run: npm run check
       - run: npm run format:check
@@ -84,6 +73,49 @@ jobs:
           npx --no-install vsce package --no-dependencies --pre-release --out "artifacts/workspace-mcp-$RELEASE_VERSION.vsix"
           cd artifacts
           sha256sum "workspace-mcp-$RELEASE_VERSION.vsix" > "workspace-mcp-$RELEASE_VERSION.vsix.sha256"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload
+        with:
+          name: preview-release
+          path: |
+            artifacts/workspace-mcp-${{ inputs.version }}.vsix
+            artifacts/workspace-mcp-${{ inputs.version }}.vsix.sha256
+            artifacts/release-notes.md
+          if-no-files-found: error
+          retention-days: 14
+
+  # Keep repository and dependency execution away from the release credential.
+  draft:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      RELEASE_SHA: ${{ inputs.commit }}
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact-id }}
+          path: artifacts
+      - name: Require unused version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$RELEASE_VERSION" --jq '.[].ref' > "$RUNNER_TEMP/release-refs"
+          if grep -Fxq "refs/tags/v$RELEASE_VERSION" "$RUNNER_TEMP/release-refs"; then
+            echo "Version already tagged" >&2
+            exit 1
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name' > "$RUNNER_TEMP/release-tags"
+          if grep -Fxq "v$RELEASE_VERSION" "$RUNNER_TEMP/release-tags"; then
+            echo "Release already exists, including a possible draft" >&2
+            exit 1
+          fi
       - name: Create draft prerelease for owner review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,6 +123,7 @@ jobs:
           gh release create "v$RELEASE_VERSION" \
             "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" \
             "artifacts/workspace-mcp-$RELEASE_VERSION.vsix.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$RELEASE_SHA" --draft --prerelease \
             --title "Workspace MCP $RELEASE_VERSION preview" \
             --notes-file artifacts/release-notes.md
