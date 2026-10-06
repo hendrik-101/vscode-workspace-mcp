@@ -1,5 +1,19 @@
 # Client setup
 
+## Operation size limits
+
+The bridge accepts HTTP and stdio requests up to 64 MiB, including JSON escaping
+and edit coordinates. Decoded documents and replacement text remain limited to
+8 MiB. These independent byte ceilings do not raise a client's receive limit.
+Full formatter and refactoring previews include both textual and structured MCP
+results and can require up to 128 MiB of receive capacity. Clients using the MCP
+TypeScript SDK's default 10 MiB stdio buffer must configure a larger buffer for
+such full previews. Prefer compact formatting summaries (`includeEdits: false`)
+when the client does not expose that setting; native-client support at these
+sizes still requires acceptance testing.
+
+## Connection
+
 Install the VSIX, open the intended workspace and run **Workspace MCP: Start**,
 then **Workspace MCP: Show Connection Details**. Copy the generated stdio settings
 for `workspace_mcp`. The client needs Node.js 24+ and launches the bundled adapter

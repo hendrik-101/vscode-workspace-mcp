@@ -53,8 +53,15 @@ after changes. Providers may leave actions unresolved without edits.
 
 ## Limits
 
-Per request: 20 actions, 20 document entries, 100 text edits, 256 KiB replacement
-text plus repeated edit URIs; titles 512 characters, kinds 256, target text 1 MiB.
+Per request: 20 actions, 500 document entries, 10,000 text edits, 8 MiB replacement
+text plus repeated edit URIs; titles 512 characters, kinds 256, target text 8 MiB.
+Document entries, edits and bytes are cumulative across all returned action previews.
+Repeated entries for the same document count separately. Previews still cannot be
+applied automatically; these larger bounds do not establish complete operations.
+Full responses duplicate text in MCP's textual and structured envelopes and may
+require a client receive buffer of up to 128 MiB. The SDK's default 10 MiB stdio
+buffer does not accommodate every full preview; these bounds do not override
+client-side limits.
 Only excess action count sets `truncated`; other overflow rejects the request.
 
 Synthetic non-file provider tests do not verify SAP backends, transports, locks

@@ -13,8 +13,14 @@ import { z } from "zod";
 
 import { SYMBOL_TYPES, type WorkspaceApi } from "./types.js";
 import { outputSchema, results } from "./contracts.js";
+import {
+  MAX_DOCUMENT_BYTES,
+  MAX_EDITS,
+  MAX_DIAGNOSTICS,
+  MAX_REQUEST_BYTES,
+} from "./limits.js";
 
-const MAX_BODY = 1024 * 1024;
+const MAX_BODY = MAX_REQUEST_BYTES;
 const MAX_REQUESTS = 16;
 const REQUEST_TIMEOUT = 30_000;
 const uri = z
@@ -353,12 +359,12 @@ function createMcpServer(
             range,
             text: z
               .string()
-              .max(MAX_BODY)
+              .max(MAX_DOCUMENT_BYTES)
               .describe("Replacement text; empty deletes the range."),
           }),
         )
         .min(1)
-        .max(100)
+        .max(MAX_EDITS)
         .describe("Non-overlapping edits to the current buffer; not saved."),
     }),
     (args) => workspace.edit(args, signal),
@@ -391,6 +397,15 @@ function createMcpServer(
   };
   const diagnosticOptions = {
     ...paginationOptions,
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_DIAGNOSTICS)
+      .optional()
+      .describe(
+        "Filtered diagnostic offset; default 0. Continue with nextOffset, snapshotId and unchanged filters.",
+      ),
     severity: z
       .enum(["error", "warning", "information", "hint"])
       .optional()
@@ -407,7 +422,7 @@ function createMcpServer(
   };
   tool(
     "get_diagnostics",
-    "Get a bounded diagnostics page (default 20, max 100). Optional severity filter; counts cover the first 1000 diagnostics before filtering. Continue with nextOffset and snapshotId using unchanged options; restart if diagnostics changed.",
+    "Get a bounded diagnostics page (default 20, max 100). Optional severity filter; counts cover the first 5000 diagnostics before filtering. Continue with nextOffset and snapshotId using unchanged options; restart if diagnostics changed.",
     z.strictObject({ uri, ...diagnosticOptions }),
     (args) => workspace.diagnostics(args),
   );
@@ -523,7 +538,7 @@ function createMcpServer(
         ),
       proposedText: z
         .string()
-        .max(MAX_BODY)
+        .max(MAX_DOCUMENT_BYTES)
         .optional()
         .describe(
           "Proposed complete text to compare; requires version and excludes otherUri.",

@@ -51,8 +51,8 @@ and counters, never source/query text, credentials, persistent indexes or disk c
 
 ## Bounds
 
-Per page: default 20 results (explicit maximum 100), 24,000 serialized output characters, 200 files, 2,000 traversal steps, 4 MiB examined text and
-one million filename-matching state transitions. Files allow 1 MiB. Continuations
+Per page: default 20 results (explicit maximum 100), 24,000 serialized output characters, 200 files, 2,000 traversal steps, 8 MiB examined text and
+one million filename-matching state transitions. Files allow 8 MiB. Continuations
 resume at the next match offset; buffer revalidation counts toward cumulative
 bytes. One extra bounded buffer may be inspected before yielding at the byte limit.
 

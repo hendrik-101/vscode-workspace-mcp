@@ -58,7 +58,7 @@ test("rejects unauthenticated, browser, wrong-host and unexpected route requests
     (
       await http(
         server.url,
-        { ...auth, "Content-Length": String(1024 * 1024 + 1) },
+        { ...auth, "Content-Length": String(64 * 1024 * 1024 + 1) },
         "not JSON",
       )
     ).status,
@@ -385,10 +385,57 @@ test("limits streamed bodies even when Content-Length is absent", async (t) => {
       },
     );
     req.on("error", reject);
-    req.write("x".repeat(1024 * 1024));
+    req.write("x".repeat(64 * 1024 * 1024));
     req.end("x");
   });
   assert.equal(status, 413);
+});
+
+test("MCP admits a 10000-edit request and diagnostic continuation beyond offset 1000", async (t) => {
+  let received = 0;
+  let offset = 0;
+  const server = await startServer({
+    ...workspace,
+    edit: async (input) => {
+      received = input.edits.length;
+      return workspace.edit(input);
+    },
+    diagnostics: async (input) => {
+      offset = input.offset ?? 0;
+      return workspace.diagnostics(input);
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "large-operation-test", version: "1" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const result = await client.callTool({
+    name: "edit_document",
+    arguments: {
+      uri: "memfs:/project/a.abap",
+      version: 1,
+      edits: Array.from({ length: 10000 }, (_, line) => ({
+        range: { start: { line, character: 0 }, end: { line, character: 0 } },
+        text: " ".repeat(128),
+      })),
+    },
+  });
+  assert.notEqual(result.isError, true);
+  assert.equal(received, 10000);
+  const diagnostics = await client.callTool({
+    name: "get_diagnostics",
+    arguments: {
+      uri: "memfs:/project/a.abap",
+      offset: 4900,
+      snapshotId: "a".repeat(64),
+    },
+  });
+  assert.notEqual(diagnostics.isError, true);
+  assert.equal(offset, 4900);
 });
 
 test("rejects JSON-RPC batches so one HTTP request cannot multiply workspace operations", async (t) => {

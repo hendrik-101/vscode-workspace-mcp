@@ -566,7 +566,7 @@ export async function run(): Promise<void> {
 
     console.log("VS Code integration: live buffer size overrides backing size");
     const large = vscode.Uri.joinPath(first, "large.txt");
-    provider.seed(large, "x".repeat(1024 * 1024 + 1));
+    provider.seed(large, "x".repeat(8 * 1024 * 1024 + 1));
     await rejectsCode(
       service.read({ uri: large.toString() }),
       "LIMIT_EXCEEDED",
@@ -598,9 +598,9 @@ export async function run(): Promise<void> {
       edits: [{ range: range(0, 5), text: "short" }],
     });
     assert.equal(liveEdit.dirty, true);
-    assert.equal(provider.stored(large).length, 1024 * 1024 + 1);
+    assert.equal(provider.stored(large).length, 8 * 1024 * 1024 + 1);
     const grow = new vscode.WorkspaceEdit();
-    grow.insert(large, new vscode.Position(0, 0), "x".repeat(1024 * 1024));
+    grow.insert(large, new vscode.Position(0, 0), "x".repeat(8 * 1024 * 1024));
     assert.equal(await vscode.workspace.applyEdit(grow), true);
     await rejectsCode(
       service.read({ uri: large.toString() }),

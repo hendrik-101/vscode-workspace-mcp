@@ -3,7 +3,8 @@
 ## Contract
 
 `format_document` always validates the complete formatter result before applying
-any edit. Existing limits remain 100 edits and 1 MiB of replacement text. It
+any edit. Limits allow 10,000 edits and 8 MiB of replacement text; the input and resulting
+document must each fit within 8 MiB. It
 never applies a truncated edit set and never implicitly saves.
 
 With `apply: true`, the default response contains document `uri`, `version`,
@@ -14,12 +15,20 @@ summary for either mode. `editCount` always counts the complete validated set.
 An empty result has `editCount: 0` and `applied: false`, including when application
 was requested. Empty results do not establish formatter availability.
 
-The preview and explicit full-edit response retain the existing 1 MiB replacement
+The preview and explicit full-edit response retain the 8 MiB replacement
 text limit; this change does not impose a 16,000-character response budget or
 introduce continuation tokens. Large single replacement edits remain whole.
 Callers that only need state should use the compact summary. Edit ranges refer
 to the requested input version, even when the response reports a newer applied
 version: echoed edits must not be applied again.
+
+Full previews can exceed a client's receive buffer: the MCP response carries
+both textual and structured representations of edits, with additional JSON
+escaping. Clients that request full 8 MiB previews must accept up to 128 MiB per
+response; the TypeScript SDK's default 10 MiB stdio receive buffer is insufficient.
+Use `includeEdits: false` for a compact preview summary or the default summary
+after application when the client cannot increase its receive limit. The bridge
+cannot configure another process's receive buffer.
 
 ## Implementation and validation steps
 

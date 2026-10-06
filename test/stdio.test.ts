@@ -14,6 +14,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { startAdapter } from "../src/stdio";
 import { storedIdentity } from "../src/tls";
+import { startServer } from "../src/server";
+import { workspace } from "./fixtures/workspace";
 
 function identity() {
   const values = new Map<string, string>();
@@ -34,6 +36,61 @@ const tool = {
     required: ["value"],
   },
 };
+
+test("large full formatting previews cross stdio when the client receive buffer is configured", async (t) => {
+  const tls = await identity();
+  const replacement = "x".repeat(8 * 1024 * 1024);
+  const bridge = await startServer(
+    {
+      ...workspace,
+      format: async ({ uri, version }) => ({
+        uri,
+        version,
+        dirty: false,
+        applied: false,
+        editCount: 1,
+        edits: [
+          {
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+            text: replacement,
+          },
+        ],
+      }),
+    },
+    { tls },
+  );
+  t.after(() => bridge.close());
+  const incoming = new PassThrough();
+  const outgoing = new PassThrough();
+  const adapter = await startAdapter({
+    url: bridge.url,
+    token: bridge.token,
+    certificate: tls.cert,
+    input: incoming,
+    output: outgoing,
+  });
+  t.after(() => adapter.close());
+  const client = new Client({ name: "large-preview-test", version: "1" });
+  await client.connect(
+    new StdioServerTransport(outgoing, incoming, {
+      maxBufferSize: 128 * 1024 * 1024,
+    }),
+  );
+  t.after(() => client.close());
+  const result = await client.callTool({
+    name: "format_document",
+    arguments: { uri: "memfs:/project/a.abap", version: 1 },
+  });
+  assert.notEqual(result.isError, true);
+  const data = result.structuredContent as {
+    result: { edits: Array<{ text: string }> };
+  };
+  assert.equal(data.result.edits[0]!.text, replacement);
+  assert.ok(JSON.stringify(result).length > 16 * 1024 * 1024);
+});
 
 test(
   "stdio preserves tool schemas, results, errors and cancellation through trusted TLS",
@@ -120,7 +177,7 @@ test(
     await client.connect(new StdioServerTransport(outgoing, incoming));
     t.after(() => client.close());
     assert.deepEqual((await client.listTools()).tools, [tool]);
-    for (const value of ["success", "failure"]) {
+    for (const value of ["success", "failure", "x".repeat(1_100_000)]) {
       const result = await client.callTool({
         name: "echo",
         arguments: { value },

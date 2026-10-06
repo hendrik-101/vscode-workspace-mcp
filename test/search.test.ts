@@ -337,7 +337,7 @@ test("search output budget resumes the exact next match with long context and UR
 
 test("search skips oversized files while retaining later matches", async () => {
   const f = fixture({
-    "large.txt": "x".repeat(1024 * 1024 + 1),
+    "large.txt": "x".repeat(8 * 1024 * 1024 + 1),
     "small.txt": "needle",
   });
   const page = await f.service.search({ uri: f.root, query: "needle" });

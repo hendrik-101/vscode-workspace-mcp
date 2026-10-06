@@ -21,7 +21,7 @@ A source line counts when its text or terminator is returned; an end position
 at the next line's character zero does not count that next line. A partial first
 line counts as one. The two-character minimum guarantees forward progress for
 surrogate pairs and CRLF, which are never split. Budgets bound response text;
-the existing 1 MiB document admission limit still applies.
+the 8 MiB document admission limit still applies.
 
 The response retains `uri`, `version`, `dirty`, `languageId`, `lineCount`, `text`,
 `startLine`, and `endLine`. Legacy `startLine` / `endLine` describe the requested

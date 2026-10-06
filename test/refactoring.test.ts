@@ -257,10 +257,77 @@ test("aggregate edit budget is enforced without returning partial actions", asyn
   const f = fixture();
   f.supply(() => ({
     entries: () => [
-      [f.documents[0]!.uri, [{ range, newText: "x".repeat(256 * 1024) }]],
+      [f.documents[0]!.uri, [{ range, newText: "x".repeat(8 * 1024 * 1024) }]],
     ],
   }));
   await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
+});
+
+test("rename projects 10000 references across 500 documents and rejects larger operations", async () => {
+  const f = fixture();
+  const prototype = f.documents[0]!;
+  const text = "before ".repeat(20);
+  f.documents.splice(
+    0,
+    f.documents.length,
+    ...Array.from({ length: 500 }, (_, index) => ({
+      ...prototype,
+      uri: new Uri(`/project/${index}`),
+      getText: () => text,
+      lineAt: () => ({
+        text,
+        range: new Range(new Position(0, 0), new Position(0, text.length)),
+      }),
+    })),
+  );
+  f.input.uri = f.documents[0]!.uri.toString();
+  let entries = f.documents.map(
+    (document) =>
+      [
+        document.uri,
+        Array.from({ length: 20 }, (_, index) => ({
+          range: new Range(
+            new Position(0, index * 7),
+            new Position(0, index * 7 + 6),
+          ),
+          newText: "replacement ".repeat(8),
+        })),
+      ] as const,
+  );
+  f.supply(() => ({ entries: () => entries }));
+  try {
+    const result = await f.service.rename(f.input);
+    assert.equal(result.preview.documents.length, 500);
+    assert.equal(
+      result.preview.documents.reduce(
+        (count, document) => count + document.edits.length,
+        0,
+      ),
+      10000,
+    );
+    assert.equal(
+      result.preview.documents[499]!.edits[19]!.text,
+      "replacement ".repeat(8),
+    );
+    assert.equal(result.preview.applicationSupported, false);
+    entries = [...entries, entries[0]!];
+    await assert.rejects(
+      f.service.rename(f.input),
+      errorCode("LIMIT_EXCEEDED"),
+    );
+    entries = [
+      [
+        f.documents[0]!.uri,
+        Array.from({ length: 10001 }, () => ({ range, newText: "after" })),
+      ],
+    ];
+    await assert.rejects(
+      f.service.rename(f.input),
+      errorCode("LIMIT_EXCEEDED"),
+    );
+  } finally {
+    f.service.dispose();
+  }
 });
 
 test("public text projection cannot certify hidden resource operations", async () => {
@@ -366,7 +433,7 @@ test("change tracking overflow fails closed instead of retaining unbounded URIs"
 test("newly opened source exceeding decoded text limit never dispatches a provider", async () => {
   const f = fixture();
   const source = f.documents[0]!;
-  const text = "é".repeat(600_000);
+  const text = "é".repeat(4_200_000);
   source.getText = () => text;
   source.lineAt = () => ({
     text,

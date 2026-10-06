@@ -9,6 +9,7 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { MAX_REQUEST_BYTES } from "./limits";
 import type { Readable, Writable } from "node:stream";
 import {
   Agent,
@@ -130,7 +131,7 @@ export async function startAdapter(options: AdapterOptions) {
     await upstream.connect(transport);
     await server.connect(
       new StdioServerTransport(input, options.output ?? process.stdout, {
-        maxBufferSize: 1024 * 1024,
+        maxBufferSize: MAX_REQUEST_BYTES,
       }),
     );
     input.once("end", ended);
