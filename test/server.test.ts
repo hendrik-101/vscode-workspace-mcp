@@ -33,6 +33,65 @@ async function http(
   });
 }
 
+/** Observe an early refusal without flooding a closing socket with unsent data. */
+async function admissionProbe(
+  url: string,
+  headers: Record<string, string>,
+  chunked: boolean,
+) {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const size = 32 * 1024 * 1024;
+    let answered = false;
+    let sent = 0;
+    let timer: NodeJS.Timeout | undefined;
+    const req = request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          ...(chunked
+            ? { "Transfer-Encoding": "chunked" }
+            : { "Content-Length": String(size) }),
+        },
+      },
+      (res) => {
+        answered = true;
+        clearTimeout(timer);
+        req.off("drain", schedule);
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode!,
+            body: Buffer.concat(chunks).toString(),
+          }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.on("close", () => clearTimeout(timer));
+    req.setTimeout(10_000, () =>
+      req.destroy(new Error("Admission probe timed out")),
+    );
+    function schedule() {
+      if (!answered && !req.destroyed) timer = setTimeout(send, 1);
+    }
+    function send() {
+      if (answered || req.destroyed) return;
+      const chunk = Buffer.alloc(Math.min(64 * 1024, size - sent), 0x20);
+      sent += chunk.length;
+      const ready = req.write(chunk);
+      if (sent === size) req.end();
+      else if (ready) schedule();
+      else req.once("drain", schedule);
+    }
+    if (chunked) send();
+    else req.write(" "); // Header reservation must refuse before reading the body.
+  });
+}
+
 for (const chunked of [false, true]) {
   test(`aggregate body budget survives disconnect until provider settlement (${chunked ? "chunked" : "Content-Length"})`, async (t) => {
     let entered!: () => void;
@@ -78,35 +137,22 @@ for (const chunked of [false, true]) {
     req.end(large);
     await started;
     const probe = call + " ".repeat(32 * 1024 * 1024);
-    const probeHeaders = chunked
-      ? { ...headers, "Transfer-Encoding": "chunked" }
-      : { ...headers, "Content-Length": String(Buffer.byteLength(probe)) };
     try {
-      const response = await Promise.race([
-        http(server.url, probeHeaders, probe),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "Aggregate admission failed to refuse the oversized concurrent request",
-                ),
-              ),
-            1000,
-          ),
-        ),
-      ]);
+      const response = await admissionProbe(server.url, headers, chunked);
       assert.equal(response.status, 503);
       assert.match(response.body, /64 MiB.*unfinished|unfinished.*64 MiB/);
       assert.match(response.body, /retry|wait/i);
       req.destroy();
       await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.equal((await http(server.url, probeHeaders, probe)).status, 503);
+      assert.equal(
+        (await admissionProbe(server.url, headers, chunked)).status,
+        503,
+      );
     } finally {
       req.destroy();
       release();
     }
-    assert.equal((await http(server.url, probeHeaders, probe)).status, 200);
+    assert.equal((await http(server.url, headers, probe)).status, 200);
   });
 }
 
