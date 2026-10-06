@@ -75,8 +75,10 @@ repository scan and record its revision/result. Security-sensitive PRs also need
 Security Review. PR reviews, `npm audit`, CodeQL and manual review do not replace
 the repository scan.
 
-PR CI produces a VSIX artifact, never a publication. The initial implementation
-authorizes no release, tag or Marketplace publish. Future releases require owner
-approval, version/changelog updates, passing checks, documented SAP acceptance
-and the Security scan. Publisher registration, credentials and signing/provenance
-remain separate work; never store publishing tokens here.
+PR and main CI produce VSIX artifacts, never publications. An owner-created
+annotated release tag authorizes automatic GitHub and Marketplace publication
+through the [release workflow](releases.md). Releases require version/changelog
+updates, passing three-platform checks, documented SAP/client acceptance and the
+actual Security repository scan for the tagged revision. The manual preview
+workflow still produces drafts only. Publisher credentials and identity federation
+are configured outside the repository; never store publishing tokens here.

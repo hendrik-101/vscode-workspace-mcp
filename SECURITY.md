@@ -82,4 +82,6 @@ client reachability. Hosted ChatGPT web sessions cannot connect directly.
 
 CI tests, dependency auditing, Codex code review and Codex Security are different
 checks. Only record a Codex Security scan as completed when its actual report and
-scanned revision are available. No automatic merge or Marketplace publishing.
+scanned revision are available. No automatic merge. Marketplace publishing runs only for owner-created, validated
+release tags, after CI and documented acceptance/Security gates. Publishing
+credentials are confined to the dedicated Marketplace job.

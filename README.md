@@ -17,10 +17,14 @@ Requires **VS Code 1.137+** and **Node.js 24+** on the MCP client host.
 The client must be able to run the bundled adapter in the same network environment
 as the VS Code extension host; hosted web sessions cannot connect directly.
 
-1. Open a successful [CI run on main](https://github.com/hendrik-101/vscode-workspace-mcp/actions/workflows/ci.yml?query=branch%3Amain),
-   download the `workspace-mcp-vsix` artifact and extract the ZIP. GitHub sign-in
+1. Once published, install **Workspace MCP** from publisher **hendrik101** from the
+   [Marketplace](https://marketplace.visualstudio.com/items?itemName=hendrik101.vscode-workspace-mcp)
+   (extension ID `hendrik101.vscode-workspace-mcp`; select the pre-release channel
+   for the initial preview). Until the first publication, open a successful [CI run on main](https://github.com/hendrik-101/vscode-workspace-mcp/actions/workflows/ci.yml?query=branch%3Amain),
+   download the `workspace-mcp-vsix-Linux`, `-Windows` or `-macOS` artifact and extract the ZIP. GitHub sign-in
    is required. Alternatively, [build the VSIX](#build-from-source).
-2. In the VS Code Command Palette, run **Extensions: Install from VSIX** and select
+2. If using a downloaded or locally built VSIX, run **Extensions: Install from VSIX**
+   in the VS Code Command Palette and select
    `workspace-mcp.vsix`.
 3. Open and trust your workspace. Turn **Files: Auto Save** off before allowing
    agent edits; the bridge refuses edits when Auto Save is enabled.
@@ -34,9 +38,10 @@ as the VS Code extension host; hosted web sessions cannot connect directly.
 
 Use **Workspace MCP: Stop** to disconnect. See [client setup](docs/clients.md)
 for client-specific instructions, write policies, ports and remote-host limitations.
-There is no Marketplace release; CI artifacts expire after 14 days. A manual
-[preview release workflow](docs/releases.md) can prepare versioned VSIX drafts
-after acceptance and Security gates; it does not publish to the Marketplace.
+CI artifacts expire after 14 days. [Versioned releases](docs/releases.md) attach a
+VSIX and checksum to GitHub Releases and publish the same tested file to Marketplace
+after the owner pushes a release tag. The manual preview workflow remains available
+for inspecting a draft before the first public release.
 
 ## Build from source
 
@@ -86,4 +91,4 @@ See the [tool reference](docs/tools.md) for parameters and limits.
 - [Architecture](docs/design.md) and [security](SECURITY.md)
 - [SAP acceptance checks](docs/acceptance.md)
 - [Support and issue reporting](SUPPORT.md)
-- [Preview releases and Marketplace gates](docs/releases.md)
+- [Releases and Marketplace setup](docs/releases.md)

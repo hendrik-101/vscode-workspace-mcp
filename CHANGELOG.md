@@ -16,6 +16,10 @@
 - Typed tool responses and concise discovery guidance for Codex and Claude Code.
 - Synthetic VS Code/provider tests and SAP ADT coexistence checks; real SAP and
   native-client acceptance remain separate release gates.
-- Marketplace metadata and an owner-dispatched draft preview workflow with
-  versioned VSIX, SHA256 and release notes. No Marketplace publication.
+- Registered publisher ID `hendrik101`; owner-created annotated tags publish
+  versioned GitHub releases and the same tested VSIX to Marketplace after full CI.
+- Preview/stable channels, acceptance/Security evidence, SHA256 and release notes;
+  Entra workload federation or explicitly selected PAT authentication. The manual
+  draft preview workflow remains available.
+- Update MCP SDK to 1.31.0 to resolve the production dependency audit advisory.
 - MIT licensed, without telemetry, shell tools or arbitrary command execution.
