@@ -59,6 +59,7 @@ async function admissionProbe(
         answered = true;
         clearTimeout(timer);
         req.off("drain", schedule);
+        if (chunked && !req.writableEnded) req.end();
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("error", reject);
@@ -142,6 +143,20 @@ for (const chunked of [false, true]) {
       assert.equal(response.status, 503);
       assert.match(response.body, /64 MiB.*unfinished|unfinished.*64 MiB/);
       assert.match(response.body, /retry|wait/i);
+      // A client may already have queued the complete body when refusal arrives.
+      // The framed message must survive that unread remainder too (Windows RST).
+      const burst = await http(
+        server.url,
+        {
+          ...headers,
+          ...(chunked
+            ? { "Transfer-Encoding": "chunked" }
+            : { "Content-Length": String(Buffer.byteLength(probe)) }),
+        },
+        probe,
+      );
+      assert.equal(burst.status, 503);
+      assert.match(burst.body, /64 MiB.*unfinished|unfinished.*64 MiB/);
       req.destroy();
       await new Promise((resolve) => setTimeout(resolve, 20));
       assert.equal(

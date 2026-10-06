@@ -632,14 +632,32 @@ function createMcpServer(
   return server;
 }
 
-function reject(response: ServerResponse, status: number, message: string) {
+function reject(
+  response: ServerResponse,
+  status: number,
+  message: string,
+  drainRequest?: IncomingMessage,
+) {
   if (response.headersSent || response.destroyed) return;
+  const draining =
+    drainRequest && !drainRequest.complete && !drainRequest.destroyed;
   response.writeHead(status, {
     "Content-Type": "text/plain; charset=utf-8",
     Connection: "close",
+    "Content-Length": Buffer.byteLength(message),
     "Cache-Control": "no-store",
   });
-  response.end(message);
+  if (draining) {
+    // Closing a socket with unread body data can replace the refusal with a TCP
+    // reset on Windows. Deliver the complete, length-framed refusal now, but
+    // finish/close only after discarding the remainder without retaining chunks.
+    // Existing timeouts bound stalled clients; unauthenticated refusals do not drain.
+    drainRequest.once("error", () => response.destroy());
+    drainRequest.once("aborted", () => response.destroy());
+    drainRequest.once("end", () => response.end());
+    response.write(message);
+    drainRequest.resume();
+  } else response.end(message);
 }
 
 class RequestError extends Error {
@@ -793,7 +811,8 @@ export async function startServer(
     if (closed || active >= MAX_REQUESTS)
       return reject(response, 503, "Server busy.");
     const declaredBytes = Number(request.headers["content-length"] ?? 0);
-    if (declaredBytes > MAX_BODY) return reject(response, 413, BODY_TOO_LARGE);
+    if (declaredBytes > MAX_BODY)
+      return reject(response, 413, BODY_TOO_LARGE, request);
     let reservedBytes = 0;
     const reserve = (bytes: number) => {
       const increase = Math.max(0, bytes - reservedBytes);
@@ -808,7 +827,7 @@ export async function startServer(
     try {
       reserve(declaredBytes);
     } catch (error) {
-      return reject(response, 503, (error as RequestError).message);
+      return reject(response, 503, (error as RequestError).message, request);
     }
     active++;
     const controller = new AbortController();
@@ -890,6 +909,10 @@ export async function startServer(
         response,
         error instanceof RequestError ? error.status : 500,
         error instanceof RequestError ? error.message : "Request failed.",
+        error instanceof RequestError &&
+          (error.status === 413 || error.status === 503)
+          ? request
+          : undefined,
       );
     } finally {
       cleanup();
