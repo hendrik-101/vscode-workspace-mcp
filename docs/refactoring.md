@@ -64,6 +64,23 @@ buffer does not accommodate every full preview; these bounds do not override
 client-side limits.
 Only excess action count sets `truncated`; other overflow rejects the request.
 
+Source text has a separate budget: 128 MiB of UTF-8 text per request (the source
+and unique targets), and 256 MiB across unfinished refactoring requests in this
+bridge. Repeated targets across code actions count once for source bytes; each
+concurrent request reserves its own budget. File metadata is checked before
+opening additional targets, then actual decoded/live text is checked too.
+Understated metadata can admit one extra document before the decoded check rejects
+the request. Reservations are released on success/failure, but cancelling a
+request does not free them while uncancellable provider work still runs.
+
+`LIMIT_EXCEEDED` names the source budget, requested/allowed MiB and a remedy:
+request a smaller operation or use VS Code's native Rename/Refactor UI. Concurrent
+overflow asks the caller to wait for earlier provider work to finish. No partial
+preview is returned. The bridge does not automatically close tabs or documents:
+closing a tab does not guarantee VS Code releases a buffer. These are operation
+budgets, not a total extension-host RAM cap; VS Code, providers, text projections
+and already open documents require additional memory.
+
 Synthetic non-file provider tests do not verify SAP backends, transports, locks
 or activation; see [acceptance](acceptance.md).
 API references: [provider commands](https://code.visualstudio.com/api/references/commands),

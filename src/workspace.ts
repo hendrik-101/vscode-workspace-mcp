@@ -14,6 +14,9 @@ import {
   MAX_REFACTOR_BYTES,
   MAX_DIAGNOSTICS,
   MAX_DIAGNOSTIC_CHARACTERS,
+  MAX_REFACTOR_SOURCE_BYTES,
+  MAX_IN_FLIGHT_REFACTOR_SOURCE_BYTES,
+  MemoryLimitError,
 } from "./limits";
 import {
   WorkspaceError,
@@ -283,6 +286,7 @@ export class WorkspaceService implements WorkspaceApi {
   private searchRoots: vscode.Disposable | undefined;
   private searchGeneration = 0;
   private activeSearches = 0;
+  private refactoringSourceBytes = 0;
 
   /** Releases in-memory diff snapshots and their content provider. */
   dispose(): void {
@@ -1093,23 +1097,47 @@ export class WorkspaceService implements WorkspaceApi {
     ) => Promise<T>,
   ): Promise<T> {
     signal?.throwIfAborted();
-    const source = await this.document(parseUri(input.uri), signal);
-    this.text(source);
-    this.expected(source, input.version);
-    const observed = new Map<
-      string,
-      { document: vscode.TextDocument; version: number }
-    >();
-    const observation = this.observeDocuments(signal, () => observed.clear());
-    const { initial, changed } = observation;
-    let editCount = 0;
-    let documentCount = 0;
-    let bytes = 0;
-    observed.set(source.uri.toString(), {
-      document: source,
-      version: input.version,
-    });
+    let sourceBytes = 0;
+    const sourceSizes = new Map<string, number>();
+    const reserveSource = (uri: vscode.Uri, size: number) => {
+      const key = uri.toString();
+      const increase = Math.max(0, size - (sourceSizes.get(key) ?? 0));
+      if (sourceBytes + increase > MAX_REFACTOR_SOURCE_BYTES)
+        throw new MemoryLimitError("refactoringSource", sourceBytes + increase);
+      if (
+        this.refactoringSourceBytes + increase >
+        MAX_IN_FLIGHT_REFACTOR_SOURCE_BYTES
+      )
+        throw new MemoryLimitError(
+          "refactoringSourcesInFlight",
+          this.refactoringSourceBytes + increase,
+        );
+      sourceSizes.set(key, (sourceSizes.get(key) ?? 0) + increase);
+      sourceBytes += increase;
+      this.refactoringSourceBytes += increase;
+    };
+    let observation:
+      ReturnType<WorkspaceService["observeDocuments"]> | undefined;
     try {
+      const source = await this.document(
+        parseUri(input.uri),
+        signal,
+        reserveSource,
+      );
+      this.expected(source, input.version);
+      const observed = new Map<
+        string,
+        { document: vscode.TextDocument; version: number }
+      >();
+      observation = this.observeDocuments(signal, () => observed.clear());
+      const { initial, changed } = observation;
+      let editCount = 0;
+      let documentCount = 0;
+      let bytes = 0;
+      observed.set(source.uri.toString(), {
+        document: source,
+        version: input.version,
+      });
       signal?.throwIfAborted();
       this.active();
       const result = await query(source, async (edit) => {
@@ -1140,6 +1168,7 @@ export class WorkspaceService implements WorkspaceApi {
           const document = await this.document(
             parseUri(target.toString()),
             signal,
+            reserveSource,
           );
           signal?.throwIfAborted();
           this.active();
@@ -1208,7 +1237,8 @@ export class WorkspaceService implements WorkspaceApi {
           Object.assign(snapshot, state(observed.get(snapshot.uri)!.document));
       return result;
     } finally {
-      observation.dispose();
+      observation?.dispose();
+      this.refactoringSourceBytes -= sourceBytes;
     }
   }
 
@@ -1280,6 +1310,7 @@ export class WorkspaceService implements WorkspaceApi {
   private async document(
     uri: vscode.Uri,
     signal?: AbortSignal,
+    reserveSource?: (uri: vscode.Uri, size: number) => void,
   ): Promise<vscode.TextDocument> {
     const stat = await this.authorize(uri, signal);
     signal?.throwIfAborted();
@@ -1290,11 +1321,17 @@ export class WorkspaceService implements WorkspaceApi {
         !document.isClosed && document.uri.toString() === uri.toString(),
     );
     if (open) {
-      this.text(open);
+      const text = this.text(open);
+      reserveSource?.(uri, Buffer.byteLength(text));
       return open;
     }
     if (stat.size > MAX_FILE_BYTES)
       fail("LIMIT_EXCEEDED", "File exceeds the 8 MiB limit.");
+    // Preflight before loading; stat can understate decoded/live text, so recheck below.
+    reserveSource?.(
+      uri,
+      Number.isFinite(stat.size) ? Math.max(0, stat.size) : 0,
+    );
     const document = await vscode.workspace.openTextDocument(uri);
     signal?.throwIfAborted();
     this.currentRoot(uri);
@@ -1304,6 +1341,8 @@ export class WorkspaceService implements WorkspaceApi {
         "The opened document does not match the requested URI.",
       );
     }
+    if (reserveSource)
+      reserveSource(uri, Buffer.byteLength(this.text(document)));
     return document;
   }
 

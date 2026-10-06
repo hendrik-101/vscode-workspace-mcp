@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startServer } from "../src/server.js";
 import { outputSchema } from "../src/contracts.js";
 import { WorkspaceError } from "../src/types.js";
+import { MemoryLimitError } from "../src/limits.js";
 
 import { workspace } from "./fixtures/workspace.js";
 
@@ -31,6 +32,169 @@ async function http(
     req.end(body);
   });
 }
+
+for (const chunked of [false, true]) {
+  test(`aggregate body budget survives disconnect until provider settlement (${chunked ? "chunked" : "Content-Length"})`, async (t) => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = await startServer({
+      ...workspace,
+      read: async (input) => {
+        entered();
+        await blocked;
+        return workspace.read(input);
+      },
+    });
+    t.after(async () => {
+      release();
+      await server.close();
+    });
+    const headers = {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const call = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "read_document", arguments: { uri: "memfs:/project/a" } },
+    });
+    const large = call + " ".repeat(40 * 1024 * 1024);
+    const req = request(server.url, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Length": String(Buffer.byteLength(large)),
+      },
+    });
+    req.on("error", () => {});
+    req.end(large);
+    await started;
+    const probe = call + " ".repeat(32 * 1024 * 1024);
+    const probeHeaders = chunked
+      ? { ...headers, "Transfer-Encoding": "chunked" }
+      : { ...headers, "Content-Length": String(Buffer.byteLength(probe)) };
+    try {
+      const response = await Promise.race([
+        http(server.url, probeHeaders, probe),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "Aggregate admission failed to refuse the oversized concurrent request",
+                ),
+              ),
+            1000,
+          ),
+        ),
+      ]);
+      assert.equal(response.status, 503);
+      assert.match(response.body, /64 MiB.*unfinished|unfinished.*64 MiB/);
+      assert.match(response.body, /retry|wait/i);
+      req.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal((await http(server.url, probeHeaders, probe)).status, 503);
+    } finally {
+      req.destroy();
+      release();
+    }
+    assert.equal((await http(server.url, probeHeaders, probe)).status, 200);
+  });
+}
+
+test("aborting a partially streamed body releases its aggregate reservation", async (t) => {
+  const server = await startServer(workspace);
+  t.after(() => server.close());
+  const headers = {
+    Authorization: `Bearer ${server.token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  const partial = request(server.url, {
+    method: "POST",
+    headers: { ...headers, "Content-Length": String(40 * 1024 * 1024) },
+  });
+  partial.on("error", () => {});
+  partial.write("{");
+  const probeHeaders = {
+    ...headers,
+    "Content-Length": String(32 * 1024 * 1024),
+  };
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  try {
+    assert.equal(
+      (
+        await Promise.race([
+          http(server.url, probeHeaders, "{}"),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "Aggregate admission failed to reserve Content-Length",
+                  ),
+                ),
+              1000,
+            ),
+          ),
+        ])
+      ).status,
+      503,
+    );
+  } finally {
+    partial.destroy();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const response = await http(
+    server.url,
+    headers,
+    "{}" + " ".repeat(32 * 1024 * 1024),
+  );
+  assert.notEqual(response.status, 503);
+});
+
+test("MCP memory refusals explain the budget and remedy without exposing provider messages", async (t) => {
+  const server = await startServer({
+    ...workspace,
+    rename: async () => {
+      const error = new MemoryLimitError(
+        "refactoringSource",
+        136 * 1024 * 1024,
+      );
+      error.message = "private provider source";
+      throw error;
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "budget-errors", version: "1" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const result = await client.callTool({
+    name: "preview_rename",
+    arguments: {
+      uri: "memfs:/project/a",
+      version: 1,
+      position: { line: 0, character: 0 },
+      newName: "after",
+    },
+  });
+  assert.equal(result.isError, true);
+  assert.match(JSON.stringify(result.structuredContent), /136.*128 MiB/);
+  assert.match(JSON.stringify(result.content), /native.*Rename/);
+  assert.doesNotMatch(JSON.stringify(result), /private provider source/);
+});
 
 test("rejects unauthenticated, browser, wrong-host and unexpected route requests before JSON parsing", async (t) => {
   const server = await startServer(workspace);

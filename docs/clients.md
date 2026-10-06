@@ -12,6 +12,17 @@ such full previews. Prefer compact formatting summaries (`includeEdits: false`)
 when the client does not expose that setting; native-client support at these
 sizes still requires acceptance testing.
 
+## Concurrent request memory
+
+HTTP accepts at most 64 MiB per request and reserves at most 64 MiB across all
+unfinished request bodies in one listener. Content-Length is reserved before
+reading; chunked bodies reserve capacity as bytes arrive. The reservation remains
+until request processing and any uncancellable workspace/provider work settle,
+including after client disconnection. A body exceeding 64 MiB receives HTTP 413;
+aggregate exhaustion receives HTTP 503 with requested/allowed MiB and advice to
+wait or send a smaller operation. Do not immediately retry large requests in a
+loop. JSON parsing, validation and output add memory beyond the raw-byte budget.
+
 ## Connection
 
 Install the VSIX, open the intended workspace and run **Workspace MCP: Start**,

@@ -18,9 +18,12 @@ import {
   MAX_EDITS,
   MAX_DIAGNOSTICS,
   MAX_REQUEST_BYTES,
+  MAX_IN_FLIGHT_REQUEST_BYTES,
+  MemoryLimitError,
 } from "./limits.js";
 
 const MAX_BODY = MAX_REQUEST_BYTES;
+const BODY_TOO_LARGE = `Request body exceeds the ${MAX_BODY / (1024 * 1024)} MiB limit. Send a smaller operation.`;
 const MAX_REQUESTS = 16;
 const REQUEST_TIMEOUT = 30_000;
 const uri = z
@@ -140,7 +143,13 @@ function createMcpServer(
           const structuredContent = {
             error: {
               code,
-              message: errors[code] ?? "Workspace operation failed.",
+              message:
+                error instanceof MemoryLimitError
+                  ? MemoryLimitError.describe(
+                      error.budget,
+                      error.requestedBytes,
+                    )
+                  : (errors[code] ?? "Workspace operation failed."),
             },
           };
           return {
@@ -642,7 +651,11 @@ class RequestError extends Error {
   }
 }
 
-function readBody(request: IncomingMessage): Promise<unknown> {
+function readBody(
+  request: IncomingMessage,
+  reserve: (bytes: number) => void,
+  signal: AbortSignal,
+): Promise<unknown> {
   return new Promise((resolve, rejectBody) => {
     const chunks: Buffer[] = [];
     let bytes = 0;
@@ -651,19 +664,28 @@ function readBody(request: IncomingMessage): Promise<unknown> {
       request.off("end", onEnd);
       request.off("error", onError);
       request.off("aborted", onAborted);
+      signal.removeEventListener("abort", onCancelled);
     };
     const fail = (error: RequestError) => {
       cleanup();
       request.pause();
+      chunks.length = 0;
       rejectBody(error);
     };
     const onError = () => fail(new RequestError(400, "Request failed."));
     const onAborted = () => fail(new RequestError(400, "Request aborted."));
+    const onCancelled = () => fail(new RequestError(408, "Request ended."));
     const onData = (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > MAX_BODY)
-        fail(new RequestError(413, "Request body too large."));
-      else chunks.push(chunk);
+      if (bytes > MAX_BODY) fail(new RequestError(413, BODY_TOO_LARGE));
+      else {
+        try {
+          reserve(bytes);
+          chunks.push(chunk);
+        } catch (error) {
+          fail(error as RequestError);
+        }
+      }
     };
     const onEnd = () => {
       cleanup();
@@ -671,12 +693,16 @@ function readBody(request: IncomingMessage): Promise<unknown> {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         rejectBody(new RequestError(400, "Invalid JSON."));
+      } finally {
+        chunks.length = 0;
       }
     };
     request.on("data", onData);
     request.on("end", onEnd);
     request.on("error", onError);
     request.on("aborted", onAborted);
+    signal.addEventListener("abort", onCancelled, { once: true });
+    if (signal.aborted) onCancelled();
   });
 }
 
@@ -710,6 +736,7 @@ export async function startServer(
   };
   let host = "";
   let active = 0;
+  let inFlightBodyBytes = 0;
   let closed = false;
   const listener = (request: IncomingMessage, response: ServerResponse) => {
     void handle(request, response).catch(() =>
@@ -765,8 +792,24 @@ export async function startServer(
       return reject(response, 405, "Method not allowed.");
     if (closed || active >= MAX_REQUESTS)
       return reject(response, 503, "Server busy.");
-    if (Number(request.headers["content-length"] ?? 0) > MAX_BODY)
-      return reject(response, 413, "Request body too large.");
+    const declaredBytes = Number(request.headers["content-length"] ?? 0);
+    if (declaredBytes > MAX_BODY) return reject(response, 413, BODY_TOO_LARGE);
+    let reservedBytes = 0;
+    const reserve = (bytes: number) => {
+      const increase = Math.max(0, bytes - reservedBytes);
+      if (inFlightBodyBytes + increase > MAX_IN_FLIGHT_REQUEST_BYTES)
+        throw new RequestError(
+          503,
+          `Request-body budget exhausted: ${((inFlightBodyBytes + increase) / (1024 * 1024)).toFixed(2)} MiB requested; limit ${MAX_IN_FLIGHT_REQUEST_BYTES / (1024 * 1024)} MiB across unfinished requests. Wait for earlier requests to finish, then retry or send a smaller operation.`,
+        );
+      inFlightBodyBytes += increase;
+      reservedBytes += increase;
+    };
+    try {
+      reserve(declaredBytes);
+    } catch (error) {
+      return reject(response, 503, (error as RequestError).message);
+    }
     active++;
     const controller = new AbortController();
     controllers.add(controller);
@@ -778,6 +821,7 @@ export async function startServer(
       if (finished && running === 0 && !released) {
         released = true;
         active--;
+        inFlightBodyBytes -= reservedBytes;
       }
     };
     const execute = async (operation: () => unknown) => {
@@ -823,7 +867,8 @@ export async function startServer(
       });
     });
     try {
-      const body = await readBody(request);
+      const body = await readBody(request, reserve, controller.signal);
+      controller.signal.throwIfAborted();
       if (response.destroyed || closed) return;
       if (Array.isArray(body))
         return reject(response, 400, "Batch requests are not supported.");
