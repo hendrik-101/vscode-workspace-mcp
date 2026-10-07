@@ -42,27 +42,54 @@ test("oversized additive response metadata returns a compact safe limit error", 
 });
 
 test(
-  "escaped previews retain their aggregate response budget until slow clients drain",
+  "concurrent escaped previews and oversized error ids share the response budget",
   { timeout: 20000 },
   async (t) => {
     const text = "\u0001".repeat(8 * 1024 * 1024);
+    let entered = 0;
+    let pairEntered!: () => void;
+    const pairReady = new Promise<void>((resolve) => {
+      pairEntered = resolve;
+    });
+    let thirdEntered!: () => void;
+    const thirdReady = new Promise<void>((resolve) => {
+      thirdEntered = resolve;
+    });
+    let allEntered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      allEntered = resolve;
+    });
+    let release!: () => void;
+    const together = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const server = await startServer({
       ...workspace,
-      format: async (args) => ({
-        ...(await workspace.format(args)),
-        editCount: 1,
-        edits: [
-          {
-            range: {
-              start: { line: 0, character: 0 },
-              end: { line: 0, character: 1 },
+      format: async (args) => {
+        entered++;
+        if (entered === 2) pairEntered();
+        if (entered === 3) thirdEntered();
+        if (entered === 4) allEntered();
+        await together;
+        return {
+          ...(await workspace.format(args)),
+          editCount: 1,
+          edits: [
+            {
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 1 },
+              },
+              text,
             },
-            text,
-          },
-        ],
-      }),
+          ],
+        };
+      },
     });
-    t.after(() => server.close());
+    t.after(async () => {
+      release();
+      await server.close();
+    });
     const headers = {
       Authorization: `Bearer ${server.token}`,
       "Content-Type": "application/json",
@@ -77,10 +104,13 @@ test(
         arguments: { uri: "memfs:/project/a", version: 1 },
       },
     });
-    const stalled = [];
-    for (let i = 0; i < 2; i++) {
-      const response = await new Promise<import("node:http").IncomingMessage>(
-        (resolve, reject) => {
+    // Pausing a client does not prove its peer still has unwritten output:
+    // loopback/kernel buffering differs by OS. Release provider results together
+    // so admission happens before any transport completion can free capacity.
+    const pending = Array.from(
+      { length: 2 },
+      () =>
+        new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
           const req = request(
             server.url,
             { method: "POST", headers },
@@ -92,23 +122,13 @@ test(
           req.on("error", reject);
           t.after(() => req.destroy());
           req.end(body);
-        },
-      );
-      assert.equal(response.statusCode, 200);
-      stalled.push(response);
-    }
-    const refused = JSON.parse(
-      (await http(server.url, headers, body)).body,
-    ).result;
-    assert.equal(refused.isError, true);
-    assert.equal(refused.structuredContent.error.code, "LIMIT_EXCEEDED");
-    assert.match(refused.structuredContent.error.message, /256 MiB/);
-    assert.match(
-      refused.structuredContent.error.message,
-      /wait|smaller|includeEdits/i,
+        }),
     );
+    await pairReady;
+    const third = http(server.url, headers, body);
+    await thirdReady;
     // Refusals must not echo an unbounded id outside the response reservation.
-    const largeId = await http(
+    const oversizedId = http(
       server.url,
       headers,
       JSON.stringify({
@@ -116,6 +136,19 @@ test(
         id: "x".repeat(49 * 1024 * 1024),
       }),
     );
+    await ready;
+    release();
+    const stalled = await Promise.all(pending);
+    for (const response of stalled) assert.equal(response.statusCode, 200);
+    const refused = JSON.parse((await third).body).result;
+    assert.equal(refused.isError, true);
+    assert.equal(refused.structuredContent.error.code, "LIMIT_EXCEEDED");
+    assert.match(refused.structuredContent.error.message, /256 MiB/);
+    assert.match(
+      refused.structuredContent.error.message,
+      /wait|smaller|includeEdits/i,
+    );
+    const largeId = await oversizedId;
     assert.equal(largeId.status, 503);
     assert.match(largeId.body, /256 MiB/);
     assert.ok(largeId.body.length < 2000);
