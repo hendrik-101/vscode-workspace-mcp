@@ -4,7 +4,8 @@
 
 PRs and merges to `main` run CI and produce VSIX artifacts on Linux, Windows and
 macOS. They do not publish. The owner deliberately pushes an annotated `vX.Y.Z`
-tag to authorize automatic GitHub and Marketplace publication of that version.
+tag to authorize automatic GitHub and Marketplace publication of that version,
+but only after explicitly enabling the repository publishing switch.
 The tag must point to a commit reachable from `main`. Release tags are never moved
 or reused. Protect `v*` tags with a GitHub ruleset allowing creation only by the owner/release
 process and blocking updates and deletion without bypass permissions.
@@ -17,6 +18,47 @@ that same artifact to VS Code Marketplace under `hendrik101`.
 The privileged jobs do not check out or execute repository scripts. GitHub and
 Marketplace publication are jobs in one workflow, avoiding reliance on events
 created by `GITHUB_TOKEN` to start another workflow.
+
+## Prepared, disabled by default
+
+The tag-release pipeline is prepared but disabled. Its entry job requires the
+repository Actions variable `RELEASE_PUBLISHING_ENABLED` to equal the string
+`true`. An absent, empty or different value skips all tag-release jobs, including
+GitHub and Marketplace publication. A tag event can still appear as a skipped
+workflow run; it does not allocate runners or publish anything.
+
+Keep this variable unset while preparing the publisher identity and reviewing the
+PR. The existing manually dispatched preview workflow remains available; it is
+not started by a merge or tag and must not be dispatched during preparation.
+Regular PR/main CI continues to build and test.
+
+When the owner is ready to activate publishing:
+
+1. Merge the reviewed release PR, finish the authentication setup below and protect
+   release tags. Complete the real acceptance and Security scan for the release.
+2. In repository **Settings → Secrets and variables → Actions → Variables**, create
+   the repository variable `RELEASE_PUBLISHING_ENABLED` with value `true`.
+3. Push a new, unused annotated release tag as described below. Enabling the
+   variable does not replay earlier tag events; do not reuse or move skipped tags.
+
+To suspend future tag releases, delete the variable or set it to `false`.
+This is an entry gate, not cancellation of a release that has already started.
+Cancel any already-running release separately if needed.
+
+### Cost boundary
+
+Keep this repository public and use the configured standard GitHub-hosted runners.
+Their Actions usage is free for public repositories; no paid runner is configured.
+Use Entra's free workload identity federation features with an application/service
+principal. No Workload ID Premium license or Azure compute/storage deployment is
+needed for this pipeline. Establishing the Microsoft account/tenant is a separate
+one-time setup; do not purchase premium licenses or enable paid resources for it.
+GitHub Releases and VS Code Marketplace publishing require no paid publishing plan.
+AI review services have their own account quotas; this workflow does not purchase
+additional review capacity or call a metered AI API.
+
+See [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [Entra free/Premium capabilities](https://learn.microsoft.com/en-us/entra/workload-id/workload-identities-faqs).
 
 ## Prepare a version
 
@@ -41,7 +83,8 @@ These references are owner-reviewed evidence, not automatically verified
 attestations. Do not publish tokens, SAP system details, private findings or sources
 in annotations or release notes. Replace the example references with real evidence.
 
-5. After CI is green and publication authentication is configured, tag the exact
+5. After CI is green, publication authentication is configured and the repository
+   publishing switch is enabled, tag the exact
    approved main commit. This explicit action authorizes both publications:
 
 ```sh
