@@ -11,6 +11,34 @@ import { MemoryLimitError } from "../src/limits.js";
 
 import { workspace } from "./fixtures/workspace.js";
 
+test("HTTP rejects structurally expansive JSON metadata before dispatch", async (t) => {
+  let reads = 0;
+  const server = await startServer({
+    ...workspace,
+    read: async (args) => {
+      reads++;
+      return workspace.read(args);
+    },
+  });
+  t.after(() => server.close());
+  const body =
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_document","arguments":{"uri":"memfs:/project/a"},"_meta":{"padding":[' +
+    "{},".repeat(250000) +
+    "{}]}}}";
+  const result = await http(
+    server.url,
+    {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body,
+  );
+  assert.equal(result.status, 413);
+  assert.match(result.body, /250000 token limit/);
+  assert.equal(reads, 0);
+});
+
 test("oversized additive response metadata returns a compact safe limit error", async (t) => {
   const server = await startServer({
     ...workspace,

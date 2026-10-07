@@ -6,7 +6,7 @@ import {
 
 /** Measure JSON without allocating its escaped text. Duplicate MCP content also
  * needs the escaped JSON string alongside the structured JSON value. */
-export function responseBytes(value: unknown, duplicate = false): number {
+export function jsonBytes(value: unknown, duplicate = false): number {
   let bytes = 0;
   let escaped = 0;
   const ancestors = new Set<object>();

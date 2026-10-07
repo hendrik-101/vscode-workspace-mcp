@@ -12,6 +12,14 @@ such full previews. Prefer compact formatting summaries (`includeEdits: false`)
 when the client does not expose that setting; native-client support at these
 sizes still requires acceptance testing.
 
+Both transports scan incoming bytes before JSON parsing: each body/frame allows
+250,000 structural tokens (containers, property names and values) and 64 nesting
+levels. This keeps compact arrays or metadata from expanding into millions of
+allocated objects while still admitting 10,000 ordinary text edits and large
+replacement strings. Exceeding this cap receives HTTP 413 with the limit and
+smaller-operation guidance. Stdio closes the adapter and reports the same safe
+message on stderr; reduce the request and restart the client connection.
+
 ## Concurrent request memory
 
 HTTP accepts at most 64 MiB per request and reserves at most 64 MiB across all
@@ -22,6 +30,14 @@ including after client disconnection. A body exceeding 64 MiB receives HTTP 413;
 aggregate exhaustion receives HTTP 503 with requested/allowed MiB and advice to
 wait or send a smaller operation. Do not immediately retry large requests in a
 loop. JSON parsing and validation add memory beyond the raw-byte budget.
+
+The stdio adapter independently admits at most 64 MiB of complete parsed request
+frames and 16 requests at once, before the SDK queues handlers or forwards HTTP.
+This includes caller ids and fields later removed by tool validation. Requests
+keep their reservations until the response drains; cancelled handlers release
+only after settling. Exceeding either cap returns a safe protocol error with
+`LIMIT_EXCEEDED` data and wait/smaller-operation guidance. Reusing an active
+request id closes the adapter because replies and cancellation would be ambiguous.
 
 Responses have separate reservations: 128 MiB per serialized response and
 256 MiB across unfinished responses per listener or stdio adapter. JSON escaping

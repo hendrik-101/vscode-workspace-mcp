@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
+  CallToolResultSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { startAdapter } from "../src/stdio";
@@ -36,6 +37,225 @@ const tool = {
     required: ["value"],
   },
 };
+
+test("stdio rejects structurally expansive frames before the SDK parses them", async (t) => {
+  const tls = await identity();
+  const bridge = await startServer(workspace, { tls });
+  t.after(() => bridge.close());
+  const incoming = new PassThrough();
+  const outgoing = new PassThrough();
+  let refused!: (message: string) => void;
+  const rejection = new Promise<string>((resolve) => {
+    refused = resolve;
+  });
+  const adapter = await startAdapter({
+    url: bridge.url,
+    token: bridge.token,
+    certificate: tls.cert,
+    input: incoming,
+    output: outgoing,
+    onInputError: refused,
+  });
+  t.after(() => adapter.close());
+  incoming.write(
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_document","arguments":{"uri":"memfs:/project/a"},"_meta":{"padding":[' +
+      "{},".repeat(250000) +
+      "{}]}}}\n",
+  );
+  const message = await Promise.race([
+    rejection,
+    new Promise<undefined>((resolve) => setTimeout(resolve, 500)),
+  ]);
+  assert.match(message ?? "", /250000 token limit/);
+});
+
+test(
+  "stdio rejects excess small requests before forwarding while earlier handlers run",
+  { timeout: 15000 },
+  async (t) => {
+    const tls = await identity();
+    let count = 0;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bridge = await startServer(
+      {
+        ...workspace,
+        read: async (args) => {
+          if (++count === 16) entered();
+          await blocked;
+          return workspace.read(args);
+        },
+      },
+      { tls },
+    );
+    t.after(async () => {
+      release();
+      await bridge.close();
+    });
+    const incoming = new PassThrough();
+    const outgoing = new PassThrough();
+    const adapter = await startAdapter({
+      url: bridge.url,
+      token: bridge.token,
+      certificate: tls.cert,
+      input: incoming,
+      output: outgoing,
+    });
+    t.after(() => adapter.close());
+    const client = new Client({ name: "aggregate-count-test", version: "1" });
+    await client.connect(new StdioServerTransport(outgoing, incoming));
+    t.after(() => client.close());
+    const call = () =>
+      client.callTool({
+        name: "read_document",
+        arguments: { uri: "memfs:/project/a" },
+      });
+    const pending = Array.from({ length: 16 }, call);
+    for (const result of pending) result.catch(() => {});
+    await started;
+    await assert.rejects(
+      call(),
+      (error: unknown) =>
+        error instanceof Error &&
+        /16.*unfinished.*adapter/i.test(error.message),
+    );
+    release();
+    assert.ok(
+      (await Promise.all(pending)).every((result) => result.isError !== true),
+    );
+    assert.notEqual((await call()).isError, true);
+    // Cancellation before SDK validation/custom-handler entry must reclaim slots.
+    incoming.write(
+      Array.from({ length: 16 }, (_, i) => {
+        const id = 100 + i;
+        return (
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: i % 2 ? "tools/call" : "ping",
+            ...(i % 2 ? { params: {} } : {}),
+          }) +
+          "\n" +
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: id },
+          }) +
+          "\n"
+        );
+      }).join(""),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.notEqual((await call()).isError, true);
+  },
+);
+
+test(
+  "stdio reserves aggregate request bytes before forwarding and reuses them after settlement",
+  { timeout: 20000 },
+  async (t) => {
+    const tls = await identity();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bridge = await startServer(
+      {
+        ...workspace,
+        edit: async (args) => {
+          entered();
+          await blocked;
+          return workspace.edit(args);
+        },
+      },
+      { tls },
+    );
+    t.after(async () => {
+      release();
+      await bridge.close();
+    });
+    const incoming = new PassThrough();
+    const outgoing = new PassThrough({ highWaterMark: 1 });
+    const adapter = await startAdapter({
+      url: bridge.url,
+      token: bridge.token,
+      certificate: tls.cert,
+      input: incoming,
+      output: outgoing,
+    });
+    t.after(() => adapter.close());
+    const client = new Client({ name: "aggregate-input-test", version: "1" });
+    await client.connect(new StdioServerTransport(outgoing, incoming));
+    t.after(() => client.close());
+    const args = {
+      uri: "memfs:/project/a",
+      version: 1,
+      edits: [
+        {
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 1 },
+          },
+          text: "\u0001".repeat(8 * 1024 * 1024),
+        },
+      ],
+    };
+    const call = () =>
+      client.callTool({ name: "edit_document", arguments: args });
+    const first = call();
+    first.catch(() => {}); // Cleanup can close it when a later assertion fails.
+    await started;
+    await assert.rejects(
+      call(),
+      (error: unknown) =>
+        error instanceof Error &&
+        /64 MiB.*unfinished.*adapter/i.test(error.message),
+    );
+    release();
+    assert.notEqual((await first).isError, true);
+    assert.notEqual((await call()).isError, true);
+    // The SDK retains the original frame while its reply waits for stdout,
+    // even when tool validation strips this large unknown params field.
+    const padded = (size: number) => {
+      const params = {
+        name: "read_document",
+        arguments: { uri: "memfs:/project/a" },
+        discarded: "x".repeat(size * 1024 * 1024),
+      };
+      return client.request(
+        { method: "tools/call", params },
+        CallToolResultSchema,
+      );
+    };
+    const waitForOutput = async (previous: number) => {
+      const deadline = Date.now() + 5000;
+      while (outgoing.writableLength <= previous && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(outgoing.writableLength > previous);
+    };
+    outgoing.pause();
+    const retained = padded(40);
+    retained.catch(() => {});
+    await waitForOutput(0);
+    const previous = outgoing.writableLength;
+    const refused = padded(32);
+    const checked = assert.rejects(refused, /64 MiB.*unfinished.*adapter/i);
+    await waitForOutput(previous);
+    outgoing.resume();
+    assert.notEqual((await retained).isError, true);
+    await checked;
+  },
+);
 
 test(
   "stdio response reservations survive upstream completion until stdout drains",

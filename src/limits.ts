@@ -11,6 +11,8 @@ export const MAX_DIAGNOSTIC_CHARACTERS = 5 * 1024 * 1024;
 // room for 10,000 edit coordinates and the request envelope as well.
 export const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 export const MAX_IN_FLIGHT_REQUEST_BYTES = 64 * 1024 * 1024;
+export const MAX_JSON_TOKENS = 250_000;
+export const MAX_JSON_DEPTH = 64;
 export const MAX_REFACTOR_SOURCE_BYTES = 128 * 1024 * 1024;
 export const MAX_IN_FLIGHT_REFACTOR_SOURCE_BYTES = 256 * 1024 * 1024;
 export const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
@@ -23,7 +25,8 @@ export class MemoryLimitError extends WorkspaceError {
       | "refactoringSource"
       | "refactoringSourcesInFlight"
       | "response"
-      | "responsesInFlight",
+      | "responsesInFlight"
+      | "adapterRequestsInFlight",
     readonly requestedBytes: number,
   ) {
     super("LIMIT_EXCEEDED", MemoryLimitError.describe(budget, requestedBytes));
@@ -34,6 +37,9 @@ export class MemoryLimitError extends WorkspaceError {
     requestedBytes: number,
   ): string {
     const requested = (requestedBytes / (1024 * 1024)).toFixed(2);
+    if (budget === "adapterRequestsInFlight") {
+      return `Request memory would require ${requested} MiB; limit ${MAX_IN_FLIGHT_REQUEST_BYTES / (1024 * 1024)} MiB across unfinished stdio adapter requests. Wait for earlier requests and their responses to finish, then retry or send a smaller operation.`;
+    }
     if (budget === "response" || budget === "responsesInFlight") {
       const limit =
         (budget === "response"

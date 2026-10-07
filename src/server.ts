@@ -13,7 +13,8 @@ import { z } from "zod";
 
 import { SYMBOL_TYPES, type WorkspaceApi } from "./types.js";
 import { outputSchema, results } from "./contracts.js";
-import { ResponseBudget, responseBytes } from "./responseBudget.js";
+import { ResponseBudget, jsonBytes } from "./responseBudget.js";
+import { JsonStructureError, JsonStructureGuard } from "./jsonStructure.js";
 import {
   MAX_DOCUMENT_BYTES,
   MAX_EDITS,
@@ -679,6 +680,7 @@ function readBody(
 ): Promise<unknown> {
   return new Promise((resolve, rejectBody) => {
     const chunks: Buffer[] = [];
+    const structure = new JsonStructureGuard();
     let bytes = 0;
     const cleanup = () => {
       request.off("data", onData);
@@ -702,9 +704,14 @@ function readBody(
       else {
         try {
           reserve(bytes);
+          structure.push(chunk);
           chunks.push(chunk);
         } catch (error) {
-          fail(error as RequestError);
+          fail(
+            error instanceof JsonStructureError
+              ? new RequestError(413, error.message)
+              : (error as RequestError),
+          );
         }
       }
     };
@@ -913,7 +920,7 @@ export async function startServer(
           // allocating either the textual or final serialized response.
           responseReservations.push(
             responseBudget.reserve(
-              responseBytes(content, true) + responseBytes(id) + 512,
+              jsonBytes(content, true) + jsonBytes(id) + 512,
             ),
           );
         },
@@ -932,7 +939,7 @@ export async function startServer(
         if (responseReservations.length === 0) {
           try {
             responseReservations.push(
-              responseBudget.reserve(responseBytes(message)),
+              responseBudget.reserve(jsonBytes(message)),
             );
           } catch (error) {
             reject(

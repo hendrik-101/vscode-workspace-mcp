@@ -4,6 +4,10 @@ void startAdapter({
   url: process.env.WORKSPACE_MCP_URL ?? "",
   token: process.env.WORKSPACE_MCP_TOKEN ?? "",
   certificate: process.env.WORKSPACE_MCP_CERTIFICATE ?? "",
+  onInputError: (message) => {
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  },
 }).then(
   (adapter) => {
     const stop = () => {

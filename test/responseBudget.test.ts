@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { responseBytes } from "../src/responseBudget.js";
+import { jsonBytes } from "../src/responseBudget.js";
 
 test("response reservations count UTF-8, JSON escapes, keys and duplicate textual content", () => {
   const values = [
@@ -20,9 +20,9 @@ test("response reservations count UTF-8, JSON escapes, keys and duplicate textua
   ];
   for (const value of values) {
     const json = JSON.stringify(value);
-    assert.equal(responseBytes(value), Buffer.byteLength(json));
+    assert.equal(jsonBytes(value), Buffer.byteLength(json));
     assert.equal(
-      responseBytes(value, true),
+      jsonBytes(value, true),
       Buffer.byteLength(json) + Buffer.byteLength(JSON.stringify(json)),
     );
   }
