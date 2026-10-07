@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { SYMBOL_TYPES, type WorkspaceApi } from "./types.js";
 import { outputSchema, results } from "./contracts.js";
+import { ResponseBudget, responseBytes } from "./responseBudget.js";
 import {
   MAX_DOCUMENT_BYTES,
   MAX_EDITS,
@@ -83,6 +84,7 @@ const errors: Record<string, string> = {
 function createMcpServer(
   workspace: WorkspaceApi,
   execute: (operation: () => unknown) => Promise<unknown>,
+  reserveResponse: (content: unknown, id: string | number) => void,
   signal: AbortSignal,
 ) {
   const server = new McpServer({
@@ -122,6 +124,7 @@ function createMcpServer(
             ),
           );
           const structuredContent = output.parse({ result });
+          reserveResponse(structuredContent, extra.requestId);
           return {
             content: [
               {
@@ -755,6 +758,7 @@ export async function startServer(
   let host = "";
   let active = 0;
   let inFlightBodyBytes = 0;
+  const responseBudget = new ResponseBudget();
   let closed = false;
   const listener = (request: IncomingMessage, response: ServerResponse) => {
     void handle(request, response).catch(() =>
@@ -836,11 +840,14 @@ export async function startServer(
     let finished = false;
     let running = 0;
     let released = false;
+    let responseFinished = false;
+    const responseReservations: Array<() => void> = [];
     const release = () => {
-      if (finished && running === 0 && !released) {
+      if (finished && running === 0 && responseFinished && !released) {
         released = true;
         active--;
         inFlightBodyBytes -= reservedBytes;
+        for (const releaseResponse of responseReservations) releaseResponse();
       }
     };
     const execute = async (operation: () => unknown) => {
@@ -881,9 +888,15 @@ export async function startServer(
     };
     const disconnected = new Promise<void>((resolve) => {
       response.once("close", () => {
+        responseFinished = true;
         cleanup();
+        release();
         resolve();
       });
+    });
+    response.once("finish", () => {
+      responseFinished = true;
+      release();
     });
     try {
       const body = await readBody(request, reserve, controller.signal);
@@ -891,12 +904,49 @@ export async function startServer(
       if (response.destroyed || closed) return;
       if (Array.isArray(body))
         return reject(response, 400, "Batch requests are not supported.");
-      mcp = createMcpServer(workspace, execute, controller.signal);
+      mcp = createMcpServer(
+        workspace,
+        execute,
+        (content, id) => {
+          controller.signal.throwIfAborted();
+          // Include the untrusted JSON-RPC id and a bounded tool envelope before
+          // allocating either the textual or final serialized response.
+          responseReservations.push(
+            responseBudget.reserve(
+              responseBytes(content, true) + responseBytes(id) + 512,
+            ),
+          );
+        },
+        controller.signal,
+      );
       sessions.add(mcp);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
+      const send = transport.send.bind(transport);
+      transport.send = async (message, sendOptions) => {
+        // Successful tool results were reserved before creating content.text.
+        // Errors, discovery and other protocol responses need admission too:
+        // their caller-supplied id alone can be a large response.
+        if (responseReservations.length === 0) {
+          try {
+            responseReservations.push(
+              responseBudget.reserve(responseBytes(message)),
+            );
+          } catch (error) {
+            reject(
+              response,
+              503,
+              error instanceof MemoryLimitError
+                ? MemoryLimitError.describe(error.budget, error.requestedBytes)
+                : "Response could not be encoded safely.",
+            );
+            return;
+          }
+        }
+        await send(message, sendOptions);
+      };
       await mcp.connect(transport);
       response.setHeader("Cache-Control", "no-store");
       // The SDK's JSON-response promise can remain pending after transport.close().

@@ -37,6 +37,86 @@ const tool = {
   },
 };
 
+test(
+  "stdio response reservations survive upstream completion until stdout drains",
+  { timeout: 20000 },
+  async (t) => {
+    const tls = await identity();
+    const text = "\u0001".repeat(8 * 1024 * 1024);
+    const bridge = await startServer(
+      {
+        ...workspace,
+        format: async (args) => ({
+          ...(await workspace.format(args)),
+          editCount: 1,
+          edits: [
+            {
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 1 },
+              },
+              text,
+            },
+          ],
+        }),
+      },
+      { tls },
+    );
+    t.after(() => bridge.close());
+    const incoming = new PassThrough();
+    const outgoing = new PassThrough();
+    const adapter = await startAdapter({
+      url: bridge.url,
+      token: bridge.token,
+      certificate: tls.cert,
+      input: incoming,
+      output: outgoing,
+    });
+    t.after(() => adapter.close());
+    const client = new Client({ name: "slow-preview-test", version: "1" });
+    await client.connect(
+      new StdioServerTransport(outgoing, incoming, {
+        maxBufferSize: 128 * 1024 * 1024,
+      }),
+    );
+    t.after(() => client.close());
+    outgoing.pause();
+    const waitForOutput = async (previous: number) => {
+      const deadline = Date.now() + 5000;
+      while (outgoing.writableLength <= previous && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(
+        outgoing.writableLength > previous,
+        "response reached the blocked stdout writer",
+      );
+    };
+    const call = () =>
+      client.callTool({
+        name: "format_document",
+        arguments: { uri: "memfs:/project/a", version: 1 },
+      });
+    const first = call();
+    await waitForOutput(0);
+    const previous = outgoing.writableLength;
+    const second = call();
+    await waitForOutput(previous);
+    const beforeThird = outgoing.writableLength;
+    const third = call();
+    await waitForOutput(beforeThird);
+    outgoing.resume();
+    const [one, two, refused] = await Promise.all([first, second, third]);
+    assert.notEqual(one.isError, true);
+    assert.notEqual(two.isError, true);
+    assert.equal(refused.isError, true);
+    const error = refused.structuredContent as {
+      error: { code: string; message: string };
+    };
+    assert.equal(error.error.code, "LIMIT_EXCEEDED");
+    assert.match(error.error.message, /256 MiB/);
+    assert.notEqual((await call()).isError, true);
+  },
+);
+
 test("large full formatting previews cross stdio when the client receive buffer is configured", async (t) => {
   const tls = await identity();
   const replacement = "x".repeat(8 * 1024 * 1024);

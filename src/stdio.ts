@@ -9,7 +9,8 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { MAX_REQUEST_BYTES } from "./limits";
+import { MAX_REQUEST_BYTES, MemoryLimitError } from "./limits";
+import { ResponseBudget, responseBytes } from "./responseBudget";
 import type { Readable, Writable } from "node:stream";
 import {
   Agent,
@@ -127,13 +128,61 @@ export async function startAdapter(options: AdapterOptions) {
   server.onclose = ended;
   server.onerror = () => {};
   upstream.onerror = () => {};
+  const stdio = new StdioServerTransport(
+    input,
+    options.output ?? process.stdout,
+    {
+      maxBufferSize: MAX_REQUEST_BYTES,
+    },
+  );
+  const responseBudget = new ResponseBudget();
+  const send = stdio.send.bind(stdio);
+  stdio.send = async (message) => {
+    let release: (() => void) | undefined;
+    try {
+      release = responseBudget.reserve(responseBytes(message) + 1);
+    } catch (error) {
+      if (!(error instanceof MemoryLimitError)) throw error;
+      if (!("result" in message) || !("content" in message.result)) {
+        await close();
+        throw unavailable();
+      }
+      const structuredContent = {
+        error: {
+          code: error.code,
+          message: MemoryLimitError.describe(
+            error.budget,
+            error.requestedBytes,
+          ),
+        },
+      };
+      message = {
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          isError: true,
+          structuredContent,
+          content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+        },
+      };
+      // Even a refusal retains its caller-supplied id until stdout drains.
+      // Fail closed if the compact error cannot fit the remaining budget.
+      try {
+        release = responseBudget.reserve(responseBytes(message) + 1);
+      } catch {
+        await close();
+        throw unavailable();
+      }
+    }
+    try {
+      await send(message);
+    } finally {
+      release?.();
+    }
+  };
   try {
     await upstream.connect(transport);
-    await server.connect(
-      new StdioServerTransport(input, options.output ?? process.stdout, {
-        maxBufferSize: MAX_REQUEST_BYTES,
-      }),
-    );
+    await server.connect(stdio);
     input.once("end", ended);
     input.once("error", ended);
     return { close };

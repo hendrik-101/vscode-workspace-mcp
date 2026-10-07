@@ -21,7 +21,29 @@ until request processing and any uncancellable workspace/provider work settle,
 including after client disconnection. A body exceeding 64 MiB receives HTTP 413;
 aggregate exhaustion receives HTTP 503 with requested/allowed MiB and advice to
 wait or send a smaller operation. Do not immediately retry large requests in a
-loop. JSON parsing, validation and output add memory beyond the raw-byte budget.
+loop. JSON parsing and validation add memory beyond the raw-byte budget.
+
+Responses have separate reservations: 128 MiB per serialized response and
+256 MiB across unfinished responses per listener or stdio adapter. JSON escaping
+and both textual and structured MCP content count before serialization; an
+8 MiB control-character edit can produce approximately 104 MiB of response data.
+HTTP reservations remain until the response finishes writing or the client
+disconnects; the adapter retains its own reservation until stdout drains, even
+after the upstream HTTP response finishes. Budget exhaustion returns a safe
+`LIMIT_EXCEEDED` tool error with requested/allowed MiB and advice to wait,
+disconnect stalled clients, or request smaller/compact previews. If even a
+compact error cannot fit the adapter's remaining output budget, it closes the
+connection instead of buffering more output. These are payload budgets, not a
+hard process-RAM ceiling: live editor buffers, decoded values and SDK/Node
+serialization overhead consume additional memory.
+
+An operation may have completed before its response is refused. In particular,
+`format_document` with `apply: true, includeEdits: true` can apply buffer edits
+before the large response is admitted. Re-read the live document and version
+before retrying a write; a response error does not establish that it was unapplied.
+Prefer the default compact apply response. If a protocol response's caller-supplied
+id cannot fit the HTTP response budget, HTTP returns a compact 503 instead of
+echoing that id outside the budget.
 
 ## Connection
 

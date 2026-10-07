@@ -11,6 +11,136 @@ import { MemoryLimitError } from "../src/limits.js";
 
 import { workspace } from "./fixtures/workspace.js";
 
+test("oversized additive response metadata returns a compact safe limit error", async (t) => {
+  const server = await startServer({
+    ...workspace,
+    read: async (args) => ({
+      ...(await workspace.read(args)),
+      metadata: "\u0001".repeat(11 * 1024 * 1024),
+    }),
+  });
+  t.after(() => server.close());
+  const reply = await http(
+    server.url,
+    {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "read_document", arguments: { uri: "memfs:/project/a" } },
+    }),
+  );
+  const result = JSON.parse(reply.body).result;
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.error.code, "LIMIT_EXCEEDED");
+  assert.match(result.structuredContent.error.message, /128 MiB.*per response/);
+  assert.ok(reply.body.length < 2000);
+});
+
+test(
+  "escaped previews retain their aggregate response budget until slow clients drain",
+  { timeout: 20000 },
+  async (t) => {
+    const text = "\u0001".repeat(8 * 1024 * 1024);
+    const server = await startServer({
+      ...workspace,
+      format: async (args) => ({
+        ...(await workspace.format(args)),
+        editCount: 1,
+        edits: [
+          {
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+            text,
+          },
+        ],
+      }),
+    });
+    t.after(() => server.close());
+    const headers = {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "format_document",
+        arguments: { uri: "memfs:/project/a", version: 1 },
+      },
+    });
+    const stalled = [];
+    for (let i = 0; i < 2; i++) {
+      const response = await new Promise<import("node:http").IncomingMessage>(
+        (resolve, reject) => {
+          const req = request(
+            server.url,
+            { method: "POST", headers },
+            (res) => {
+              res.pause();
+              resolve(res);
+            },
+          );
+          req.on("error", reject);
+          t.after(() => req.destroy());
+          req.end(body);
+        },
+      );
+      assert.equal(response.statusCode, 200);
+      stalled.push(response);
+    }
+    const refused = JSON.parse(
+      (await http(server.url, headers, body)).body,
+    ).result;
+    assert.equal(refused.isError, true);
+    assert.equal(refused.structuredContent.error.code, "LIMIT_EXCEEDED");
+    assert.match(refused.structuredContent.error.message, /256 MiB/);
+    assert.match(
+      refused.structuredContent.error.message,
+      /wait|smaller|includeEdits/i,
+    );
+    // Refusals must not echo an unbounded id outside the response reservation.
+    const largeId = await http(
+      server.url,
+      headers,
+      JSON.stringify({
+        ...JSON.parse(body),
+        id: "x".repeat(49 * 1024 * 1024),
+      }),
+    );
+    assert.equal(largeId.status, 503);
+    assert.match(largeId.body, /256 MiB/);
+    assert.ok(largeId.body.length < 2000);
+    await Promise.all(
+      stalled.map(
+        (res) =>
+          new Promise<void>((resolve) => {
+            res.once("close", resolve);
+            res.destroy();
+          }),
+      ),
+    );
+    // The peer's socket-close event can arrive after the client's local close.
+    let retried;
+    const deadline = Date.now() + 5000;
+    do {
+      retried = JSON.parse((await http(server.url, headers, body)).body).result;
+      if (!retried.isError) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } while (Date.now() < deadline);
+    assert.notEqual(retried.isError, true);
+    assert.equal(retried.structuredContent.result.edits[0].text, text);
+  },
+);
+
 async function http(
   url: string,
   headers: Record<string, string | undefined> = {},
