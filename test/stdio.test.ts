@@ -156,6 +156,46 @@ test(
   },
 );
 
+test("stdio closes when blocked output fills the pending refusal limit", async (t) => {
+  const tls = await identity();
+  const bridge = await startServer(workspace, { tls });
+  t.after(() => bridge.close());
+  const incoming = new PassThrough();
+  const outgoing = new PassThrough({ highWaterMark: 1 });
+  const replies: { id: number; error?: { data?: { code?: string } } }[] = [];
+  outgoing.on("data", (chunk) => {
+    for (const line of chunk.toString().trim().split("\n"))
+      replies.push(JSON.parse(line));
+  });
+  outgoing.pause();
+  const adapter = await startAdapter({
+    url: bridge.url,
+    token: bridge.token,
+    certificate: tls.cert,
+    input: incoming,
+    output: outgoing,
+  });
+  t.after(() => adapter.close());
+  // The first 16 requests fill admission synchronously, the next 16 queue
+  // compact refusals, and further input must close rather than grow the queue.
+  incoming.write(
+    Array.from(
+      { length: 100 },
+      (_, i) =>
+        JSON.stringify({ jsonrpc: "2.0", id: i + 1, method: "ping" }) + "\n",
+    ).join(""),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(incoming.readableFlowing, false);
+  outgoing.resume();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    replies.filter((reply) => reply.error?.data?.code === "LIMIT_EXCEEDED")
+      .length,
+    16,
+  );
+});
+
 for (const reuseBeforeDrain of [true, false]) {
   test(`stdio ${reuseBeforeDrain ? "rejects" : "allows"} refused ID reuse ${reuseBeforeDrain ? "before" : "after"} stdout drains`, async (t) => {
     const tls = await identity();

@@ -250,6 +250,12 @@ export async function startAdapter(options: AdapterOptions) {
   // Keep only the refusal ID/message alive through backpressure, not the
   // rejected frame (which may exceed the remaining admitted-byte budget).
   const refuse = async (id: string | number, message: string) => {
+    // Serialized-byte limits alone do not bound promises/listeners for many
+    // small errors. Stop input once this separate refusal queue is full.
+    if (refusedIds.size >= 16) {
+      await close();
+      return;
+    }
     refusedIds.add(id);
     try {
       await stdio.send({

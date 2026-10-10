@@ -30,6 +30,8 @@ including after client disconnection. A body exceeding 64 MiB receives HTTP 413;
 aggregate exhaustion receives HTTP 503 with requested/allowed MiB and advice to
 wait or send a smaller operation. Do not immediately retry large requests in a
 loop. JSON parsing and validation add memory beyond the raw-byte budget.
+Before validating individual array entries, HTTP rejects more than 10,000 edits
+or 20 include/exclude search patterns with a compact HTTP 413 response.
 
 The stdio adapter independently admits at most 64 MiB of complete parsed request
 frames and 16 requests at once, before the SDK queues handlers or forwards HTTP.
@@ -38,6 +40,9 @@ keep their reservations until the response drains; cancelled handlers release
 only after settling. Exceeding either cap returns a safe protocol error with
 `LIMIT_EXCEEDED` data and wait/smaller-operation guidance. Reusing an active
 request id closes the adapter because replies and cancellation would be ambiguous.
+Refused ids remain active until their errors drain. If 16 refusal replies are
+already waiting for stdout, the adapter closes rather than growing the queue;
+resume reading output and restart the client connection before retrying.
 
 Responses have separate reservations: 128 MiB per serialized response and
 256 MiB across unfinished responses per listener or stdio adapter. JSON escaping

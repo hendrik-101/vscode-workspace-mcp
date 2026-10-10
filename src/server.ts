@@ -27,6 +27,12 @@ import {
 const MAX_BODY = MAX_REQUEST_BYTES;
 const BODY_TOO_LARGE = `Request body exceeds the ${MAX_BODY / (1024 * 1024)} MiB limit. Send a smaller operation.`;
 const MAX_REQUESTS = 16;
+const MAX_SEARCH_GLOBS = 20;
+const ARRAY_LIMITS = [
+  ["edit_document", "edits", MAX_EDITS],
+  ["search_workspace", "include", MAX_SEARCH_GLOBS],
+  ["search_workspace", "exclude", MAX_SEARCH_GLOBS],
+] as const;
 const REQUEST_TIMEOUT = 30_000;
 const uri = z
   .string()
@@ -326,14 +332,14 @@ function createMcpServer(
         ),
       include: z
         .array(z.string().min(1).max(256))
-        .max(20)
+        .max(MAX_SEARCH_GLOBS)
         .optional()
         .describe(
           "Filename globs; default all files. * and ? stay in a segment; ** crosses directories. Without / matches basename, otherwise relative path.",
         ),
       exclude: z
         .array(z.string().min(1).max(256))
-        .max(20)
+        .max(MAX_SEARCH_GLOBS)
         .optional()
         .describe(
           "Filename globs with include syntax; default none. Exclusion wins; directories are still traversed.",
@@ -911,6 +917,23 @@ export async function startServer(
       if (response.destroyed || closed) return;
       if (Array.isArray(body))
         return reject(response, 400, "Batch requests are not supported.");
+      // Zod's array max runs after child validation. Check counts first so
+      // oversized arrays cannot allocate validation errors for every child.
+      const call = body as {
+        method?: unknown;
+        params?: { name?: unknown; arguments?: Record<string, unknown> };
+      } | null;
+      for (const [name, field, limit] of ARRAY_LIMITS) {
+        if (call?.method !== "tools/call" || call.params?.name !== name)
+          continue;
+        const values = call.params.arguments?.[field];
+        if (Array.isArray(values) && values.length > limit)
+          return reject(
+            response,
+            413,
+            `LIMIT_EXCEEDED: ${name} accepts at most ${limit} ${field} entries. Send a smaller operation.`,
+          );
+      }
       mcp = createMcpServer(
         workspace,
         execute,

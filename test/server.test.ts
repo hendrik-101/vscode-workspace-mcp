@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startServer } from "../src/server.js";
 import { outputSchema } from "../src/contracts.js";
 import { WorkspaceError } from "../src/types.js";
-import { MemoryLimitError } from "../src/limits.js";
+import { MAX_EDITS, MemoryLimitError } from "../src/limits.js";
 
 import { workspace } from "./fixtures/workspace.js";
 
@@ -807,6 +807,109 @@ test("limits streamed bodies even when Content-Length is absent", async (t) => {
   assert.equal(status, 413);
 });
 
+for (const count of [MAX_EDITS + 1, 200_000])
+  test(`HTTP rejects ${count} invalid edits before element validation expands errors`, async (t) => {
+    let edits = 0;
+    const server = await startServer({
+      ...workspace,
+      edit: async (input) => {
+        edits++;
+        return workspace.edit(input);
+      },
+    });
+    t.after(() => server.close());
+    const result = await http(
+      server.url,
+      {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "edit_document",
+          arguments: {
+            uri: "memfs:/project/a",
+            version: 1,
+            edits: Array(count).fill({}),
+          },
+        },
+      }),
+    );
+    assert.equal(result.status, 413);
+    assert.match(result.body, /LIMIT_EXCEEDED.*10000 edits.*smaller operation/);
+    assert.ok(result.body.length < 200);
+    assert.equal(edits, 0);
+  });
+
+for (const filter of ["include", "exclude"])
+  test(`HTTP rejects oversized invalid search ${filter} before child validation`, async (t) => {
+    let searches = 0;
+    const server = await startServer({
+      ...workspace,
+      search: async (input) => {
+        searches++;
+        return workspace.search(input);
+      },
+    });
+    t.after(() => server.close());
+    const result = await http(
+      server.url,
+      {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "search_workspace",
+          arguments: {
+            uri: "memfs:/project",
+            query: "a",
+            [filter]: Array(200_000).fill({}),
+          },
+        },
+      }),
+    );
+    assert.equal(result.status, 413);
+    assert.match(
+      result.body,
+      new RegExp(`LIMIT_EXCEEDED.*20 ${filter}.*smaller operation`),
+    );
+    assert.ok(result.body.length < 200);
+    assert.equal(searches, 0);
+    const accepted = await http(
+      server.url,
+      {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "search_workspace",
+          arguments: {
+            uri: "memfs:/project",
+            query: "a",
+            [filter]: Array(20).fill("*.abap"),
+          },
+        },
+      }),
+    );
+    assert.equal(accepted.status, 200);
+    assert.notEqual(JSON.parse(accepted.body).result.isError, true);
+    assert.equal(searches, 1);
+  });
+
 test("MCP admits a 10000-edit request and diagnostic continuation beyond offset 1000", async (t) => {
   let received = 0;
   let offset = 0;
@@ -829,6 +932,27 @@ test("MCP admits a 10000-edit request and diagnostic continuation beyond offset 
       requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
     }),
   );
+  const { tools } = await client.listTools();
+  const editsSchema = tools.find((tool) => tool.name === "edit_document")!
+    .inputSchema.properties!.edits as {
+    type: string;
+    minItems: number;
+    maxItems: number;
+    items: {
+      type: string;
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+  };
+  assert.equal(editsSchema.type, "array");
+  assert.equal(editsSchema.minItems, 1);
+  assert.equal(editsSchema.maxItems, MAX_EDITS);
+  assert.equal(editsSchema.items.type, "object");
+  assert.deepEqual(editsSchema.items.required, ["range", "text"]);
+  assert.deepEqual(Object.keys(editsSchema.items.properties), [
+    "range",
+    "text",
+  ]);
   const result = await client.callTool({
     name: "edit_document",
     arguments: {
