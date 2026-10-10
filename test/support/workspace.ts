@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import * as contracts from "../../src/types";
+import * as limits from "../../src/limits";
 import type { WorkspaceService } from "../../src/workspace";
 
 const code = transformSync(readFileSync("src/workspace.ts", "utf8"), {
@@ -29,6 +30,7 @@ export function loadWorkspace(
       if (id === "node:buffer") return { Buffer };
       if (id === "node:crypto") return crypto;
       if (id === "./types") return contracts;
+      if (id === "./limits") return limits;
       throw new Error(`Unexpected import: ${id}`);
     },
   });

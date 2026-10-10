@@ -1,5 +1,73 @@
 # Client setup
 
+## Operation size limits
+
+The bridge accepts HTTP and stdio requests up to 64 MiB, including JSON escaping
+and edit coordinates. Decoded documents and replacement text remain limited to
+8 MiB. These independent byte ceilings do not raise a client's receive limit.
+Full formatter and refactoring previews include both textual and structured MCP
+results and can require up to 128 MiB of receive capacity. Clients using the MCP
+TypeScript SDK's default 10 MiB stdio buffer must configure a larger buffer for
+such full previews. Prefer compact formatting summaries (`includeEdits: false`)
+when the client does not expose that setting; native-client support at these
+sizes still requires acceptance testing.
+
+Both transports scan incoming bytes before JSON parsing: each body/frame allows
+250,000 structural tokens (containers, property names and values) and 64 nesting
+levels. This keeps compact arrays or metadata from expanding into millions of
+allocated objects while still admitting 10,000 ordinary text edits and large
+replacement strings. Exceeding this cap receives HTTP 413 with the limit and
+smaller-operation guidance. Stdio closes the adapter and reports the same safe
+message on stderr; reduce the request and restart the client connection.
+
+## Concurrent request memory
+
+HTTP accepts at most 64 MiB per request and reserves at most 64 MiB across all
+unfinished request bodies in one listener. Content-Length is reserved before
+reading; chunked bodies reserve capacity as bytes arrive. The reservation remains
+until request processing and any uncancellable workspace/provider work settle,
+including after client disconnection. A body exceeding 64 MiB receives HTTP 413;
+aggregate exhaustion receives HTTP 503 with requested/allowed MiB and advice to
+wait or send a smaller operation. Do not immediately retry large requests in a
+loop. JSON parsing and validation add memory beyond the raw-byte budget.
+Before validating individual array entries, HTTP rejects more than 10,000 edits
+or 20 include/exclude search patterns with a compact HTTP 413 response.
+
+The stdio adapter independently admits at most 64 MiB of complete parsed request
+frames and 16 requests at once, before the SDK queues handlers or forwards HTTP.
+This includes caller ids and fields later removed by tool validation. Requests
+keep their reservations until the response drains; cancelled handlers release
+only after settling. Exceeding either cap returns a safe protocol error with
+`LIMIT_EXCEEDED` data and wait/smaller-operation guidance. Reusing an active
+request id closes the adapter because replies and cancellation would be ambiguous.
+Refused ids remain active until their errors drain. If 16 refusal replies are
+already waiting for stdout, the adapter closes rather than growing the queue;
+resume reading output and restart the client connection before retrying.
+
+Responses have separate reservations: 128 MiB per serialized response and
+256 MiB across unfinished responses per listener or stdio adapter. JSON escaping
+and both textual and structured MCP content count before serialization; an
+8 MiB control-character edit can produce approximately 104 MiB of response data.
+HTTP reservations remain until the response finishes writing or the client
+disconnects; the adapter retains its own reservation until stdout drains, even
+after the upstream HTTP response finishes. Budget exhaustion returns a safe
+`LIMIT_EXCEEDED` tool error with requested/allowed MiB and advice to wait,
+disconnect stalled clients, or request smaller/compact previews. If even a
+compact error cannot fit the adapter's remaining output budget, it closes the
+connection instead of buffering more output. These are payload budgets, not a
+hard process-RAM ceiling: live editor buffers, decoded values and SDK/Node
+serialization overhead consume additional memory.
+
+An operation may have completed before its response is refused. In particular,
+`format_document` with `apply: true, includeEdits: true` can apply buffer edits
+before the large response is admitted. Re-read the live document and version
+before retrying a write; a response error does not establish that it was unapplied.
+Prefer the default compact apply response. If a protocol response's caller-supplied
+id cannot fit the HTTP response budget, HTTP returns a compact 503 instead of
+echoing that id outside the budget.
+
+## Connection
+
 Install the VSIX, open the intended workspace and run **Workspace MCP: Start**,
 then **Workspace MCP: Show Connection Details**. Copy the generated stdio settings
 for `workspace_mcp`. The client needs Node.js 24+ and launches the bundled adapter

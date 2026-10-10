@@ -418,7 +418,7 @@ test("defaults to a small page and continues without losing diagnostics", async 
 
 test("severity counts cover the inspected source before filtering and pagination", async () => {
   const f = fixture();
-  f.diagnostics.push(...Array.from({ length: 1004 }, (_, i) => diagnostic(i)));
+  f.diagnostics.push(...Array.from({ length: 5004 }, (_, i) => diagnostic(i)));
   const result = await f.service.diagnostics({
     uri: f.document.uri.toString(),
     severity: "error",
@@ -426,11 +426,11 @@ test("severity counts cover the inspected source before filtering and pagination
   });
   assert.deepEqual(
     { ...result.counts },
-    { error: 250, warning: 250, information: 250, hint: 250 },
+    { error: 1250, warning: 1250, information: 1250, hint: 1250 },
   );
-  assert.equal(result.total, 1004);
-  assert.equal(result.inspected, 1000);
-  assert.equal(result.matching, 250);
+  assert.equal(result.total, 5004);
+  assert.equal(result.inspected, 5000);
+  assert.equal(result.matching, 1250);
   assert.equal(result.incomplete, true);
   assert.deepEqual(
     Array.from(result.diagnostics, (d) => d.message),
@@ -440,7 +440,7 @@ test("severity counts cover the inspected source before filtering and pagination
     uri: f.document.uri.toString(),
     severity: "error",
     maxResults: 3,
-    offset: 250,
+    offset: 1250,
     snapshotId: result.snapshotId,
   });
   assert.equal(empty.diagnostics.length, 0);
@@ -480,6 +480,48 @@ test("clips hostile text within the global budget and every continuation advance
     assert.equal(result.nextOffset, offset < 24 ? offset : undefined);
     snapshotId = result.snapshotId;
   } while (offset < 24);
+  f.clean();
+});
+
+test("diagnostic continuation reaches the final page and fingerprints entries beyond 1000", async () => {
+  const f = fixture();
+  f.diagnostics.push(
+    ...Array.from({ length: 5000 }, (_, index) => ({
+      ...diagnostic(index),
+      message: `${index}: ${"m".repeat(300)}`,
+    })),
+  );
+  const input = { uri: f.document.uri.toString(), maxResults: 100 };
+  const first = await f.service.diagnostics(input);
+  const lines: number[] = [];
+  let offset: number | undefined = 4900;
+  do {
+    const page = await f.service.diagnostics({
+      ...input,
+      offset,
+      snapshotId: first.snapshotId,
+    });
+    assert.equal(page.inspected, 5000);
+    assert.equal(page.incomplete, false);
+    assert.ok(JSON.stringify(page).length <= 16000);
+    assert.ok(page.diagnostics.length > 0);
+    lines.push(...page.diagnostics.map((item) => item.range.start.line));
+    assert.ok(page.nextOffset === undefined || page.nextOffset > offset);
+    offset = page.nextOffset;
+  } while (offset !== undefined);
+  assert.deepEqual(
+    lines,
+    Array.from({ length: 100 }, (_, index) => 4900 + index),
+  );
+  f.diagnostics[4500]!.message = "changed outside the returned page";
+  await assert.rejects(
+    f.service.diagnostics({
+      ...input,
+      offset: 4900,
+      snapshotId: first.snapshotId,
+    }),
+    code("DIAGNOSTICS_CHANGED"),
+  );
   f.clean();
 });
 
@@ -706,7 +748,7 @@ for (const operation of ["get", "wait"] as const) {
   for (const field of ["message", "source", "code", "linked code"] as const) {
     test(`${operation} rejects oversized diagnostic ${field} input even outside the severity filter`, async () => {
       const f = fixture();
-      const oversized = "\u0000".repeat(1_048_577);
+      const oversized = "\u0000".repeat(5_242_881);
       const item = diagnostic(0, 1);
       if (field === "linked code")
         item.code = { value: oversized, target: f.document.uri };
@@ -733,7 +775,7 @@ for (const operation of ["get", "wait"] as const) {
   test(`${operation} bounds cumulative diagnostic input beyond the requested page`, async () => {
     const f = fixture();
     f.diagnostics.push(
-      ...Array.from({ length: 1000 }, (_, i) => ({
+      ...Array.from({ length: 5000 }, (_, i) => ({
         ...diagnostic(i),
         message: "m".repeat(600),
         source: "s".repeat(300),
@@ -755,7 +797,7 @@ for (const operation of ["get", "wait"] as const) {
     f.diagnostics.push(
       {
         ...diagnostic(0),
-        message: "a".repeat(1_048_576 - 1),
+        message: "a".repeat(5_242_880 - 1),
         source: "",
         code: "",
       },

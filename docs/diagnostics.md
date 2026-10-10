@@ -42,7 +42,7 @@ Continue with the returned `nextOffset` and `snapshotId`, the same URI, severity
 and page size. Prefer `get_diagnostics` for continuation after a wait: another
 wait still performs its usual version checks and event/timeout observation.
 
-`counts` reports each severity across the first 1000 stored diagnostics, before
+`counts` reports each severity across the first 5000 stored diagnostics, before
 filtering or pagination. `inspected` is that bounded count, `total` is the stored
 array length, and `incomplete` says entries beyond the inspection bound were not
 examined. `matching` counts filter matches in the inspected source only. Provider
@@ -56,10 +56,10 @@ recomputes it after authorization. Changed data or bindings fail with
 `DIAGNOSTICS_CHANGED`; malformed/missing continuation arguments fail with
 `INVALID_ARGUMENT`. Restart at offset 0 after a conflict. No snapshot data is
 cached. Equal fingerprints prove equality of this bounded observation, not that
-no intervening event occurred, that entries beyond 1000 stayed equal, or that a
+no intervening event occurred, that entries beyond 5000 stayed equal, or that a
 language provider analyzed the current buffer.
 
-Snapshot hashing admits at most 1048576 UTF-16 code units across message, source
+Snapshot hashing admits at most 5242880 UTF-16 code units across message, source
 and string code values in the inspected source, including entries excluded by
 the severity filter or current page. Each entry's string lengths are checked
 before its full text is serialized or hashed. Exceeding this cumulative input

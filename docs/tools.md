@@ -19,7 +19,7 @@ matching symbols or no applicable provider; no ADT capability is assumed.
 
 `show_diff` accepts `uri` and exactly one of `otherUri` or `proposedText`.
 Proposals also require the current `version` from `read_document`. They use
-immutable read-only content-provider URIs in memory, capped at 1 MiB each and
+immutable read-only content-provider URIs in memory, capped at 8 MiB each and
 eight retained proposals per running bridge. Snapshots still opening are pinned;
 when all eight are pending, another proposal fails with `LIMIT_EXCEEDED` until an
 opening completes. Older completed proposals expire from the
@@ -36,7 +36,7 @@ same formatter-picker behavior as the interactive Format Document command.
 Language-specific formatting remains the installed provider's responsibility.
 `apply: true` omits edits by default and returns document state, `applied` and
 `editCount`. Set `includeEdits: true` to include the complete edits, or false for
-a preview summary. Full previews retain the existing 1 MiB replacement-text
+a preview summary. Full previews allow 10,000 edits and retain the 8 MiB replacement-text
 limit; see [formatting response size](formatting.md).
 `apply: true` uses the same version, write-approval, trust, Auto Save and
 cancellation checks as `edit_document`; it never implicitly saves. Preview
