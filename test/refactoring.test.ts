@@ -141,6 +141,129 @@ function fixture() {
 const errorCode = (code: string) => (error: unknown) =>
   error instanceof contracts.WorkspaceError && error.code === code;
 
+function largeSources(count: number, reportedSize = 8 * 1024 * 1024) {
+  const f = fixture();
+  const text = "x".repeat(8 * 1024 * 1024);
+  const whole = new Range(new Position(0, 0), new Position(0, text.length));
+  const catalog = Array.from({ length: count }, (_, index) => ({
+    ...f.documents[0]!,
+    uri: new Uri(`/project/large-${index}`),
+    getText: () => text,
+    lineAt: () => ({ text, range: whole }),
+  }));
+  f.documents.splice(0, f.documents.length, catalog[0]!);
+  f.input.uri = catalog[0]!.uri.toString();
+  const opened: string[] = [];
+  f.vscode.workspace.fs.stat = async (uri) => ({
+    type: uri.path === "/project" ? 2 : 1,
+    size: reportedSize,
+  });
+  f.vscode.workspace.openTextDocument = async (uri) => {
+    opened.push(uri.toString());
+    const document = catalog.find((d) => d.uri.toString() === uri.toString())!;
+    f.documents.push(document);
+    return document;
+  };
+  const edit = {
+    entries: () =>
+      catalog.map((document) => [document.uri, [{ range, newText: "after!" }]]),
+  };
+  f.supply(() => edit);
+  return { ...f, catalog, opened, edit };
+}
+
+// Without a cumulative source guard, this valid small-edit rename retains 136 MiB.
+test("refactoring refuses the next source before opening it at the 128 MiB budget", async () => {
+  const f = largeSources(17);
+  await assert.rejects(f.service.rename(f.input), (error: unknown) => {
+    assert.ok(error instanceof contracts.WorkspaceError);
+    assert.equal(error.code, "LIMIT_EXCEEDED");
+    assert.match(error.message, /136.*128 MiB/);
+    assert.match(error.message, /native.*Rename|smaller/i);
+    return true;
+  });
+  assert.equal(f.opened.length, 15);
+  assert.equal(f.listeners.size, 0);
+  // Repeated refusals must not leak shared source reservations.
+  for (let retry = 0; retry < 2; retry++)
+    await assert.rejects(f.service.rename(f.input), /136.*128 MiB/);
+  f.supply(() => ({ entries: () => [] }));
+  assert.equal((await f.service.rename(f.input)).preview.documents.length, 0);
+  f.service.dispose();
+});
+
+test("decoded live sources cannot evade the cumulative budget with understated file metadata", async () => {
+  const f = largeSources(17, 0);
+  await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
+  assert.equal(f.opened.length, 16);
+  f.service.dispose();
+});
+
+test("repeated code-action targets charge source text once and admit exactly 128 MiB", async () => {
+  const f = largeSources(16);
+  f.supply(() => [
+    { title: "first", edit: f.edit },
+    { title: "second", edit: f.edit },
+  ]);
+  const result = await f.service.codeActions({
+    uri: f.input.uri,
+    version: 3,
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+    kind: "refactor",
+  });
+  assert.equal(result.actions.length, 2);
+  assert.equal(result.actions[1]!.documents.length, 16);
+  assert.equal(f.opened.length, 15);
+  f.service.dispose();
+});
+
+test("concurrent refactorings retain source reservations through cancellation until provider settlement", async () => {
+  const f = largeSources(1);
+  let entered = 0;
+  let release!: () => void;
+  const blocked = new Promise<undefined>((resolve) => {
+    release = () => resolve(undefined);
+  });
+  f.supply(() => {
+    entered++;
+    return blocked;
+  });
+  const controller = new AbortController();
+  const first = f.service
+    .rename(f.input, controller.signal)
+    .catch((error: unknown) => error);
+  const pending = Array.from({ length: 31 }, () => f.service.rename(f.input));
+  for (let retry = 0; entered < 32 && retry < 100; retry++)
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.equal(entered, 32);
+  try {
+    await assert.rejects(
+      Promise.race([
+        f.service.rename(f.input),
+        new Promise((resolve) => setTimeout(() => resolve(undefined), 100)),
+      ]),
+      /264.*256 MiB/,
+    );
+    controller.abort();
+    await assert.rejects(
+      Promise.race([
+        f.service.rename(f.input),
+        new Promise((resolve) => setTimeout(() => resolve(undefined), 100)),
+      ]),
+      /264.*256 MiB/,
+    );
+  } finally {
+    release();
+  }
+  assert.equal(((await first) as { name: string }).name, "AbortError");
+  await Promise.all(pending);
+  assert.equal(
+    (await f.service.rename(f.input)).preview.previewAvailable,
+    false,
+  );
+  f.service.dispose();
+});
+
 test("multi-document previews explicitly refuse automatic application, even with opaque file operations", async () => {
   const f = fixture();
   const result = await f.service.rename(f.input);
@@ -257,10 +380,77 @@ test("aggregate edit budget is enforced without returning partial actions", asyn
   const f = fixture();
   f.supply(() => ({
     entries: () => [
-      [f.documents[0]!.uri, [{ range, newText: "x".repeat(256 * 1024) }]],
+      [f.documents[0]!.uri, [{ range, newText: "x".repeat(8 * 1024 * 1024) }]],
     ],
   }));
   await assert.rejects(f.service.rename(f.input), errorCode("LIMIT_EXCEEDED"));
+});
+
+test("rename projects 10000 references across 500 documents and rejects larger operations", async () => {
+  const f = fixture();
+  const prototype = f.documents[0]!;
+  const text = "before ".repeat(20);
+  f.documents.splice(
+    0,
+    f.documents.length,
+    ...Array.from({ length: 500 }, (_, index) => ({
+      ...prototype,
+      uri: new Uri(`/project/${index}`),
+      getText: () => text,
+      lineAt: () => ({
+        text,
+        range: new Range(new Position(0, 0), new Position(0, text.length)),
+      }),
+    })),
+  );
+  f.input.uri = f.documents[0]!.uri.toString();
+  let entries = f.documents.map(
+    (document) =>
+      [
+        document.uri,
+        Array.from({ length: 20 }, (_, index) => ({
+          range: new Range(
+            new Position(0, index * 7),
+            new Position(0, index * 7 + 6),
+          ),
+          newText: "replacement ".repeat(8),
+        })),
+      ] as const,
+  );
+  f.supply(() => ({ entries: () => entries }));
+  try {
+    const result = await f.service.rename(f.input);
+    assert.equal(result.preview.documents.length, 500);
+    assert.equal(
+      result.preview.documents.reduce(
+        (count, document) => count + document.edits.length,
+        0,
+      ),
+      10000,
+    );
+    assert.equal(
+      result.preview.documents[499]!.edits[19]!.text,
+      "replacement ".repeat(8),
+    );
+    assert.equal(result.preview.applicationSupported, false);
+    entries = [...entries, entries[0]!];
+    await assert.rejects(
+      f.service.rename(f.input),
+      errorCode("LIMIT_EXCEEDED"),
+    );
+    entries = [
+      [
+        f.documents[0]!.uri,
+        Array.from({ length: 10001 }, () => ({ range, newText: "after" })),
+      ],
+    ];
+    await assert.rejects(
+      f.service.rename(f.input),
+      errorCode("LIMIT_EXCEEDED"),
+    );
+  } finally {
+    f.service.dispose();
+  }
 });
 
 test("public text projection cannot certify hidden resource operations", async () => {
@@ -366,7 +556,7 @@ test("change tracking overflow fails closed instead of retaining unbounded URIs"
 test("newly opened source exceeding decoded text limit never dispatches a provider", async () => {
   const f = fixture();
   const source = f.documents[0]!;
-  const text = "é".repeat(600_000);
+  const text = "é".repeat(4_200_000);
   source.getText = () => text;
   source.lineAt = () => ({
     text,

@@ -13,9 +13,26 @@ import { z } from "zod";
 
 import { SYMBOL_TYPES, type WorkspaceApi } from "./types.js";
 import { outputSchema, results } from "./contracts.js";
+import { ResponseBudget, jsonBytes } from "./responseBudget.js";
+import { JsonStructureError, JsonStructureGuard } from "./jsonStructure.js";
+import {
+  MAX_DOCUMENT_BYTES,
+  MAX_EDITS,
+  MAX_DIAGNOSTICS,
+  MAX_REQUEST_BYTES,
+  MAX_IN_FLIGHT_REQUEST_BYTES,
+  MemoryLimitError,
+} from "./limits.js";
 
-const MAX_BODY = 1024 * 1024;
+const MAX_BODY = MAX_REQUEST_BYTES;
+const BODY_TOO_LARGE = `Request body exceeds the ${MAX_BODY / (1024 * 1024)} MiB limit. Send a smaller operation.`;
 const MAX_REQUESTS = 16;
+const MAX_SEARCH_GLOBS = 20;
+const ARRAY_LIMITS = [
+  ["edit_document", "edits", MAX_EDITS],
+  ["search_workspace", "include", MAX_SEARCH_GLOBS],
+  ["search_workspace", "exclude", MAX_SEARCH_GLOBS],
+] as const;
 const REQUEST_TIMEOUT = 30_000;
 const uri = z
   .string()
@@ -74,6 +91,7 @@ const errors: Record<string, string> = {
 function createMcpServer(
   workspace: WorkspaceApi,
   execute: (operation: () => unknown) => Promise<unknown>,
+  reserveResponse: (content: unknown, id: string | number) => void,
   signal: AbortSignal,
 ) {
   const server = new McpServer({
@@ -113,6 +131,7 @@ function createMcpServer(
             ),
           );
           const structuredContent = output.parse({ result });
+          reserveResponse(structuredContent, extra.requestId);
           return {
             content: [
               {
@@ -134,7 +153,13 @@ function createMcpServer(
           const structuredContent = {
             error: {
               code,
-              message: errors[code] ?? "Workspace operation failed.",
+              message:
+                error instanceof MemoryLimitError
+                  ? MemoryLimitError.describe(
+                      error.budget,
+                      error.requestedBytes,
+                    )
+                  : (errors[code] ?? "Workspace operation failed."),
             },
           };
           return {
@@ -307,14 +332,14 @@ function createMcpServer(
         ),
       include: z
         .array(z.string().min(1).max(256))
-        .max(20)
+        .max(MAX_SEARCH_GLOBS)
         .optional()
         .describe(
           "Filename globs; default all files. * and ? stay in a segment; ** crosses directories. Without / matches basename, otherwise relative path.",
         ),
       exclude: z
         .array(z.string().min(1).max(256))
-        .max(20)
+        .max(MAX_SEARCH_GLOBS)
         .optional()
         .describe(
           "Filename globs with include syntax; default none. Exclusion wins; directories are still traversed.",
@@ -353,12 +378,12 @@ function createMcpServer(
             range,
             text: z
               .string()
-              .max(MAX_BODY)
+              .max(MAX_DOCUMENT_BYTES)
               .describe("Replacement text; empty deletes the range."),
           }),
         )
         .min(1)
-        .max(100)
+        .max(MAX_EDITS)
         .describe("Non-overlapping edits to the current buffer; not saved."),
     }),
     (args) => workspace.edit(args, signal),
@@ -391,6 +416,15 @@ function createMcpServer(
   };
   const diagnosticOptions = {
     ...paginationOptions,
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_DIAGNOSTICS)
+      .optional()
+      .describe(
+        "Filtered diagnostic offset; default 0. Continue with nextOffset, snapshotId and unchanged filters.",
+      ),
     severity: z
       .enum(["error", "warning", "information", "hint"])
       .optional()
@@ -407,7 +441,7 @@ function createMcpServer(
   };
   tool(
     "get_diagnostics",
-    "Get a bounded diagnostics page (default 20, max 100). Optional severity filter; counts cover the first 1000 diagnostics before filtering. Continue with nextOffset and snapshotId using unchanged options; restart if diagnostics changed.",
+    "Get a bounded diagnostics page (default 20, max 100). Optional severity filter; counts cover the first 5000 diagnostics before filtering. Continue with nextOffset and snapshotId using unchanged options; restart if diagnostics changed.",
     z.strictObject({ uri, ...diagnosticOptions }),
     (args) => workspace.diagnostics(args),
   );
@@ -523,7 +557,7 @@ function createMcpServer(
         ),
       proposedText: z
         .string()
-        .max(MAX_BODY)
+        .max(MAX_DOCUMENT_BYTES)
         .optional()
         .describe(
           "Proposed complete text to compare; requires version and excludes otherUri.",
@@ -608,14 +642,32 @@ function createMcpServer(
   return server;
 }
 
-function reject(response: ServerResponse, status: number, message: string) {
+function reject(
+  response: ServerResponse,
+  status: number,
+  message: string,
+  drainRequest?: IncomingMessage,
+) {
   if (response.headersSent || response.destroyed) return;
+  const draining =
+    drainRequest && !drainRequest.complete && !drainRequest.destroyed;
   response.writeHead(status, {
     "Content-Type": "text/plain; charset=utf-8",
     Connection: "close",
+    "Content-Length": Buffer.byteLength(message),
     "Cache-Control": "no-store",
   });
-  response.end(message);
+  if (draining) {
+    // Closing a socket with unread body data can replace the refusal with a TCP
+    // reset on Windows. Deliver the complete, length-framed refusal now, but
+    // finish/close only after discarding the remainder without retaining chunks.
+    // Existing timeouts bound stalled clients; unauthenticated refusals do not drain.
+    drainRequest.once("error", () => response.destroy());
+    drainRequest.once("aborted", () => response.destroy());
+    drainRequest.once("end", () => response.end());
+    response.write(message);
+    drainRequest.resume();
+  } else response.end(message);
 }
 
 class RequestError extends Error {
@@ -627,28 +679,47 @@ class RequestError extends Error {
   }
 }
 
-function readBody(request: IncomingMessage): Promise<unknown> {
+function readBody(
+  request: IncomingMessage,
+  reserve: (bytes: number) => void,
+  signal: AbortSignal,
+): Promise<unknown> {
   return new Promise((resolve, rejectBody) => {
     const chunks: Buffer[] = [];
+    const structure = new JsonStructureGuard();
     let bytes = 0;
     const cleanup = () => {
       request.off("data", onData);
       request.off("end", onEnd);
       request.off("error", onError);
       request.off("aborted", onAborted);
+      signal.removeEventListener("abort", onCancelled);
     };
     const fail = (error: RequestError) => {
       cleanup();
       request.pause();
+      chunks.length = 0;
       rejectBody(error);
     };
     const onError = () => fail(new RequestError(400, "Request failed."));
     const onAborted = () => fail(new RequestError(400, "Request aborted."));
+    const onCancelled = () => fail(new RequestError(408, "Request ended."));
     const onData = (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > MAX_BODY)
-        fail(new RequestError(413, "Request body too large."));
-      else chunks.push(chunk);
+      if (bytes > MAX_BODY) fail(new RequestError(413, BODY_TOO_LARGE));
+      else {
+        try {
+          reserve(bytes);
+          structure.push(chunk);
+          chunks.push(chunk);
+        } catch (error) {
+          fail(
+            error instanceof JsonStructureError
+              ? new RequestError(413, error.message)
+              : (error as RequestError),
+          );
+        }
+      }
     };
     const onEnd = () => {
       cleanup();
@@ -656,12 +727,16 @@ function readBody(request: IncomingMessage): Promise<unknown> {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         rejectBody(new RequestError(400, "Invalid JSON."));
+      } finally {
+        chunks.length = 0;
       }
     };
     request.on("data", onData);
     request.on("end", onEnd);
     request.on("error", onError);
     request.on("aborted", onAborted);
+    signal.addEventListener("abort", onCancelled, { once: true });
+    if (signal.aborted) onCancelled();
   });
 }
 
@@ -695,6 +770,8 @@ export async function startServer(
   };
   let host = "";
   let active = 0;
+  let inFlightBodyBytes = 0;
+  const responseBudget = new ResponseBudget();
   let closed = false;
   const listener = (request: IncomingMessage, response: ServerResponse) => {
     void handle(request, response).catch(() =>
@@ -750,8 +827,25 @@ export async function startServer(
       return reject(response, 405, "Method not allowed.");
     if (closed || active >= MAX_REQUESTS)
       return reject(response, 503, "Server busy.");
-    if (Number(request.headers["content-length"] ?? 0) > MAX_BODY)
-      return reject(response, 413, "Request body too large.");
+    const declaredBytes = Number(request.headers["content-length"] ?? 0);
+    if (declaredBytes > MAX_BODY)
+      return reject(response, 413, BODY_TOO_LARGE, request);
+    let reservedBytes = 0;
+    const reserve = (bytes: number) => {
+      const increase = Math.max(0, bytes - reservedBytes);
+      if (inFlightBodyBytes + increase > MAX_IN_FLIGHT_REQUEST_BYTES)
+        throw new RequestError(
+          503,
+          `Request-body budget exhausted: ${((inFlightBodyBytes + increase) / (1024 * 1024)).toFixed(2)} MiB requested; limit ${MAX_IN_FLIGHT_REQUEST_BYTES / (1024 * 1024)} MiB across unfinished requests. Wait for earlier requests to finish, then retry or send a smaller operation.`,
+        );
+      inFlightBodyBytes += increase;
+      reservedBytes += increase;
+    };
+    try {
+      reserve(declaredBytes);
+    } catch (error) {
+      return reject(response, 503, (error as RequestError).message, request);
+    }
     active++;
     const controller = new AbortController();
     controllers.add(controller);
@@ -759,10 +853,14 @@ export async function startServer(
     let finished = false;
     let running = 0;
     let released = false;
+    let responseFinished = false;
+    const responseReservations: Array<() => void> = [];
     const release = () => {
-      if (finished && running === 0 && !released) {
+      if (finished && running === 0 && responseFinished && !released) {
         released = true;
         active--;
+        inFlightBodyBytes -= reservedBytes;
+        for (const releaseResponse of responseReservations) releaseResponse();
       }
     };
     const execute = async (operation: () => unknown) => {
@@ -803,21 +901,82 @@ export async function startServer(
     };
     const disconnected = new Promise<void>((resolve) => {
       response.once("close", () => {
+        responseFinished = true;
         cleanup();
+        release();
         resolve();
       });
     });
+    response.once("finish", () => {
+      responseFinished = true;
+      release();
+    });
     try {
-      const body = await readBody(request);
+      const body = await readBody(request, reserve, controller.signal);
+      controller.signal.throwIfAborted();
       if (response.destroyed || closed) return;
       if (Array.isArray(body))
         return reject(response, 400, "Batch requests are not supported.");
-      mcp = createMcpServer(workspace, execute, controller.signal);
+      // Zod's array max runs after child validation. Check counts first so
+      // oversized arrays cannot allocate validation errors for every child.
+      const call = body as {
+        method?: unknown;
+        params?: { name?: unknown; arguments?: Record<string, unknown> };
+      } | null;
+      for (const [name, field, limit] of ARRAY_LIMITS) {
+        if (call?.method !== "tools/call" || call.params?.name !== name)
+          continue;
+        const values = call.params.arguments?.[field];
+        if (Array.isArray(values) && values.length > limit)
+          return reject(
+            response,
+            413,
+            `LIMIT_EXCEEDED: ${name} accepts at most ${limit} ${field} entries. Send a smaller operation.`,
+          );
+      }
+      mcp = createMcpServer(
+        workspace,
+        execute,
+        (content, id) => {
+          controller.signal.throwIfAborted();
+          // Include the untrusted JSON-RPC id and a bounded tool envelope before
+          // allocating either the textual or final serialized response.
+          responseReservations.push(
+            responseBudget.reserve(
+              jsonBytes(content, true) + jsonBytes(id) + 512,
+            ),
+          );
+        },
+        controller.signal,
+      );
       sessions.add(mcp);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
+      const send = transport.send.bind(transport);
+      transport.send = async (message, sendOptions) => {
+        // Successful tool results were reserved before creating content.text.
+        // Errors, discovery and other protocol responses need admission too:
+        // their caller-supplied id alone can be a large response.
+        if (responseReservations.length === 0) {
+          try {
+            responseReservations.push(
+              responseBudget.reserve(jsonBytes(message)),
+            );
+          } catch (error) {
+            reject(
+              response,
+              503,
+              error instanceof MemoryLimitError
+                ? MemoryLimitError.describe(error.budget, error.requestedBytes)
+                : "Response could not be encoded safely.",
+            );
+            return;
+          }
+        }
+        await send(message, sendOptions);
+      };
       await mcp.connect(transport);
       response.setHeader("Cache-Control", "no-store");
       // The SDK's JSON-response promise can remain pending after transport.close().
@@ -830,6 +989,10 @@ export async function startServer(
         response,
         error instanceof RequestError ? error.status : 500,
         error instanceof RequestError ? error.message : "Request failed.",
+        error instanceof RequestError &&
+          (error.status === 413 || error.status === 503)
+          ? request
+          : undefined,
       );
     } finally {
       cleanup();

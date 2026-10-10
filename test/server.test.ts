@@ -7,8 +7,200 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startServer } from "../src/server.js";
 import { outputSchema } from "../src/contracts.js";
 import { WorkspaceError } from "../src/types.js";
+import { MAX_EDITS, MemoryLimitError } from "../src/limits.js";
 
 import { workspace } from "./fixtures/workspace.js";
+
+test("HTTP rejects structurally expansive JSON metadata before dispatch", async (t) => {
+  let reads = 0;
+  const server = await startServer({
+    ...workspace,
+    read: async (args) => {
+      reads++;
+      return workspace.read(args);
+    },
+  });
+  t.after(() => server.close());
+  const body =
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_document","arguments":{"uri":"memfs:/project/a"},"_meta":{"padding":[' +
+    "{},".repeat(250000) +
+    "{}]}}}";
+  const result = await http(
+    server.url,
+    {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body,
+  );
+  assert.equal(result.status, 413);
+  assert.match(result.body, /250000 token limit/);
+  assert.equal(reads, 0);
+});
+
+test("oversized additive response metadata returns a compact safe limit error", async (t) => {
+  const server = await startServer({
+    ...workspace,
+    read: async (args) => ({
+      ...(await workspace.read(args)),
+      metadata: "\u0001".repeat(11 * 1024 * 1024),
+    }),
+  });
+  t.after(() => server.close());
+  const reply = await http(
+    server.url,
+    {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "read_document", arguments: { uri: "memfs:/project/a" } },
+    }),
+  );
+  const result = JSON.parse(reply.body).result;
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.error.code, "LIMIT_EXCEEDED");
+  assert.match(result.structuredContent.error.message, /128 MiB.*per response/);
+  assert.ok(reply.body.length < 2000);
+});
+
+test(
+  "concurrent escaped previews and oversized error ids share the response budget",
+  { timeout: 20000 },
+  async (t) => {
+    const text = "\u0001".repeat(8 * 1024 * 1024);
+    let entered = 0;
+    let pairEntered!: () => void;
+    const pairReady = new Promise<void>((resolve) => {
+      pairEntered = resolve;
+    });
+    let thirdEntered!: () => void;
+    const thirdReady = new Promise<void>((resolve) => {
+      thirdEntered = resolve;
+    });
+    let allEntered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      allEntered = resolve;
+    });
+    let release!: () => void;
+    const together = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = await startServer({
+      ...workspace,
+      format: async (args) => {
+        entered++;
+        if (entered === 2) pairEntered();
+        if (entered === 3) thirdEntered();
+        if (entered === 4) allEntered();
+        await together;
+        return {
+          ...(await workspace.format(args)),
+          editCount: 1,
+          edits: [
+            {
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 1 },
+              },
+              text,
+            },
+          ],
+        };
+      },
+    });
+    t.after(async () => {
+      release();
+      await server.close();
+    });
+    const headers = {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "format_document",
+        arguments: { uri: "memfs:/project/a", version: 1 },
+      },
+    });
+    // Pausing a client does not prove its peer still has unwritten output:
+    // loopback/kernel buffering differs by OS. Release provider results together
+    // so admission happens before any transport completion can free capacity.
+    const pending = Array.from(
+      { length: 2 },
+      () =>
+        new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+          const req = request(
+            server.url,
+            { method: "POST", headers },
+            (res) => {
+              res.pause();
+              resolve(res);
+            },
+          );
+          req.on("error", reject);
+          t.after(() => req.destroy());
+          req.end(body);
+        }),
+    );
+    await pairReady;
+    const third = http(server.url, headers, body);
+    await thirdReady;
+    // Refusals must not echo an unbounded id outside the response reservation.
+    const oversizedId = http(
+      server.url,
+      headers,
+      JSON.stringify({
+        ...JSON.parse(body),
+        id: "x".repeat(49 * 1024 * 1024),
+      }),
+    );
+    await ready;
+    release();
+    const stalled = await Promise.all(pending);
+    for (const response of stalled) assert.equal(response.statusCode, 200);
+    const refused = JSON.parse((await third).body).result;
+    assert.equal(refused.isError, true);
+    assert.equal(refused.structuredContent.error.code, "LIMIT_EXCEEDED");
+    assert.match(refused.structuredContent.error.message, /256 MiB/);
+    assert.match(
+      refused.structuredContent.error.message,
+      /wait|smaller|includeEdits/i,
+    );
+    const largeId = await oversizedId;
+    assert.equal(largeId.status, 503);
+    assert.match(largeId.body, /256 MiB/);
+    assert.ok(largeId.body.length < 2000);
+    await Promise.all(
+      stalled.map(
+        (res) =>
+          new Promise<void>((resolve) => {
+            res.once("close", resolve);
+            res.destroy();
+          }),
+      ),
+    );
+    // The peer's socket-close event can arrive after the client's local close.
+    let retried;
+    const deadline = Date.now() + 5000;
+    do {
+      retried = JSON.parse((await http(server.url, headers, body)).body).result;
+      if (!retried.isError) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } while (Date.now() < deadline);
+    assert.notEqual(retried.isError, true);
+    assert.equal(retried.structuredContent.result.edits[0].text, text);
+  },
+);
 
 async function http(
   url: string,
@@ -31,6 +223,230 @@ async function http(
     req.end(body);
   });
 }
+
+/** Observe an early refusal without flooding a closing socket with unsent data. */
+async function admissionProbe(
+  url: string,
+  headers: Record<string, string>,
+  chunked: boolean,
+) {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const size = 32 * 1024 * 1024;
+    let answered = false;
+    let sent = 0;
+    let timer: NodeJS.Timeout | undefined;
+    const req = request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          ...(chunked
+            ? { "Transfer-Encoding": "chunked" }
+            : { "Content-Length": String(size) }),
+        },
+      },
+      (res) => {
+        answered = true;
+        clearTimeout(timer);
+        req.off("drain", schedule);
+        if (chunked && !req.writableEnded) req.end();
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode!,
+            body: Buffer.concat(chunks).toString(),
+          }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.on("close", () => clearTimeout(timer));
+    req.setTimeout(10_000, () =>
+      req.destroy(new Error("Admission probe timed out")),
+    );
+    function schedule() {
+      if (!answered && !req.destroyed) timer = setTimeout(send, 1);
+    }
+    function send() {
+      if (answered || req.destroyed) return;
+      const chunk = Buffer.alloc(Math.min(64 * 1024, size - sent), 0x20);
+      sent += chunk.length;
+      const ready = req.write(chunk);
+      if (sent === size) req.end();
+      else if (ready) schedule();
+      else req.once("drain", schedule);
+    }
+    if (chunked) send();
+    else req.write(" "); // Header reservation must refuse before reading the body.
+  });
+}
+
+for (const chunked of [false, true]) {
+  test(`aggregate body budget survives disconnect until provider settlement (${chunked ? "chunked" : "Content-Length"})`, async (t) => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = await startServer({
+      ...workspace,
+      read: async (input) => {
+        entered();
+        await blocked;
+        return workspace.read(input);
+      },
+    });
+    t.after(async () => {
+      release();
+      await server.close();
+    });
+    const headers = {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    };
+    const call = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "read_document", arguments: { uri: "memfs:/project/a" } },
+    });
+    const large = call + " ".repeat(40 * 1024 * 1024);
+    const req = request(server.url, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Length": String(Buffer.byteLength(large)),
+      },
+    });
+    req.on("error", () => {});
+    req.end(large);
+    await started;
+    const probe = call + " ".repeat(32 * 1024 * 1024);
+    try {
+      const response = await admissionProbe(server.url, headers, chunked);
+      assert.equal(response.status, 503);
+      assert.match(response.body, /64 MiB.*unfinished|unfinished.*64 MiB/);
+      assert.match(response.body, /retry|wait/i);
+      // A client may already have queued the complete body when refusal arrives.
+      // The framed message must survive that unread remainder too (Windows RST).
+      const burst = await http(
+        server.url,
+        {
+          ...headers,
+          ...(chunked
+            ? { "Transfer-Encoding": "chunked" }
+            : { "Content-Length": String(Buffer.byteLength(probe)) }),
+        },
+        probe,
+      );
+      assert.equal(burst.status, 503);
+      assert.match(burst.body, /64 MiB.*unfinished|unfinished.*64 MiB/);
+      req.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(
+        (await admissionProbe(server.url, headers, chunked)).status,
+        503,
+      );
+    } finally {
+      req.destroy();
+      release();
+    }
+    assert.equal((await http(server.url, headers, probe)).status, 200);
+  });
+}
+
+test("aborting a partially streamed body releases its aggregate reservation", async (t) => {
+  const server = await startServer(workspace);
+  t.after(() => server.close());
+  const headers = {
+    Authorization: `Bearer ${server.token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  const partial = request(server.url, {
+    method: "POST",
+    headers: { ...headers, "Content-Length": String(40 * 1024 * 1024) },
+  });
+  partial.on("error", () => {});
+  partial.write("{");
+  const probeHeaders = {
+    ...headers,
+    "Content-Length": String(32 * 1024 * 1024),
+  };
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  try {
+    assert.equal(
+      (
+        await Promise.race([
+          http(server.url, probeHeaders, "{}"),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "Aggregate admission failed to reserve Content-Length",
+                  ),
+                ),
+              1000,
+            ),
+          ),
+        ])
+      ).status,
+      503,
+    );
+  } finally {
+    partial.destroy();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const response = await http(
+    server.url,
+    headers,
+    "{}" + " ".repeat(32 * 1024 * 1024),
+  );
+  assert.notEqual(response.status, 503);
+});
+
+test("MCP memory refusals explain the budget and remedy without exposing provider messages", async (t) => {
+  const server = await startServer({
+    ...workspace,
+    rename: async () => {
+      const error = new MemoryLimitError(
+        "refactoringSource",
+        136 * 1024 * 1024,
+      );
+      error.message = "private provider source";
+      throw error;
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "budget-errors", version: "1" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const result = await client.callTool({
+    name: "preview_rename",
+    arguments: {
+      uri: "memfs:/project/a",
+      version: 1,
+      position: { line: 0, character: 0 },
+      newName: "after",
+    },
+  });
+  assert.equal(result.isError, true);
+  assert.match(JSON.stringify(result.structuredContent), /136.*128 MiB/);
+  assert.match(JSON.stringify(result.content), /native.*Rename/);
+  assert.doesNotMatch(JSON.stringify(result), /private provider source/);
+});
 
 test("rejects unauthenticated, browser, wrong-host and unexpected route requests before JSON parsing", async (t) => {
   const server = await startServer(workspace);
@@ -58,7 +474,7 @@ test("rejects unauthenticated, browser, wrong-host and unexpected route requests
     (
       await http(
         server.url,
-        { ...auth, "Content-Length": String(1024 * 1024 + 1) },
+        { ...auth, "Content-Length": String(64 * 1024 * 1024 + 1) },
         "not JSON",
       )
     ).status,
@@ -385,10 +801,181 @@ test("limits streamed bodies even when Content-Length is absent", async (t) => {
       },
     );
     req.on("error", reject);
-    req.write("x".repeat(1024 * 1024));
+    req.write("x".repeat(64 * 1024 * 1024));
     req.end("x");
   });
   assert.equal(status, 413);
+});
+
+for (const count of [MAX_EDITS + 1, 200_000])
+  test(`HTTP rejects ${count} invalid edits before element validation expands errors`, async (t) => {
+    let edits = 0;
+    const server = await startServer({
+      ...workspace,
+      edit: async (input) => {
+        edits++;
+        return workspace.edit(input);
+      },
+    });
+    t.after(() => server.close());
+    const result = await http(
+      server.url,
+      {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "edit_document",
+          arguments: {
+            uri: "memfs:/project/a",
+            version: 1,
+            edits: Array(count).fill({}),
+          },
+        },
+      }),
+    );
+    assert.equal(result.status, 413);
+    assert.match(result.body, /LIMIT_EXCEEDED.*10000 edits.*smaller operation/);
+    assert.ok(result.body.length < 200);
+    assert.equal(edits, 0);
+  });
+
+for (const filter of ["include", "exclude"])
+  test(`HTTP rejects oversized invalid search ${filter} before child validation`, async (t) => {
+    let searches = 0;
+    const server = await startServer({
+      ...workspace,
+      search: async (input) => {
+        searches++;
+        return workspace.search(input);
+      },
+    });
+    t.after(() => server.close());
+    const result = await http(
+      server.url,
+      {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "search_workspace",
+          arguments: {
+            uri: "memfs:/project",
+            query: "a",
+            [filter]: Array(200_000).fill({}),
+          },
+        },
+      }),
+    );
+    assert.equal(result.status, 413);
+    assert.match(
+      result.body,
+      new RegExp(`LIMIT_EXCEEDED.*20 ${filter}.*smaller operation`),
+    );
+    assert.ok(result.body.length < 200);
+    assert.equal(searches, 0);
+    const accepted = await http(
+      server.url,
+      {
+        Authorization: `Bearer ${server.token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "search_workspace",
+          arguments: {
+            uri: "memfs:/project",
+            query: "a",
+            [filter]: Array(20).fill("*.abap"),
+          },
+        },
+      }),
+    );
+    assert.equal(accepted.status, 200);
+    assert.notEqual(JSON.parse(accepted.body).result.isError, true);
+    assert.equal(searches, 1);
+  });
+
+test("MCP admits a 10000-edit request and diagnostic continuation beyond offset 1000", async (t) => {
+  let received = 0;
+  let offset = 0;
+  const server = await startServer({
+    ...workspace,
+    edit: async (input) => {
+      received = input.edits.length;
+      return workspace.edit(input);
+    },
+    diagnostics: async (input) => {
+      offset = input.offset ?? 0;
+      return workspace.diagnostics(input);
+    },
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: "large-operation-test", version: "1" });
+  t.after(() => client.close());
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const { tools } = await client.listTools();
+  const editsSchema = tools.find((tool) => tool.name === "edit_document")!
+    .inputSchema.properties!.edits as {
+    type: string;
+    minItems: number;
+    maxItems: number;
+    items: {
+      type: string;
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+  };
+  assert.equal(editsSchema.type, "array");
+  assert.equal(editsSchema.minItems, 1);
+  assert.equal(editsSchema.maxItems, MAX_EDITS);
+  assert.equal(editsSchema.items.type, "object");
+  assert.deepEqual(editsSchema.items.required, ["range", "text"]);
+  assert.deepEqual(Object.keys(editsSchema.items.properties), [
+    "range",
+    "text",
+  ]);
+  const result = await client.callTool({
+    name: "edit_document",
+    arguments: {
+      uri: "memfs:/project/a.abap",
+      version: 1,
+      edits: Array.from({ length: 10000 }, (_, line) => ({
+        range: { start: { line, character: 0 }, end: { line, character: 0 } },
+        text: " ".repeat(128),
+      })),
+    },
+  });
+  assert.notEqual(result.isError, true);
+  assert.equal(received, 10000);
+  const diagnostics = await client.callTool({
+    name: "get_diagnostics",
+    arguments: {
+      uri: "memfs:/project/a.abap",
+      offset: 4900,
+      snapshotId: "a".repeat(64),
+    },
+  });
+  assert.notEqual(diagnostics.isError, true);
+  assert.equal(offset, 4900);
 });
 
 test("rejects JSON-RPC batches so one HTTP request cannot multiply workspace operations", async (t) => {
