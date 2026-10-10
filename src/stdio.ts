@@ -312,11 +312,13 @@ export async function startAdapter(options: AdapterOptions) {
           : undefined;
       requestContext.run(undefined, () => dispatch?.(message));
       if (reservation) {
-        // The SDK queues cancellation in a microtask. Observe it afterwards:
+        // Let the SDK finish its queued cancellation and handler microtasks.
+        // In SDK 1.31.0 ID 0 cancellation is ignored: its handler/reply must
+        // enter before deciding whether a no-reply reservation can be freed.
         // built-ins and schema refusals may be cancelled without ever entering
         // our handlers or sending a reply. Running work settles in finally;
         // replies already writing retain capacity until stdout drains.
-        queueMicrotask(() => {
+        setImmediate(() => {
           if (reservation.phase === "queued" || reservation.phase === "settled")
             releaseRequest(reservation);
         });

@@ -156,6 +156,81 @@ test(
   },
 );
 
+test(
+  "stdio retains ID 0 capacity when the pinned SDK ignores cancellation",
+  { timeout: 15000 },
+  async (t) => {
+    const tls = await identity();
+    let count = 0;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bridge = await startServer(
+      {
+        ...workspace,
+        read: async (args) => {
+          if (++count === 16) entered();
+          await blocked;
+          return workspace.read(args);
+        },
+      },
+      { tls },
+    );
+    t.after(async () => {
+      release();
+      await bridge.close();
+    });
+    const incoming = new PassThrough();
+    const outgoing = new PassThrough();
+    const adapter = await startAdapter({
+      url: bridge.url,
+      token: bridge.token,
+      certificate: tls.cert,
+      input: incoming,
+      output: outgoing,
+    });
+    t.after(() => adapter.close());
+    const client = new Client({ name: "zero-id-budget", version: "1" });
+    await client.connect(new StdioServerTransport(outgoing, incoming));
+    t.after(() => client.close());
+    incoming.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "tools/call",
+        params: {
+          name: "read_document",
+          arguments: { uri: "memfs:/project/a" },
+        },
+      }) +
+        "\n" +
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 0 },
+        }) +
+        "\n",
+    );
+    const call = () =>
+      client.callTool(
+        { name: "read_document", arguments: { uri: "memfs:/project/a" } },
+        undefined,
+        { timeout: 5000 },
+      );
+    const pending = Array.from({ length: 15 }, call);
+    for (const result of pending) result.catch(() => {});
+    await started;
+    await assert.rejects(call(), /16.*unfinished.*adapter/i);
+    release();
+    await Promise.all(pending);
+  },
+);
+
 for (const method of ["ping", "tools/call"]) {
   test(
     `stdio reclaims cancelled numeric ID 0 for ${method}`,
