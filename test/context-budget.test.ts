@@ -4,7 +4,7 @@ import { measureContext } from "../scripts/measure-context.js";
 
 test("SDK wire discovery and bounded responses stay within context budgets", async () => {
   const report = await measureContext();
-  assert.equal(report.toolCount, 20);
+  assert.equal(report.toolCount, 22);
   assert.ok(report.tools.some((tool) => tool.name === "read_symbol"));
   assert.ok(report.discovery.wireBytes > report.outputSchemaBytes);
   assert.ok(

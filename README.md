@@ -78,8 +78,15 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 | `get_definition`, `get_references`, `get_hover` | Query installed language providers                                       |
 | `preview_rename`, `preview_code_actions`        | Preview provider text edits; no automatic application                    |
 
+| `search_commands` | Discover runtime command IDs, manifest metadata and admission reasons |
+| `invoke_command` | Invoke separately authorized, explicitly supported non-interactive zero-argument commands |
+
 Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are required.
-No file creation/deletion/renaming, arbitrary commands, activation or terminal tools.
+No file creation/deletion/renaming, arbitrary commands or terminal tools.
+[Direct commands](docs/commands.md) require separate user authorization and an
+explicit exact-version non-interactive extension contract; existing extensions
+without that contract remain unsupported. No UI is controlled, and autonomous
+ADT login is not provided.
 Search reports truncation/errors: it is not an exhaustive SAP repository index.
 
 See the [tool reference](docs/tools.md) for parameters and limits.

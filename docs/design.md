@@ -7,15 +7,17 @@ private sources or proprietary extension code.
 
 ## Components
 
-| Component       | Responsibility                                                             |
-| --------------- | -------------------------------------------------------------------------- |
-| `workspace.ts`  | VS Code URIs, live buffers, versioned edits and explicit save              |
-| `server.ts`     | Official MCP SDK, schemas, request bounds and authenticated loopback HTTPS |
-| `tls.ts`        | SecretStorage identity, native WebCrypto and pinned certificate library    |
-| `stdio.ts`      | Client adapter; dedicated certificate trust, loopback only, no redirects   |
-| `adapter.ts`    | Stable extension-owned adapter installation; no workspace resources        |
-| `extension.ts`  | Explicit start/stop, window lifecycle, connection details and write policy |
-| Client packages | Shared workflow, thin Claude/Codex manifests and stdio settings            |
+| Component            | Responsibility                                                              |
+| -------------------- | --------------------------------------------------------------------------- |
+| `workspace.ts`       | VS Code URIs, live buffers, versioned edits and explicit save               |
+| `server.ts`          | Official MCP SDK, schemas, request bounds and authenticated loopback HTTPS  |
+| `tls.ts`             | SecretStorage identity, native WebCrypto and pinned certificate library     |
+| `stdio.ts`           | Client adapter; dedicated certificate trust, loopback only, no redirects    |
+| `adapter.ts`         | Stable extension-owned adapter installation; no workspace resources         |
+| `extension.ts`       | Explicit start/stop, window lifecycle, connection details and write policy  |
+| `commands.ts`        | Generic command discovery, declaration admission and bounded invocation     |
+| `commands-vscode.ts` | Public command/extension APIs, user-only authority and context invalidation |
+| Client packages      | Shared workflow, thin Claude/Codex manifests and stdio settings             |
 
 No autostart. Writes use user-only `deny`/`allow`/`ask` policy, default `ask`.
 Workspace operations use `workspace.fs`, `TextDocument` and `WorkspaceEdit`, never
@@ -32,12 +34,14 @@ local port owner from impersonating the bridge.
 
 Authorize before MCP parsing; validate Host, reject Origin, bound request size
 and concurrency, and close completed transports. Recheck current roots and
-Workspace Trust; reject traversal and symlinks. Tokens authorize only admitted
-roots in the connected window. Installed filesystem providers are trusted VS Code
+Workspace Trust; reject traversal and symlinks. Tokens authorize configured workspace access and separately allowed eligible
+commands in the connected window. Installed filesystem providers are trusted VS Code
 extensions, outside this boundary.
 
 No telemetry, analytics, external requests, remote listener, shell, terminal,
-arbitrary commands, file deletion or backend activation. Only the stdio adapter
+arbitrary commands, file deletion or implicit backend activation.
+[Direct command invocation](commands.md) requires separate authority and capability
+evidence; declared commands can have external/destructive effects. Only the stdio adapter
 initiates product connections, to the authenticated loopback listener.
 See [SECURITY.md](../SECURITY.md) for threats and reporting.
 

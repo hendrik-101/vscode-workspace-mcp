@@ -101,6 +101,39 @@ const readFields = {
 };
 
 export const results = {
+  search_commands: z.looseObject({
+    commands: z.array(
+      z.looseObject({
+        commandId: text,
+        metadata: z.array(
+          z.looseObject({
+            extensionId: text,
+            extensionVersion: text,
+            title: text.optional(),
+            category: text.optional(),
+            provenance: z.literal("extension_manifest"),
+          }),
+        ),
+        eligibility: z.looseObject({ eligible: boolean, reason: text }),
+      }),
+    ),
+    truncated: boolean,
+    incomplete: boolean,
+    nextOffset: number.optional(),
+    scanned: number,
+    consistency: z.literal("live"),
+  }),
+  invoke_command: z.looseObject({
+    outcome: z.enum([
+      "handler_completed",
+      "handler_failed",
+      "completion_unconfirmed",
+    ]),
+    businessSuccess: z.literal("unknown"),
+    resultType: text.optional(),
+    resultOmitted: boolean.optional(),
+    reason: z.enum(["timeout", "cancelled", "session_stopped"]).optional(),
+  }),
   workspace_roots: z.array(root),
   editor_context: z.looseObject({
     roots: z.array(root),

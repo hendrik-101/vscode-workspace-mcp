@@ -84,6 +84,18 @@
           "default": "ask",
           "scope": "application",
           "description": "Write access at each explicit bridge start. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
+        },
+        "workspaceMcp.allowedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$"
+          },
+          "maxItems": 100,
+          "uniqueItems": true,
+          "default": [],
+          "scope": "application",
+          "description": "Exact command IDs authorized for direct MCP invocation. This grants authority only; commands also need an applicable explicit non-interactive zero-argument extension contract. Commands may have destructive or external side effects. Workspace overrides and writePolicy cannot grant command authority."
         }
       }
     }

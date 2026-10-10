@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { refactoringTools } from "./refactoring";
+import { commandTools } from "./commands";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
 import {
@@ -99,6 +100,7 @@ export async function run(): Promise<void> {
       `SAP ADT ${adtVersion}: active; abap provider registered; no backend configured`,
     );
   }
+  await commandTools();
   console.log("VS Code integration: registering virtual providers");
   const provider = new MemoryProvider();
   const readonlyProvider = new MemoryProvider();

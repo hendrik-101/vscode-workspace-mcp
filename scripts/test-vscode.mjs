@@ -102,7 +102,11 @@ try {
   } else
     await runTests({
       vscodeExecutablePath,
-      extensionDevelopmentPath: project,
+      extensionDevelopmentPath: [
+        project,
+        join(project, "test/fixtures/command-alpha"),
+        join(project, "test/fixtures/command-beta"),
+      ],
       extensionTestsPath: join(project, "dist/test/vscode.cjs"),
       extensionTestsEnv: {
         WORKSPACE_MCP_ADT_VERSION: withAdt ? adtVersion : "",

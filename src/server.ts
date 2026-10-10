@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { SYMBOL_TYPES, type WorkspaceApi } from "./types.js";
 import { outputSchema, results } from "./contracts.js";
+import type { CommandApi } from "./commands.js";
 import { ResponseBudget, jsonBytes } from "./responseBudget.js";
 import { JsonStructureError, JsonStructureGuard } from "./jsonStructure.js";
 import {
@@ -58,6 +59,14 @@ const preserveFocus = z
   .optional()
   .describe("Keep keyboard focus in the current editor; default true.");
 const errors: Record<string, string> = {
+  COMMAND_UNSUPPORTED:
+    "Command has no applicable supported non-interactive, zero-argument contract. No command was dispatched.",
+  COMMAND_NOT_AUTHORIZED:
+    "Command is outside the user-authorized scope. No command was dispatched.",
+  COMMAND_CONTEXT_CHANGED:
+    "Command admission context changed during discovery. No command was dispatched.",
+  COMMAND_BUSY:
+    "Four command handlers remain outstanding. Timeout or cancellation does not stop a handler; do not automatically retry an ambiguous invocation.",
   SYMBOL_NOT_FOUND:
     "No provider symbol matches. Check the exact name and selectors; provider availability is unknown.",
   SYMBOL_AMBIGUOUS:
@@ -93,6 +102,7 @@ function createMcpServer(
   execute: (operation: () => unknown) => Promise<unknown>,
   reserveResponse: (content: unknown, id: string | number) => void,
   signal: AbortSignal,
+  commands?: CommandApi,
 ) {
   const server = new McpServer({
     name: "vscode-workspace-mcp",
@@ -108,6 +118,7 @@ function createMcpServer(
     ) => unknown,
     readOnly = true,
     destructive = !readOnly,
+    openWorld = false,
   ) {
     const output = outputSchema(name);
     server.registerTool<typeof output, z.ZodObject<S>>(
@@ -119,7 +130,8 @@ function createMcpServer(
         annotations: {
           readOnlyHint: readOnly,
           destructiveHint: destructive,
-          openWorldHint: false,
+          openWorldHint: openWorld,
+          ...(openWorld ? { idempotentHint: false } : {}),
         },
       },
       async (args, extra) => {
@@ -639,6 +651,76 @@ function createMcpServer(
     }),
     (args) => workspace.codeActions(args, signal),
   );
+  tool(
+    "search_commands",
+    "Discover bounded live command IDs with untrusted manifest metadata and eligibility reasons. Never executes or activates handlers. Metadata is not ownership proof. Continue with nextOffset and unchanged query; inspect incomplete. Unknown or prompting commands cannot be invoked.",
+    z.strictObject({
+      query: z
+        .string()
+        .max(128)
+        .optional()
+        .describe(
+          "Case-insensitive literal substring in ID, title, category or extension ID; omit for all commands.",
+        ),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .max(10_000)
+        .optional()
+        .describe(
+          "Live filtered offset; default 0. Continue with nextOffset and unchanged query.",
+        ),
+      maxResults: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Maximum commands per page; default 20, maximum 100."),
+    }),
+    (args, requestSignal) =>
+      commands
+        ? commands.search(args, requestSignal)
+        : {
+            commands: [],
+            truncated: false,
+            incomplete: true,
+            scanned: 0,
+            consistency: "live",
+          },
+  );
+  tool(
+    "invoke_command",
+    "Execute one user-authorized command with an explicit version-specific non-interactive, zero-argument contract. May have external or destructive side effects. Unknown/prompting commands are rejected before dispatch. No UI is controlled. Reports handler completion, failure or completion_unconfirmed after a bounded wait. Timeout/cancellation cannot stop the handler: never automatically retry ambiguous execution. Only result type summaries are returned; raw payloads and errors are suppressed; completion does not prove business success.",
+    z.strictObject({
+      commandId: z
+        .string()
+        .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/)
+        .describe(
+          "Exact discovered ID with supported evidence and user authorization; no arguments are accepted.",
+        ),
+      timeoutMs: z
+        .number()
+        .int()
+        .min(1)
+        .max(20_000)
+        .optional()
+        .describe(
+          "Maximum wait; default/maximum 20000 ms, below the 30-second transport timeout.",
+        ),
+    }),
+    (args, requestSignal) => {
+      if (!commands)
+        throw Object.assign(new Error("Unsupported command"), {
+          code: "COMMAND_UNSUPPORTED",
+        });
+      return commands.invoke(args, requestSignal);
+    },
+    false,
+    true,
+    true,
+  );
   return server;
 }
 
@@ -752,6 +834,7 @@ export async function startServer(
     token?: string;
     authorized?: () => boolean;
     tls?: ServerIdentity;
+    commands?: CommandApi;
   } = {},
 ): Promise<{
   url: string;
@@ -948,6 +1031,7 @@ export async function startServer(
           );
         },
         controller.signal,
+        options.commands,
       );
       sessions.add(mcp);
       const transport = new StreamableHTTPServerTransport({
@@ -1009,6 +1093,9 @@ export async function startServer(
       host = `127.0.0.1:${address.port}`;
       resolve();
     });
+  }).catch((error: unknown) => {
+    options.commands?.dispose();
+    throw error;
   });
   return {
     url: `${options.tls ? "https" : "http"}://${host}/mcp`,
@@ -1018,6 +1105,7 @@ export async function startServer(
       if (closed) return;
       closed = true;
       workspace.dispose?.();
+      options.commands?.dispose();
       const closing = new Promise<void>((resolve) =>
         httpServer.close(() => resolve()),
       );

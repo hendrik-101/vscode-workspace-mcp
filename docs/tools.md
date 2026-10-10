@@ -55,3 +55,10 @@ for continuation, ambiguity and conservative full-range availability rules.
 - [Definitions, references and hover](navigation.md)
 - [Rename and code action previews](refactoring.md)
 - [Waiting for diagnostic events](diagnostics.md)
+
+## Direct commands
+
+`search_commands` discovers IDs and untrusted manifest metadata without probing
+handlers. `invoke_command` requires separate user authority and explicit supported
+zero-argument non-interactive evidence. Unknown/prompting commands are denied
+before dispatch. See [contracts, bounds and ADT limitations](commands.md).

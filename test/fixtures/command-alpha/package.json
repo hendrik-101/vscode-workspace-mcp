@@ -1,0 +1,84 @@
+{
+  "name": "issue40-alpha",
+  "publisher": "workspace-mcp-fixtures",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.137.0"
+  },
+  "main": "./extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "issue40.alpha.complete",
+        "title": "Alpha Complete",
+        "category": "Issue40"
+      },
+      {
+        "command": "issue40.alpha.undefined",
+        "title": "Alpha Undefined"
+      },
+      {
+        "command": "issue40.alpha.throw",
+        "title": "Alpha Throw"
+      },
+      {
+        "command": "issue40.alpha.reject",
+        "title": "Alpha Reject"
+      },
+      {
+        "command": "issue40.alpha.hang",
+        "title": "Alpha Wait"
+      },
+      {
+        "command": "issue40.alpha.release",
+        "title": "Alpha Release"
+      },
+      {
+        "command": "issue40.alpha.prompt",
+        "title": "Alpha Prompt"
+      }
+    ]
+  },
+  "workspaceMcpCommandContracts": [
+    {
+      "command": "issue40.alpha.complete",
+      "extensionVersion": "1.0.0",
+      "arguments": "none",
+      "interaction": "none",
+      "context": "workspace",
+      "documentation": "https://example.invalid/issue40-alpha"
+    },
+    {
+      "command": "issue40.alpha.undefined",
+      "extensionVersion": "1.0.0",
+      "arguments": "none",
+      "interaction": "none",
+      "context": "workspace",
+      "documentation": "https://example.invalid/issue40-alpha"
+    },
+    {
+      "command": "issue40.alpha.throw",
+      "extensionVersion": "1.0.0",
+      "arguments": "none",
+      "interaction": "none",
+      "context": "workspace",
+      "documentation": "https://example.invalid/issue40-alpha"
+    },
+    {
+      "command": "issue40.alpha.reject",
+      "extensionVersion": "1.0.0",
+      "arguments": "none",
+      "interaction": "none",
+      "context": "workspace",
+      "documentation": "https://example.invalid/issue40-alpha"
+    },
+    {
+      "command": "issue40.alpha.hang",
+      "extensionVersion": "1.0.0",
+      "arguments": "none",
+      "interaction": "none",
+      "context": "workspace",
+      "documentation": "https://example.invalid/issue40-alpha"
+    }
+  ]
+}
