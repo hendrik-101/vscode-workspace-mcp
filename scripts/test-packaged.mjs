@@ -18,7 +18,15 @@ export async function testPackaged({
     await readFile(join(project, "package.json"), "utf8"),
   );
   const current = join(temporary, "current.vsix");
-  await createVSIX({ cwd: project, packagePath: current, dependencies: false });
+  if (process.env.WORKSPACE_MCP_VSIX) {
+    await cp(join(project, process.env.WORKSPACE_MCP_VSIX), current);
+  } else {
+    await createVSIX({
+      cwd: project,
+      packagePath: current,
+      dependencies: false,
+    });
+  }
 
   // There is no released predecessor yet. Use a clearly synthetic lower version
   // with different adapter bytes to exercise a real VS Code installer upgrade.

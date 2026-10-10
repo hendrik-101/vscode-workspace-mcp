@@ -163,7 +163,10 @@ export async function installAdapter(
             fs.rename(stagedEntry, entry, { overwrite: false }),
           );
         } catch (error) {
-          if ((error as { code?: string }).code !== "FileExists") throw error;
+          // Providers can report a concurrent no-overwrite rename as FileExists,
+          // EPERM or another error. Accept only a verified compatible winner.
+          checkCurrent();
+          if (!(await verifyLauncher())) throw error;
         }
         await verifyLauncher();
       }

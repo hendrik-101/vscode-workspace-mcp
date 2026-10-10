@@ -51,6 +51,9 @@ test("release notes select only the matching changelog and include revision and 
     assert.match(notes, /a{40}/);
     assert.match(notes, /Acceptance issue #1/);
     assert.match(notes, /Security scan #2/);
+    assert.match(notes, /draft-only preview/);
+    assert.match(notes, /not a Marketplace publication/);
+    assert.doesNotMatch(notes, /separate workflow job/);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

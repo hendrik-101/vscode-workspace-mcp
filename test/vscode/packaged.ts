@@ -231,7 +231,7 @@ export async function run(): Promise<void> {
   assert.ok(["file", "vscode-userdata"].includes(storageScheme));
   const statePath = process.env.WORKSPACE_MCP_TEST_STATE!;
   const extension = vscode.extensions.getExtension(
-    "hendrik-101.vscode-workspace-mcp",
+    "hendrik101.vscode-workspace-mcp",
   );
   assert.ok(extension, "The product VSIX must be installed");
   assert.ok(
