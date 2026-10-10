@@ -156,6 +156,70 @@ test(
   },
 );
 
+for (const method of ["ping", "tools/call"]) {
+  test(
+    `stdio reclaims cancelled numeric ID 0 for ${method}`,
+    { timeout: 10000 },
+    async (t) => {
+      // SDK 1.31.0 itself ignores ID 0 cancellation. Model its documented
+      // cancellation behavior so the adapter cleanup remains correct when that
+      // upstream bug is fixed; otherwise a normal reply masks the reservation leak.
+      const protocol = Server.prototype as unknown as {
+        _oncancel: (notification: { params: { requestId: number } }) => void;
+        _requestHandlerAbortControllers: Map<number, AbortController>;
+      };
+      t.mock.method(
+        protocol,
+        "_oncancel",
+        function (
+          this: typeof protocol,
+          notification: { params: { requestId: number } },
+        ) {
+          this._requestHandlerAbortControllers
+            .get(notification.params.requestId)
+            ?.abort();
+        },
+      );
+      const tls = await identity();
+      const bridge = await startServer(workspace, { tls });
+      t.after(() => bridge.close());
+      const incoming = new PassThrough();
+      const outgoing = new PassThrough();
+      const replies: { id: number; result?: unknown; error?: unknown }[] = [];
+      outgoing.on("data", (chunk) => {
+        for (const line of chunk.toString().trim().split("\n"))
+          replies.push(JSON.parse(line));
+      });
+      const adapter = await startAdapter({
+        url: bridge.url,
+        token: bridge.token,
+        certificate: tls.cert,
+        input: incoming,
+        output: outgoing,
+      });
+      t.after(() => adapter.close());
+      const cancelled =
+        JSON.stringify({ jsonrpc: "2.0", id: 0, method, params: {} }) +
+        "\n" +
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 0 },
+        }) +
+        "\n";
+      incoming.write(cancelled);
+      await new Promise((resolve) => setImmediate(resolve));
+      // Reusing the cancelled ID must remain possible; a leaked reservation closes
+      // the connection as an active duplicate instead of answering this ping.
+      incoming.write(
+        JSON.stringify({ jsonrpc: "2.0", id: 0, method: "ping" }) + "\n",
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(replies, [{ jsonrpc: "2.0", id: 0, result: {} }]);
+    },
+  );
+}
+
 test(
   "stdio reserves aggregate request bytes before forwarding and reuses them after settlement",
   { timeout: 20000 },

@@ -307,7 +307,7 @@ export async function startAdapter(options: AdapterOptions) {
       }
       const cancelled = CancelledNotificationSchema.safeParse(message);
       const reservation =
-        cancelled.success && cancelled.data.params.requestId
+        cancelled.success && cancelled.data.params.requestId !== undefined
           ? requests.get(cancelled.data.params.requestId)
           : undefined;
       requestContext.run(undefined, () => dispatch?.(message));
