@@ -37,6 +37,9 @@ export function createCommandService(
   const service = new CommandService({
     getCommands: () => vscode.commands.getCommands(true),
     extensions: () => {
+      // CommandService snapshots are synchronous and scan all manifests before
+      // yielding. Rebuild the current bounded set; another request cannot observe
+      // it partially rebuilt. Registry changes also advance generation above.
       prerequisiteKeys.clear();
       return vscode.extensions.all;
     },
