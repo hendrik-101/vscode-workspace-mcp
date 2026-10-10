@@ -1,7 +1,7 @@
 # Workspace MCP
 
 <!-- prettier-ignore -->
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/hendrik-101/vscode-workspace-mcp?utm_source=oss&amp;utm_medium=github&amp;utm_campaign=hendrik-101%2Fvscode-workspace-mcp&amp;labelColor=171717&amp;color=FF570A&amp;link=https%3A%2F%2Fcoderabbit.ai&amp;label=CodeRabbit+Reviews)
+[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/hendrik-101/vscode-workspace-mcp?utm_source=oss&amp;utm_medium=github&amp;utm_campaign=hendrik-101%2Fvscode-workspace-mcp&amp;labelColor=171717&amp;color=FF570A&amp;link=https%3A%2F%2Fcoderabbit.ai&amp;label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
 Connect MCP clients such as Codex and Claude Code to the workspace open in VS Code,
 including virtual filesystems such as SAP ADT. Read live editor content, inspect

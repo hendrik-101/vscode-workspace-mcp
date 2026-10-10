@@ -53,8 +53,9 @@ Before handoff:
 2. Resolve every review conversation. Inspect formal reviews too: a clean comment
    or status does not supersede `CHANGES_REQUESTED`. Obtain the reviewer's formal
    re-review; never dismiss it or weaken protection to unblock merging.
-3. Mark the draft ready only after current-head gates pass. Await automatic
-   reviews triggered by that transition and address new findings. Codex's
+3. Mark the draft ready only after the initial current-head gates pass. Keep it
+   ready but unmerged while automatic reviews triggered by that transition are
+   pending; their completion and any new findings are also merge gates. Codex's
    documented clean-result thumbs-up counts only when attributable to the latest
    trigger and unchanged head; eyes or older thumbs-up reactions do not.
 4. Read GitHub's authenticated PR page or REST merge gate. Require
@@ -103,8 +104,9 @@ Keep CodeRabbit on the existing included allowance (one free review per hour in
 the current project arrangement). Coordinate requests across open PRs: finish the
 already queued review first, batch fixes before requesting the next review, and
 wait for capacity rather than buying credits, upgrading or using approval
-overrides. Keep PRs draft while their reviews are pending; do not
-mark ready merely to trigger another run. A draft is not proof that every external
+overrides. Keep PRs draft until the initial current-head review gates pass, then
+follow the transition check above and leave them unmerged. Do not mark ready merely to
+trigger another run. A draft is not proof that every external
 bot suppresses automatic reviews; inspect actual bot activity before requesting.
 
 ## Security scans and releases
