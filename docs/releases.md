@@ -7,17 +7,22 @@ macOS. They do not publish. The owner deliberately pushes an annotated `vX.Y.Z`
 tag to authorize automatic GitHub and Marketplace publication of that version,
 but only after explicitly enabling the repository publishing switch.
 The tag must point to a commit reachable from `main`. Release tags are never moved
-or reused. Protect `v*` tags with a GitHub ruleset allowing creation only by the owner/release
-process and blocking updates and deletion without bypass permissions.
+or reused. Protect `v*` tags with a GitHub ruleset allowing creation only by the repository
+owner and blocking updates and deletion without bypass permissions.
 
 The **Publish tagged release** workflow validates the tag, then reuses the complete
 three-platform CI workflow. Its packaged tests install the actual uploaded VSIX,
 including upgrade/reinstall checks. It publishes the tested Linux artifact as one
 platform-independent VSIX, with SHA256 and release notes. A separate job publishes
 that same artifact to VS Code Marketplace under `hendrik101`.
-The privileged jobs do not check out or execute repository scripts. GitHub and
-Marketplace publication are jobs in one workflow, avoiding reliance on events
-created by `GITHUB_TOKEN` to start another workflow.
+The GitHub publication job does not check out or execute repository scripts.
+The Marketplace job checks out the validated commit without persisted credentials
+and installs its reviewed lockfile with `npm ci --ignore-scripts` before
+Marketplace authentication. Package-manager caching is disabled; both authentication
+paths invoke the local locked `vsce` binary. No repository scripts or dependency
+lifecycle hooks run in that job. GitHub and Marketplace publication are jobs in
+one workflow, avoiding reliance on events created by `GITHUB_TOKEN` to start
+another workflow.
 
 ## Prepared, disabled by default
 
@@ -36,10 +41,18 @@ When the owner is ready to activate publishing:
 
 1. Merge the reviewed release PR, finish the authentication setup below and protect
    release tags. Complete the real acceptance and Security scan for the release.
-2. In repository **Settings → Secrets and variables → Actions → Variables**, create
+2. Verify the publisher dependency-lock remediation in the reviewed release
+   revision: the Marketplace job checks out the validated SHA without persisted
+   credentials, disables package-manager caching, runs `npm ci --ignore-scripts`
+   before authentication and uses the local `vsce` binary for both authentication
+   paths. Confirm the lockfile is reviewed and current-head CI and security review
+   pass. Do not enable publishing while this remediation or verification is pending.
+3. In repository **Settings → Secrets and variables → Actions → Variables**, create
    the repository variable `RELEASE_PUBLISHING_ENABLED` with value `true`.
-3. Push a new, unused annotated release tag as described below. Enabling the
-   variable does not replay earlier tag events; do not reuse or move skipped tags.
+4. As the repository owner, push a new, unused annotated release tag as described
+   below. Tags pushed by another account are skipped. Enabling the variable does
+   not replay earlier tag events; do not reuse or move skipped tags. An owner rerun
+   retains the original push actor and cannot authorize a non-owner tag event.
 
 To suspend future tag releases, delete the variable or set it to `false`.
 This is an entry gate, not cancellation of a release that has already started.
@@ -85,7 +98,8 @@ in annotations or release notes. Replace the example references with real eviden
 
 5. After CI is green, publication authentication is configured and the repository
    publishing switch is enabled, tag the exact
-   approved main commit. This explicit action authorizes both publications:
+   approved main commit and push it using the repository owner's account (not a
+   bot or another collaborator). This explicit action authorizes both publications:
 
 ```sh
 git tag -a v0.1.0 <approved-main-commit-sha> -F <tag-message-file>

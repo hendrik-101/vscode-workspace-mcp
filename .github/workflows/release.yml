@@ -135,6 +135,10 @@ jobs:
       MARKETPLACE_AUTH: ${{ vars.MARKETPLACE_AUTH || 'entra' }}
       AZURE_CORE_OUTPUT: none
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.assets.outputs.artifact-id }}
@@ -142,8 +146,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - name: Install pinned publishing tool without lifecycle scripts
-        run: npm install --global --ignore-scripts @vscode/vsce@4.0.0
+          package-manager-cache: false
+      - name: Install locked publishing dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
       - name: Validate publishing setup and checksum
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -172,7 +177,7 @@ jobs:
             stable) channel_args=() ;;
             *) exit 1 ;;
           esac
-          vsce publish --azure-credential --packagePath "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" "${channel_args[@]}"
+          ./node_modules/.bin/vsce publish --azure-credential --packagePath "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" "${channel_args[@]}"
       - name: Publish exact VSIX with explicitly selected PAT authentication
         if: env.MARKETPLACE_AUTH == 'pat'
         env:
@@ -184,4 +189,4 @@ jobs:
             stable) channel_args=() ;;
             *) exit 1 ;;
           esac
-          vsce publish --packagePath "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" "${channel_args[@]}"
+          ./node_modules/.bin/vsce publish --packagePath "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" "${channel_args[@]}"

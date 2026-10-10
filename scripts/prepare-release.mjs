@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 try {
   const version = process.argv[2];
+  const draft = process.argv[3] === undefined;
   const channel = process.argv[3] ?? "preview";
   if (!["preview", "stable"].includes(channel))
     throw new Error("channel must be preview or stable");
@@ -46,7 +47,7 @@ try {
   mkdirSync("artifacts", { recursive: true });
   writeFileSync(
     "artifacts/release-notes.md",
-    `# Workspace MCP ${version}${channel === "preview" ? " preview" : ""}\n\nCommit: ${sha}\n\n${entry[0][2].trim()}\n\n## Validation evidence\n\n- SAP/client acceptance: ${acceptance.trim()}\n- Codex Security repository scan: ${security.trim()}\n\nInstall the attached VSIX with **Extensions: Install from VSIX**. Verify its SHA256 against the attached checksum file. ${channel === "preview" ? "This is a preview release. " : ""}Marketplace publication is a separate workflow job; consult its result.\n`,
+    `# Workspace MCP ${version}${channel === "preview" ? " preview" : ""}\n\nCommit: ${sha}\n\n${entry[0][2].trim()}\n\n## Validation evidence\n\n- SAP/client acceptance: ${acceptance.trim()}\n- Codex Security repository scan: ${security.trim()}\n\nInstall the attached VSIX with **Extensions: Install from VSIX**. Verify its SHA256 against the attached checksum file. ${channel === "preview" ? "This is a preview release. " : ""}${draft ? "This is a draft-only preview, not a Marketplace publication." : "Marketplace publication is a separate workflow job; consult its result."}\n`,
   );
 } catch (error) {
   console.error(`Release validation: ${error.message}`);

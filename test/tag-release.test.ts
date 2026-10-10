@@ -88,6 +88,8 @@ test("annotated tag produces release metadata and notes for its exact main commi
     assert.ok(notes.includes(sha));
     assert.match(notes, /redacted acceptance reference/);
     assert.match(notes, /redacted scan reference/);
+    assert.match(notes, /Marketplace publication is a separate workflow job/);
+    assert.doesNotMatch(notes, /draft-only|not a Marketplace publication/);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
