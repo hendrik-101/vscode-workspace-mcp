@@ -145,6 +145,7 @@ export async function startAdapter(options: AdapterOptions) {
   };
   const requestContext = new AsyncLocalStorage<Reservation | undefined>();
   const requests = new Map<string | number, Reservation>();
+  const refusedIds = new Set<string | number>();
   const releaseRequest = (reservation: Reservation | undefined) => {
     if (!reservation || requests.get(reservation.id) !== reservation) return;
     requestBytes -= reservation.bytes;
@@ -246,6 +247,26 @@ export async function startAdapter(options: AdapterOptions) {
       releaseRequest(reservation);
     }
   };
+  // Keep only the refusal ID/message alive through backpressure, not the
+  // rejected frame (which may exceed the remaining admitted-byte budget).
+  const refuse = async (id: string | number, message: string) => {
+    refusedIds.add(id);
+    try {
+      await stdio.send({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: ErrorCode.InternalError,
+          message,
+          data: { code: "LIMIT_EXCEEDED" },
+        },
+      });
+    } catch {
+      await close();
+    } finally {
+      refusedIds.delete(id);
+    }
+  };
   const start = stdio.start.bind(stdio);
   stdio.start = async () => {
     // Install before the SDK attaches its input listener. Admit the complete
@@ -257,7 +278,7 @@ export async function startAdapter(options: AdapterOptions) {
       if ("method" in message && "id" in message) {
         // Reusing a live id makes replies/cancellation ambiguous; fail closed
         // rather than allowing a refusal to release the original reservation.
-        if (requests.has(message.id)) {
+        if (requests.has(message.id) || refusedIds.has(message.id)) {
           void close();
           return;
         }
@@ -285,21 +306,9 @@ export async function startAdapter(options: AdapterOptions) {
           }
         }
         if (refusal) {
-          // A refusal owns no admitted reservation, even if its id is reused
-          // while the compact error is waiting for stdout to drain.
-          void requestContext
-            .run(undefined, () =>
-              stdio.send({
-                jsonrpc: "2.0",
-                id: message.id,
-                error: {
-                  code: ErrorCode.InternalError,
-                  message: refusal,
-                  data: { code: "LIMIT_EXCEEDED" },
-                },
-              }),
-            )
-            .catch(() => close());
+          // Refusals own no admitted request bytes, but their IDs stay active
+          // until the compact error drains, just like admitted response IDs.
+          void requestContext.run(undefined, refuse, message.id, refusal);
           return;
         }
         requestContext.run(reservation, () => dispatch?.(message));

@@ -156,6 +156,64 @@ test(
   },
 );
 
+for (const reuseBeforeDrain of [true, false]) {
+  test(`stdio ${reuseBeforeDrain ? "rejects" : "allows"} refused ID reuse ${reuseBeforeDrain ? "before" : "after"} stdout drains`, async (t) => {
+    const tls = await identity();
+    const bridge = await startServer(workspace, { tls });
+    t.after(() => bridge.close());
+    const incoming = new PassThrough();
+    const outgoing = new PassThrough({ highWaterMark: 1 });
+    const replies: {
+      id: number;
+      result?: unknown;
+      error?: { data?: { code?: string } };
+    }[] = [];
+    outgoing.on("data", (chunk) => {
+      for (const line of chunk.toString().trim().split("\n"))
+        replies.push(JSON.parse(line));
+    });
+    outgoing.pause();
+    const adapter = await startAdapter({
+      url: bridge.url,
+      token: bridge.token,
+      certificate: tls.cert,
+      input: incoming,
+      output: outgoing,
+    });
+    t.after(() => adapter.close());
+    const frame = (message: object) =>
+      JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n";
+    // Fill admission slots, queue one refused reply, then cancel all accepted
+    // pings before the SDK can reply. Only the refusal remains under backpressure.
+    incoming.write(
+      Array.from({ length: 17 }, (_, i) =>
+        frame({ id: i + 1, method: "ping" }),
+      ).join("") +
+        Array.from({ length: 16 }, (_, i) =>
+          frame({
+            method: "notifications/cancelled",
+            params: { requestId: i + 1 },
+          }),
+        ).join(""),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(outgoing.writableLength > 0);
+    assert.equal(replies.length, 0);
+    if (!reuseBeforeDrain) {
+      outgoing.resume();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    incoming.write(frame({ id: 17, method: "ping" }));
+    await new Promise((resolve) => setImmediate(resolve));
+    outgoing.resume();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(replies[0]?.error?.data?.code, "LIMIT_EXCEEDED");
+    assert.equal(replies.length, reuseBeforeDrain ? 1 : 2);
+    if (reuseBeforeDrain) assert.equal(incoming.readableFlowing, false);
+    else assert.deepEqual(replies[1], { jsonrpc: "2.0", id: 17, result: {} });
+  });
+}
+
 test(
   "stdio retains ID 0 capacity when the pinned SDK ignores cancellation",
   { timeout: 15000 },
