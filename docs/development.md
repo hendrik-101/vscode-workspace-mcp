@@ -68,6 +68,45 @@ self-approval by the sole maintainer. Owner authorization is required for each
 merge; no auto-merge or administrator bypass. Prefer squash merges with rationale
 and validation in the commit. GitHub may delete the source branch after merging.
 
+### Codex review focus and supported controls
+
+The repository's [Code Review Rules](../AGENTS.md#code-review-rules) focus review on
+reachable failures at workspace, permission, protocol and resource boundaries.
+They guide review; they do not enforce correctness or replace any gate above.
+
+| Control                            | Scope and limitation                                                                                                 |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `AGENTS.md` Code Review Rules      | Supported repository guidance for GitHub review. Root rules cover the repository; nested rules can specialize paths. |
+| `@codex review for issues in …`    | Supported one-off focus in a PR comment. Include the current head SHA and concrete boundaries to inspect.            |
+| Automatic review / Review trigger  | Account-side Codex settings for connected repositories; cannot be enabled by repository YAML.                        |
+| Local `/review` and `review_model` | Local Codex review and optional model override; not a documented GitHub cloud review model setting.                  |
+| `model_reasoning_effort`           | Local session configuration with model/client-dependent levels; not a documented GitHub review-depth control.        |
+
+See OpenAI's [GitHub review documentation](https://developers.openai.com/codex/integrations/github)
+and [configuration reference](https://developers.openai.com/codex/config-reference).
+The GitHub documentation currently describes P0/P1 reporting. Broader local review
+can surface lower-severity correctness or maintainability concerns, but guidance
+does not guarantee exhaustive findings, a comment count or a severity override.
+No repository setting here forces cloud model, reasoning effort or reviewer count.
+Leave account settings, subscriptions, credits, permissions and CI gates unchanged.
+
+For additional coverage, run independent read-only Codex passes in parallel on the
+same immutable base/head diff: one for workspace/security admission, one for
+concurrency/cancellation/resource ownership, and one for protocol contracts,
+regressions and simplification. Give every pass the applicable repository guidance
+and require a concrete failure sequence and impact. Reconcile duplicate findings,
+verify them against callers/guards/tests, and record each pass's revision and
+limitations. These are supplemental reviews, not substitutes for cloud review,
+CodeRabbit or Security scans. Repeat affected passes when the head changes.
+
+Keep CodeRabbit on the existing included allowance (one free review per hour in
+the current project arrangement). Coordinate requests across open PRs: finish the
+already queued review first, batch fixes before requesting the next review, and
+wait for capacity rather than buying credits, upgrading or using approval
+overrides. Keep PRs draft while their reviews are pending; do not
+mark ready merely to trigger another run. A draft is not proof that every external
+bot suppresses automatic reviews; inspect actual bot activity before requesting.
+
 ## Security scans and releases
 
 Before initial-delivery completion and every release, run an actual Codex Security
