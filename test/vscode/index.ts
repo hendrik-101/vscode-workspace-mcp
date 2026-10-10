@@ -166,7 +166,7 @@ export async function run(): Promise<void> {
       "VS Code integration: Start and Stop complete without toast dismissal",
     );
     const extension = vscode.extensions.getExtension(
-      "hendrik-101.vscode-workspace-mcp",
+      "hendrik101.vscode-workspace-mcp",
     );
     assert.ok(extension, "Development extension must be installed in the host");
     await extension.activate();

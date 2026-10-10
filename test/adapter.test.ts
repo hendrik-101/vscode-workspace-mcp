@@ -289,6 +289,53 @@ test("concurrent compatible installations leave a complete runnable adapter", as
   assert.equal(f.launch(paths[0]!), "first");
 });
 
+for (const winner of ["compatible", "foreign", "missing", "cancelled"] as const)
+  test(`launcher rename permission race handles a ${winner} winner safely`, async (t) => {
+    const f = await fixture(t);
+    const rename = f.api.rename;
+    let cancelled = false;
+    f.api.rename = async (from, to, options) => {
+      if (!basename(from.fsPath).startsWith(".launcher-"))
+        return rename(from, to, options);
+      if (winner !== "missing")
+        await fs.writeFile(
+          to.fsPath,
+          winner === "foreign"
+            ? "foreign launcher"
+            : await fs.readFile(from.fsPath),
+        );
+      cancelled = winner === "cancelled";
+      throw Object.assign(new Error("rename denied"), { code: "EPERM" });
+    };
+    const installing = f.install(f.context, () => {
+      if (cancelled) throw new Error("cancelled");
+    });
+    const directory = join(f.context.globalStorageUri.fsPath, "adapter-v1");
+    if (winner === "compatible") {
+      assert.equal(f.launch(await installing), "first");
+    } else {
+      await assert.rejects(
+        installing,
+        winner === "foreign"
+          ? /unrecognized|modified/
+          : winner === "cancelled"
+            ? /cancelled/
+            : /rename denied/,
+      );
+      assert.equal(
+        (await fs.readdir(directory)).filter((entry) =>
+          entry.endsWith(".ready"),
+        ).length,
+        0,
+      );
+      if (winner === "foreign")
+        assert.equal(
+          await fs.readFile(join(directory, "stdio.cjs"), "utf8"),
+          "foreign launcher",
+        );
+    }
+  });
+
 test("concurrent different versions publish complete bundles and a later Start selects its version", async (t) => {
   const first = await fixture(t);
   const second = await fixture(t);
