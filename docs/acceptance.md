@@ -63,3 +63,13 @@ On the work device:
   Auto Save off; reject stale versions and keep saving separate.
 
 Synthetic providers exercise these paths in CI, not SAP ADT provider compatibility.
+
+## Direct-command fixtures
+
+The development-host suite loads two independent fixture extensions with their
+own manifests and real handlers. It verifies passive discovery without activation,
+zero-argument execution, predispatch refusal of prompting commands, authorization
+revocation, cancellation, safe undefined/failure/opaque results and four outstanding
+handlers retained across bridge restarts. These fixtures do not prove production
+extension contracts, SAP authentication or backend compatibility. Resource arguments
+and autonomous Log On to Destination remain unsupported; see [commands](commands.md).

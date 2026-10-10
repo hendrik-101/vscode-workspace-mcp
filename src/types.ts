@@ -375,6 +375,10 @@ export interface WorkspaceApi {
 }
 
 export type WorkspaceErrorCode =
+  | "COMMAND_UNSUPPORTED"
+  | "COMMAND_NOT_AUTHORIZED"
+  | "COMMAND_CONTEXT_CHANGED"
+  | "COMMAND_BUSY"
   | "SYMBOL_NOT_FOUND"
   | "SYMBOL_AMBIGUOUS"
   | "SYMBOL_RANGE_UNAVAILABLE"

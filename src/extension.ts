@@ -21,6 +21,7 @@ import { installAdapter } from "./adapter";
 import { startServer } from "./server";
 import { BridgeSession } from "./session";
 import { WorkspaceService } from "./workspace";
+import { createCommandService } from "./commands-vscode";
 
 let running: BridgeSession | undefined;
 let runningIdentity: ServerIdentity | undefined;
@@ -297,6 +298,7 @@ export function activate(context: vscode.ExtensionContext): void {
             token,
             tls: identity,
             authorized: () => access.allowed,
+            commands: createCommandService(() => access.allowed),
           }).then(async (connection) => {
             const created = new BridgeSession(connection);
             if (requestedGeneration !== generation) {

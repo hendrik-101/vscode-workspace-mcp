@@ -37,8 +37,8 @@ write-policy or provider behavior changes are included.
 
 ## Context cost
 
-Run `npm run measure:context` to reproduce the current 20-tool measurement,
-including the registered `read_symbol`. `npm test` also runs the context budget
+Run `npm run measure:context` to reproduce the current 22-tool measurement,
+including `read_symbol`, `search_commands` and `invoke_command`. `npm test` also runs the context budget
 check. The harness starts the real server on loopback and uses the official MCP
 SDK client. Its fetch wrapper measures the actual UTF-8 JSON response body before
 the SDK parses it; this includes the JSON-RPC envelope but excludes HTTP headers,
@@ -46,7 +46,7 @@ TLS framing, requests and initialization. It separately reports compact JSON siz
 for each advertised tool definition, its input/output schemas, and tool results.
 The SDK validates the representative structured results against discovered schemas.
 
-Baseline with SDK 1.30.0 and Node 24.19.0:
+Historical 20-tool baseline with SDK 1.30.0 and Node 24.19.0:
 
 | Discovery component                      |  Bytes |
 | ---------------------------------------- | -----: |
@@ -106,3 +106,8 @@ search consistency/limits are required because the merged implementations always
 return them. Conditional continuations, symbol selection/container fields,
 diagnostic source/code fields and their clipping flags remain optional. Loose
 objects still preserve future additions.
+
+Direct command discovery adds compact metadata/eligibility schemas. Invocation
+returns completion or failure and a type summary; raw handler payloads/errors
+never cross MCP. Its hints conservatively advertise destructive, open-world,
+non-idempotent effects. See [command contracts](commands.md).
