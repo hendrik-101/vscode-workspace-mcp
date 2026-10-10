@@ -4,6 +4,7 @@ import { createServer } from "node:https";
 import { PassThrough } from "node:stream";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { once } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -14,6 +15,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { startAdapter } from "../src/stdio";
+import { jsonBytes } from "../src/responseBudget";
 import { storedIdentity } from "../src/tls";
 import { startServer } from "../src/server";
 import { workspace } from "./fixtures/workspace";
@@ -37,6 +39,57 @@ const tool = {
     required: ["value"],
   },
 };
+
+test(
+  "stdio closes when a bridge response exceeds adapter nesting",
+  { timeout: 5000 },
+  async (t) => {
+    let nested: unknown = "leaf";
+    for (let i = 0; i < 125; i++) nested = { nested };
+    const result = {
+      ...(await workspace.read({ uri: "memfs:/project/a" })),
+      nested,
+    };
+    const structuredContent = { result };
+    // HTTP admits this additive metadata, but the stdio envelope adds two levels.
+    assert.doesNotThrow(() => jsonBytes(structuredContent, true));
+    assert.throws(
+      () => jsonBytes({ result: { structuredContent } }),
+      /nesting/,
+    );
+    const tls = await identity();
+    const bridge = await startServer(
+      { ...workspace, read: async () => result },
+      { tls },
+    );
+    t.after(() => bridge.close());
+    const incoming = new PassThrough();
+    const outgoing = new PassThrough();
+    const adapter = await startAdapter({
+      url: bridge.url,
+      token: bridge.token,
+      certificate: tls.cert,
+      input: incoming,
+      output: outgoing,
+    });
+    t.after(() => adapter.close());
+    const stopped = once(incoming, "pause");
+    incoming.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "read_document",
+          arguments: { uri: "memfs:/project/a" },
+        },
+      }) + "\n",
+    );
+    await stopped;
+    assert.equal(incoming.readableFlowing, false);
+    assert.equal(outgoing.readableLength, 0);
+  },
+);
 
 test("stdio rejects structurally expansive frames before the SDK parses them", async (t) => {
   const tls = await identity();

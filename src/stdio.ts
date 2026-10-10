@@ -208,7 +208,11 @@ export async function startAdapter(options: AdapterOptions) {
     try {
       release = responseBudget.reserve(jsonBytes(message) + 1);
     } catch (error) {
-      if (!(error instanceof MemoryLimitError)) throw error;
+      if (!(error instanceof MemoryLimitError)) {
+        releaseRequest(reservation);
+        await close();
+        throw unavailable();
+      }
       if (!("result" in message) || !("content" in message.result)) {
         await close();
         throw unavailable();
