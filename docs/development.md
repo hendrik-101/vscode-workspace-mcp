@@ -111,6 +111,18 @@ bot suppresses automatic reviews; inspect actual bot activity before requesting.
 
 ## Security scans and releases
 
+### Owner decision for release 0.1.0
+
+On October 12, 2026 at 21:02 UTC, the owner explicitly authorized the squash
+merge of [PR #44](https://github.com/hendrik-101/vscode-workspace-mcp/pull/44) and
+release 0.1.0 after the existing CodeRabbit review, without a separate Codex
+Security repository scan or SAP acceptance. This release-specific decision
+overrides those two prerequisites below. It does not claim that either check
+was performed or change CI, credentials, access controls or tag protection.
+Record the owner decision honestly in the release annotation and notes.
+
+### General release guidance
+
 Before initial-delivery completion and every release, run an actual Codex Security
 repository scan and record its revision/result. Security-sensitive PRs also need
 Security Review. PR reviews, `npm audit`, CodeQL and manual review do not replace

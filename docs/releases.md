@@ -75,6 +75,16 @@ and [Entra free/Premium capabilities](https://learn.microsoft.com/en-us/entra/wo
 
 ## Prepare a version
 
+For release **0.1.0**, the owner explicitly waived the separate Codex Security
+repository scan and SAP acceptance on October 12, 2026 at 21:02 UTC and authorized
+the reviewed [PR #44](https://github.com/hendrik-101/vscode-workspace-mcp/pull/44)
+merge and publication. The existing CodeRabbit review was accepted. This exception
+overrides those evidence requirements in preparation and activation steps; it
+does not change publishing authentication, access controls, CI or tag protection.
+Keep the required `Acceptance` and `Security` annotation fields, stating the owner
+waivers and completed checks rather than claiming an unperformed scan or real SAP
+acceptance. See [development guidance](development.md#owner-decision-for-release-010).
+
 1. Merge reviewed changes through the [development gates](development.md).
 2. Set a numeric version in `package.json` and both lockfile entries and add one
    nonempty matching `CHANGELOG.md` entry. Publisher must remain `hendrik101`.

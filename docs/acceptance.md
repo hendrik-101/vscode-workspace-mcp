@@ -1,5 +1,11 @@
 # SAP ADT and client acceptance
 
+For release 0.1.0, the owner explicitly waived SAP acceptance on October 12, 2026
+at 21:02 UTC. The automated checks below remain useful validation; they must not
+be described as real SAP/backend or native-client acceptance. The manual checklist
+remains available for future acceptance work, but is not a gate for this release.
+See the [release decision](releases.md#prepare-a-version).
+
 ## Automated coexistence
 
 `xvfb-run -a npm run test:vscode -- --adt` installs SAPSE.adt-vscode 1.1.2 in an
