@@ -14,8 +14,8 @@
   user authorization and an exact-version, non-interactive extension contract.
   Handler payloads are omitted; completion does not establish business success.
 - Larger bounded formatting/refactoring previews (10,000 edits): formatting allows
-  8 MiB cumulative replacement text; refactoring allows 8 MiB cumulative replacement
-  text plus target URI bytes. Diagnostic inspection covers up to 5,000 entries,
+  8 MiB cumulative replacement text; the 8 MiB cumulative refactoring budget includes
+  both replacement text and target URI bytes. Diagnostic inspection covers 5,000 entries,
   with cumulative resource budgets.
   Full previews may require a larger client receive buffer.
 - Workspace Trust, Auto Save protection and session or persistent write policies.
