@@ -10,6 +10,14 @@
 - Provider definitions, references and hover; document reveal and diff previews.
 - Formatting, rename and code-action previews; version-checked text edits and
   separate saves. Applied formatting responses stay compact.
+- Direct-command discovery and zero-argument invocation, requiring separate
+  user authorization and an exact-version, non-interactive extension contract.
+  Handler payloads are omitted; completion does not establish business success.
+- Larger bounded formatting/refactoring previews (10,000 edits): formatting allows
+  8 MiB cumulative replacement text; the 8 MiB cumulative refactoring budget includes
+  both replacement text and target URI bytes. Diagnostic inspection covers 5,000 entries,
+  with cumulative resource budgets.
+  Full previews may require a larger client receive buffer.
 - Workspace Trust, Auto Save protection and session or persistent write policies.
 - Authenticated loopback TLS, certificate pinning, token/identity rotation and a
   bundled stdio adapter whose configured path survives extension upgrades.
@@ -22,4 +30,6 @@
   Entra workload federation or explicitly selected PAT authentication. The manual
   draft preview workflow remains available.
 - Update MCP SDK to 1.31.0 to resolve the production dependency audit advisory.
+- Generic workspace APIs remain independent of SAP ADT. File/folder creation,
+  ABAP object creation, autonomous ADT login and backend activation are not included.
 - MIT licensed, without telemetry, shell tools or arbitrary command execution.
