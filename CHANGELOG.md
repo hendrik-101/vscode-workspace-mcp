@@ -13,8 +13,10 @@
 - Direct-command discovery and zero-argument invocation, requiring separate
   user authorization and an exact-version, non-interactive extension contract.
   Handler payloads are omitted; completion does not establish business success.
-- Larger bounded formatting/refactoring previews (10,000 edits, 8 MiB replacement
-  text) and diagnostic inspection (5,000 entries), with cumulative resource budgets.
+- Larger bounded formatting/refactoring previews (10,000 edits): formatting allows
+  8 MiB cumulative replacement text; refactoring allows 8 MiB cumulative replacement
+  text plus target URI bytes. Diagnostic inspection covers up to 5,000 entries,
+  with cumulative resource budgets.
   Full previews may require a larger client receive buffer.
 - Workspace Trust, Auto Save protection and session or persistent write policies.
 - Authenticated loopback TLS, certificate pinning, token/identity rotation and a
