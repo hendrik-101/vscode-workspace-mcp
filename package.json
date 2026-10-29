@@ -2,7 +2,7 @@
   "name": "vscode-workspace-mcp",
   "displayName": "Workspace MCP",
   "description": "A small, authenticated MCP bridge to VS Code virtual workspaces and live editors.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "hendrik101",
   "license": "MIT",
   "private": true,
@@ -111,10 +111,10 @@
     "package": "npm run build && vsce package --no-dependencies --out artifacts/workspace-mcp.vsix"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "selfsigned": "5.5.0",
-    "undici": "7.29.1",
-    "zod": "4.6.5"
+    "undici": "7.30.1",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "24.0.0",
@@ -122,8 +122,8 @@
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
     "esbuild": "0.28.2",
-    "prettier": "3.9.8",
-    "tsx": "4.23.13",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
   "homepage": "https://github.com/hendrik-101/vscode-workspace-mcp#readme",

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1 — dependency security preview
+
+- Update MCP SDK to 1.32.1, Undici to 7.30.1 and Zod to 4.6.6, and refresh
+  compatible transitive dependencies to resolve the current production audit.
+- Update pinned GitHub Actions and development tools while preserving Node.js 24
+  and the minimum supported VS Code 1.137.0 API types.
+- Supersede the unpublished 0.1.0 candidate. Its existing annotated tag remains
+  unchanged; no GitHub or Marketplace publication of that version is claimed.
+- Real SAP/native-client acceptance and a Codex Security repository scan remain
+  pending for this revision. The owner exceptions recorded for 0.1.0 do not apply
+  to this patch release.
+
 ## 0.1.0 — initial preview
 
 - Scheme-preserving workspace roots, paginated directories and live-buffer reads
