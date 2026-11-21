@@ -117,12 +117,12 @@
     "zod": "4.6.6"
   },
   "devDependencies": {
-    "@types/node": "24.0.0",
-    "@types/vscode": "1.137.0",
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.146.0",
     "@vscode/test-electron": "3.1.0",
-    "@vscode/vsce": "4.0.0",
+    "@vscode/vsce": "4.1.1",
     "esbuild": "0.28.2",
-    "prettier": "3.9.10",
+    "prettier": "3.10.1",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
