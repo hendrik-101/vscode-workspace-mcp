@@ -8,7 +8,7 @@ Keep this MIT project small, readable and telemetry-free.
   traversal and symlink escapes. Require document versions for edits; never
   implicitly save. Writes require user approval and Workspace Trust.
 - No shell tools, arbitrary commands or external product requests. Direct commands
-  require separate user authority and an explicit versioned non-interactive contract;
+  require separate user authority and an exact-version non-interactive profile reviewed by the user;
   see [commands](docs/commands.md). Bind listeners
   only to loopback. The stdio adapter may contact only its configured loopback TLS endpoint, with certificate
   pinning and no redirects. Reject hostile Host/Origin and invalid tokens.

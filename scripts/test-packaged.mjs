@@ -139,11 +139,22 @@ exports.activate = context => {
     ["upgrade", current, manifest.version],
     ["reinstall", current, manifest.version],
   ]) {
-    if (phase === "reinstall")
+    if (phase === "reinstall") {
       install(
         "--uninstall-extension",
         `${manifest.publisher}.${manifest.name}`,
       );
+      const settingsPath = join(userData, "User", "settings.json");
+      const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          ...settings,
+          "workspaceMcp.autoStart": true,
+          "workspaceMcp.writePolicy": "allow",
+        }),
+      );
+    }
     install("--install-extension", vsix, "--force");
     const resultPath = join(temporary, `${phase}-result.json`);
     // VS Code deliberately uses in-memory storage with --extensionTestsPath.

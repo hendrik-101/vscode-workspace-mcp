@@ -2,7 +2,7 @@
   "name": "vscode-workspace-mcp",
   "displayName": "Workspace MCP",
   "description": "A small, authenticated MCP bridge to VS Code virtual workspaces and live editors.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "hendrik101",
   "license": "MIT",
   "private": true,
@@ -27,7 +27,9 @@
       "supported": false
     }
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -55,6 +57,14 @@
         "title": "Workspace MCP: Disable Writes for This Session"
       },
       {
+        "command": "workspaceMcp.shareOutput",
+        "title": "Workspace MCP: Share Visible Output Channel"
+      },
+      {
+        "command": "workspaceMcp.stopSharingOutput",
+        "title": "Workspace MCP: Stop Sharing Output Channel"
+      },
+      {
         "command": "workspaceMcp.rotateToken",
         "title": "Workspace MCP: Rotate Token"
       },
@@ -74,6 +84,12 @@
           "scope": "application",
           "description": "Default fixed loopback port. Restart the bridge after changing. Use Select Port for This Window for a temporary window override. Conflicts fail; no fallback port is selected."
         },
+        "workspaceMcp.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Start Workspace MCP when opening or reloading a trusted workspace, using the current user settings. Stop can still disconnect the current window."
+        },
         "workspaceMcp.writePolicy": {
           "type": "string",
           "enum": [
@@ -83,7 +99,7 @@
           ],
           "default": "ask",
           "scope": "application",
-          "description": "Write access at each explicit bridge start. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
+          "description": "Write access at each bridge start, including automatic starts. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
         },
         "workspaceMcp.allowedCommands": {
           "type": "array",
@@ -95,7 +111,81 @@
           "uniqueItems": true,
           "default": [],
           "scope": "application",
-          "description": "Exact command IDs authorized for direct MCP invocation. This grants authority only; commands also need an applicable explicit non-interactive zero-argument extension contract. Commands may have destructive or external side effects. Workspace overrides and writePolicy cannot grant command authority."
+          "description": "Exact command IDs authorized for direct MCP invocation. This grants authority only; commands also need an applicable explicit non-interactive command profile. Commands may have destructive or external side effects. Workspace overrides and writePolicy cannot grant command authority."
+        },
+        "workspaceMcp.commandProfiles": {
+          "type": "array",
+          "default": [],
+          "maxItems": 100,
+          "scope": "application",
+          "description": "User-reviewed call profiles for exact extension versions. Profiles do not grant execution permission. Also authorize the command in workspaceMcp.allowedCommands.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command",
+              "extensionId",
+              "extensionVersion",
+              "argumentTypes",
+              "nonInteractive"
+            ],
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "extensionId": {
+                "type": "string"
+              },
+              "extensionVersion": {
+                "type": "string"
+              },
+              "argumentTypes": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "nonInteractive": {
+                "enum": [
+                  true
+                ]
+              },
+              "activeEditorScheme": {
+                "type": "string"
+              },
+              "requiresConfiguration": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

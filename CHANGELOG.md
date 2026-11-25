@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 — command and Output preview
+
+- Discover contributed commands before extension activation and show their
+  installed versions and runtime registration status.
+- Run separately authorized commands using versioned user profiles with
+  optional editor prerequisites and typed positional arguments.
+- Read bounded snapshots of an explicitly shared visible Output channel.
+- Opt in to automatic startup in trusted workspace windows using the existing
+  User write policy.
+
 ## 0.1.1 — dependency security preview
 
 - Update MCP SDK to 1.32.1, Undici to 7.30.1 and Zod to 4.6.6, and refresh

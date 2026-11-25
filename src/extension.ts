@@ -22,10 +22,12 @@ import { startServer } from "./server";
 import { BridgeSession } from "./session";
 import { WorkspaceService } from "./workspace";
 import { createCommandService } from "./commands-vscode";
+import { OutputSharing } from "./output";
 
 let running: BridgeSession | undefined;
 let runningIdentity: ServerIdentity | undefined;
 let runningAdapter: string | undefined;
+let runningOutput: OutputSharing | undefined;
 let runningAccess: { allowed: boolean } | undefined;
 let starting = Promise.resolve();
 let stopping = Promise.resolve();
@@ -47,6 +49,8 @@ function stopSessions(): Promise<void> {
   pending = undefined;
   runningIdentity = undefined;
   runningAdapter = undefined;
+  runningOutput?.clear();
+  runningOutput = undefined;
   if (runningAccess) runningAccess.allowed = false;
   runningAccess = undefined;
   stopping = Promise.all([
@@ -64,6 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = "workspaceMcp.connection";
   let windowPort: number | undefined;
   let portPromptGeneration = 0;
+  let outputPromptGeneration = 0;
   const refresh = () => {
     const suspended = !!running && !runningAccess?.allowed;
     status.text = `$(plug) MCP ${running ? new URL(running.connection.url).port : ""}: ${suspended ? "suspended" : running?.canWrite() ? "read/write" : "read only"}`;
@@ -215,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       vscode.commands.registerCommand(id, () => action().catch(report)),
     );
-  register("workspaceMcp.start", () => {
+  const start = (automatic = false) => {
     if (running) return Promise.resolve();
     if (cancelStartup) void stopSessions().catch(report);
     const requestedGeneration = ++generation;
@@ -261,6 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
           // Each service captures its own session, never the mutable global session.
           let session: BridgeSession | undefined;
           const access = { allowed: false };
+          const output = new OutputSharing();
           const workspace = new WorkspaceService(
             () =>
               access.allowed &&
@@ -299,6 +305,10 @@ export function activate(context: vscode.ExtensionContext): void {
             tls: identity,
             authorized: () => access.allowed,
             commands: createCommandService(() => access.allowed),
+            readOutput: (maxChars) =>
+              access.allowed && vscode.workspace.isTrusted
+                ? output.read(maxChars)
+                : { status: "not_shared" },
           }).then(async (connection) => {
             const created = new BridgeSession(connection);
             if (requestedGeneration !== generation) {
@@ -360,6 +370,7 @@ export function activate(context: vscode.ExtensionContext): void {
           pending = undefined;
           running = started;
           runningAccess = access;
+          runningOutput = output;
           runningIdentity = identity;
           runningAdapter = adapter;
           access.allowed = true;
@@ -369,15 +380,18 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           refresh();
           // An informational toast must never hold the lifecycle or Stop command open.
-          void vscode.window
-            .showInformationMessage(
-              "Workspace MCP started. The status bar shows current write access.",
-              "Connection details",
-            )
-            .then((choice) => {
-              if (choice && running === started)
-                void vscode.commands.executeCommand("workspaceMcp.connection");
-            });
+          if (!automatic)
+            void vscode.window
+              .showInformationMessage(
+                "Workspace MCP started. The status bar shows current write access.",
+                "Connection details",
+              )
+              .then((choice) => {
+                if (choice && running === started)
+                  void vscode.commands.executeCommand(
+                    "workspaceMcp.connection",
+                  );
+              });
         }),
     )
       .catch((error: unknown) => {
@@ -387,7 +401,8 @@ export function activate(context: vscode.ExtensionContext): void {
         if (cancelStartup === cancel) cancelStartup = undefined;
       });
     return starting;
-  });
+  };
+  register("workspaceMcp.start", () => start());
   register("workspaceMcp.stop", async () => {
     await stop();
   });
@@ -441,6 +456,48 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     await askWrites(session);
+  });
+  register("workspaceMcp.shareOutput", async () => {
+    const output = runningOutput;
+    if (!output || !runningAccess?.allowed || !vscode.workspace.isTrusted) {
+      void vscode.window.showInformationMessage(
+        "Start Workspace MCP in a trusted workspace first.",
+      );
+      return;
+    }
+    const requestedPrompt = ++outputPromptGeneration;
+    const candidates = output.candidates();
+    if (candidates.length === 0) {
+      void vscode.window.showInformationMessage(
+        "Show an Output channel in VS Code before sharing it.",
+      );
+      return;
+    }
+    const selected = await vscode.window.showQuickPick(
+      candidates.map((document) => ({ label: document.uri.path, document })),
+      {
+        title: "Share an Output channel with connected Workspace MCP clients",
+        placeHolder:
+          "This shares visible history and new output until stopped.",
+      },
+    );
+    if (
+      !selected ||
+      runningOutput !== output ||
+      requestedPrompt !== outputPromptGeneration ||
+      !runningAccess?.allowed ||
+      !vscode.workspace.isTrusted
+    )
+      return;
+    if (!output.share(selected.document)) {
+      void vscode.window.showInformationMessage(
+        "Show the selected Output channel and share it again.",
+      );
+    }
+  });
+  register("workspaceMcp.stopSharingOutput", async () => {
+    outputPromptGeneration++;
+    runningOutput?.clear();
   });
   register("workspaceMcp.rotateToken", async () => {
     // Revoke before prompting or accessing storage, even if rotation is cancelled.
@@ -537,6 +594,12 @@ export function activate(context: vscode.ExtensionContext): void {
       void deactivate().catch(report);
     },
   });
+  if (
+    vscode.workspace.isTrusted &&
+    vscode.workspace.workspaceFolders?.length &&
+    settings().inspect("autoStart")?.globalValue === true
+  )
+    void start(true).catch(report);
 }
 
 /** Revokes active and starting sessions without waiting for unavailable storage. */

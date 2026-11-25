@@ -11,6 +11,15 @@ exports.activate = (context) => {
         return handler();
       }),
     );
+  const output = vscode.window.createOutputChannel(
+    "Workspace MCP Fixture Output",
+    "plaintext",
+  );
+  context.subscriptions.push(output);
+  register("output", () => {
+    output.append("\nfixture output " + counts.get("output"));
+    output.show(true);
+  });
   register("complete", () => true);
   register("undefined", () => undefined);
   register("throw", () => {

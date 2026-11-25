@@ -9,11 +9,13 @@ export interface CommandHost {
     trusted: boolean;
     authorized: boolean;
     allowedCommands: unknown;
+    commandProfiles: unknown;
+    activeEditorScheme?: string;
     /** Opaque fingerprint of workspace roots and current editor context. */
     context: string;
   };
   configuration(key: string): unknown;
-  executeCommand(commandId: string): unknown;
+  executeCommand(commandId: string, ...args: CommandArgument[]): unknown;
 }
 export interface SearchCommandsInput {
   query?: string;
@@ -23,6 +25,7 @@ export interface SearchCommandsInput {
 export interface InvokeCommandInput {
   commandId: string;
   timeoutMs?: number;
+  args?: CommandArgument[];
 }
 export interface CommandMetadata {
   extensionId: string;
@@ -34,6 +37,8 @@ export interface CommandMetadata {
 export interface CommandEntry {
   commandId: string;
   metadata: CommandMetadata[];
+  registered: boolean;
+  argumentTypes?: ArgumentType[];
   eligibility: { eligible: boolean; reason: EligibilityReason };
 }
 export interface SearchCommandsResult {
@@ -71,7 +76,8 @@ type EligibilityReason =
   | "AMBIGUOUS_METADATA"
   | "STALE_CONTRACT"
   | "PREREQUISITE_UNMET"
-  | "DISCOVERY_INCOMPLETE";
+  | "DISCOVERY_INCOMPLETE"
+  | "NOT_REGISTERED";
 const id = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/);
 const scalar = z.union([
   z.string().max(256),
@@ -79,13 +85,27 @@ const scalar = z.union([
   z.boolean(),
   z.null(),
 ]);
-const contract = z.strictObject({
+export const MAX_COMMAND_ARGUMENTS = 8;
+export const commandArguments = z
+  .array(
+    z.union([z.string().max(2048), z.number().finite(), z.boolean(), z.null()]),
+  )
+  .max(MAX_COMMAND_ARGUMENTS);
+type CommandArgument = z.output<typeof commandArguments>[number];
+const argumentTypes = z
+  .array(z.enum(["string", "number", "boolean", "null"]))
+  .max(MAX_COMMAND_ARGUMENTS);
+type ArgumentType = z.output<typeof argumentTypes>[number];
+const profile = z.strictObject({
   command: id,
+  extensionId: id,
   extensionVersion: z.string().min(1).max(80),
-  arguments: z.literal("none"),
-  interaction: z.literal("none"),
-  context: z.literal("workspace"),
-  documentation: z.string().max(1024).url().startsWith("https://"),
+  argumentTypes,
+  nonInteractive: z.literal(true),
+  activeEditorScheme: z
+    .string()
+    .regex(/^[a-z][a-z0-9+.-]{0,31}$/)
+    .optional(),
   requiresConfiguration: z
     .array(
       z.strictObject({
@@ -96,10 +116,10 @@ const contract = z.strictObject({
     .max(10)
     .optional(),
 });
-type Contract = z.output<typeof contract>;
+type Profile = z.output<typeof profile>;
 type Claim = {
   metadata: CommandMetadata;
-  contract?: Contract;
+  profile?: Profile;
   prerequisites: boolean;
   configuration: unknown[];
 };
@@ -161,6 +181,14 @@ export class CommandService implements CommandApi {
   private snapshot() {
     const state = this.host.state();
     const allowed = z.array(id).max(100).safeParse(state.allowedCommands);
+    const profiles = z.array(profile).max(100).safeParse(state.commandProfiles);
+    const profilesById = new Map<string, Profile | undefined>();
+    for (const item of profiles.success ? profiles.data : []) {
+      profilesById.set(
+        item.command,
+        profilesById.has(item.command) ? undefined : item,
+      );
+    }
     const claims = new Map<string, Claim[]>();
     const extensions = this.host.extensions();
     let incomplete = extensions.length > MAX_EXTENSIONS;
@@ -177,10 +205,6 @@ export class CommandService implements CommandApi {
         incomplete = true;
         continue;
       }
-      const declarations = z
-        .array(contract)
-        .max(100)
-        .safeParse(manifest.workspaceMcpCommandContracts);
       const contributed = object(manifest.contributes)?.commands;
       const commands = Array.isArray(contributed)
         ? contributed
@@ -195,10 +219,11 @@ export class CommandService implements CommandApi {
         const command = object(value);
         const parsedId = id.safeParse(command?.command);
         if (!parsedId.success) continue;
-        const matching = declarations.success
-          ? declarations.data.filter((item) => item.command === parsedId.data)
-          : [];
-        const supported = matching.length === 1 ? matching[0] : undefined;
+        const selected = profilesById.get(parsedId.data);
+        const supported =
+          selected?.extensionId.toLowerCase() === extension.id.toLowerCase()
+            ? selected
+            : undefined;
         const configuration = (supported?.requiresConfiguration ?? []).map(
           (requirement) => {
             const parsed = scalar.safeParse(
@@ -215,12 +240,15 @@ export class CommandService implements CommandApi {
             category: label(command?.category),
             provenance: "extension_manifest",
           },
-          contract: supported,
+          profile: supported,
           configuration,
-          prerequisites: (supported?.requiresConfiguration ?? []).every(
-            (requirement, index) =>
-              Object.is(configuration[index], requirement.value),
-          ),
+          prerequisites:
+            (!supported?.activeEditorScheme ||
+              supported.activeEditorScheme === state.activeEditorScheme) &&
+            (supported?.requiresConfiguration ?? []).every(
+              (requirement, index) =>
+                Object.is(configuration[index], requirement.value),
+            ),
         };
         const entries = claims.get(parsedId.data) ?? [];
         // Bounded provenance; more than one claimant is already ineligible.
@@ -233,7 +261,10 @@ export class CommandService implements CommandApi {
       .update(
         JSON.stringify({
           state: {
-            ...state,
+            trusted: state.trusted,
+            authorized: state.authorized,
+            context: state.context,
+            activeEditorScheme: state.activeEditorScheme,
             allowedCommands: allowed.success ? allowed.data : [],
           },
           incomplete,
@@ -251,6 +282,7 @@ export class CommandService implements CommandApi {
   }
   private entry(
     commandId: string,
+    registered: boolean,
     snapshot: ReturnType<CommandService["snapshot"]>,
   ): CommandEntry {
     const claims = snapshot.claims.get(commandId) ?? [];
@@ -258,18 +290,25 @@ export class CommandService implements CommandApi {
     let reason: EligibilityReason;
     if (snapshot.incomplete) reason = "DISCOVERY_INCOMPLETE";
     else if (claims.length > 1) reason = "AMBIGUOUS_METADATA";
-    else if (!evidence?.contract) reason = "UNSUPPORTED_CONTRACT";
+    else if (!evidence?.profile) reason = "UNSUPPORTED_CONTRACT";
     else if (
-      evidence.contract.extensionVersion !== evidence.metadata.extensionVersion
+      evidence.profile.extensionVersion !== evidence.metadata.extensionVersion
     )
       reason = "STALE_CONTRACT";
     else if (!evidence.prerequisites || !snapshot.state.context)
       reason = "PREREQUISITE_UNMET";
     else if (!snapshot.state.trusted) reason = "UNTRUSTED_WORKSPACE";
     else if (!snapshot.allowed.includes(commandId)) reason = "NOT_AUTHORIZED";
+    else if (!registered) reason = "NOT_REGISTERED";
     else reason = "SUPPORTED";
     return {
       commandId,
+      registered,
+      ...(evidence?.profile &&
+      claims.length === 1 &&
+      evidence.profile.extensionVersion === evidence.metadata.extensionVersion
+        ? { argumentTypes: evidence.profile.argumentTypes }
+        : {}),
       metadata: claims.map((claim) => claim.metadata),
       eligibility: { eligible: reason === "SUPPORTED", reason },
     };
@@ -282,7 +321,12 @@ export class CommandService implements CommandApi {
     const parsed = z
       .strictObject({
         query: z.string().max(128).optional(),
-        offset: z.number().int().min(0).max(MAX_IDS).optional(),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_IDS + MAX_METADATA)
+          .optional(),
         maxResults: z.number().int().min(1).max(100).optional(),
       })
       .safeParse(input);
@@ -291,17 +335,12 @@ export class CommandService implements CommandApi {
     this.active(signal);
     const snapshot = this.snapshot();
     const query = (input.query ?? "").toLowerCase();
-    const entries = [
-      ...new Set(
-        ids
-          .slice(0, MAX_IDS)
-          .filter(
-            (value) => id.safeParse(value).success && !value.startsWith("_"),
-          ),
-      ),
-    ]
+    const registered = new Set(
+      ids.slice(0, MAX_IDS).filter((value) => id.safeParse(value).success),
+    );
+    const entries = [...new Set([...registered, ...snapshot.claims.keys()])]
       .sort()
-      .map((value) => this.entry(value, snapshot))
+      .map((value) => this.entry(value, registered.has(value), snapshot))
       .filter((entry) =>
         [
           entry.commandId,
@@ -336,6 +375,7 @@ export class CommandService implements CommandApi {
       !z
         .strictObject({
           commandId: id,
+          args: commandArguments.optional(),
           timeoutMs: z.number().int().min(1).max(20_000).optional(),
         })
         .safeParse(input).success
@@ -350,19 +390,30 @@ export class CommandService implements CommandApi {
     if (!current.state.trusted) fail("UNTRUSTED_WORKSPACE");
     if (!current.allowed.includes(input.commandId))
       fail("COMMAND_NOT_AUTHORIZED");
-    if (
-      ids.length > MAX_IDS ||
-      !ids.includes(input.commandId) ||
-      !this.entry(input.commandId, current).eligibility.eligible
-    )
+    const entry = this.entry(
+      input.commandId,
+      ids.includes(input.commandId),
+      current,
+    );
+    if (ids.length > MAX_IDS || !entry.eligibility.eligible)
       fail("COMMAND_UNSUPPORTED");
+    const args = input.args ?? [];
+    const expected = entry.argumentTypes ?? [];
+    if (
+      args.length !== expected.length ||
+      args.some(
+        (value, index) =>
+          (value === null ? "null" : typeof value) !== expected[index],
+      )
+    )
+      fail("INVALID_ARGUMENT");
     if (outstanding.size >= MAX_OUTSTANDING_COMMANDS) fail("COMMAND_BUSY");
     this.active(signal);
     // No await between the final admission check and dispatch. The returned
     // promise observes both synchronous throws and late asynchronous rejection.
     let raw: unknown;
     try {
-      raw = this.host.executeCommand(input.commandId);
+      raw = this.host.executeCommand(input.commandId, ...args);
     } catch {
       return { outcome: "handler_failed", businessSuccess: "unknown" };
     }

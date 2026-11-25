@@ -69,7 +69,14 @@ Synthetic providers exercise these paths in CI, not SAP ADT provider compatibili
 The development-host suite loads two independent fixture extensions with their
 own manifests and real handlers. It verifies passive discovery without activation,
 zero-argument execution, predispatch refusal of prompting commands, authorization
-revocation, cancellation, safe undefined/failure/opaque results and four outstanding
-handlers retained across bridge restarts. These fixtures do not prove production
-extension contracts, SAP authentication or backend compatibility. Resource arguments
-and autonomous Log On to Destination remain unsupported; see [commands](commands.md).
+revocation, cancellation, safe undefined/failure/opaque results, four outstanding
+handlers retained across bridge restarts, and bounded reads from an explicitly
+shared Output channel. Transport tests verify checked positional arguments and
+the Output result contract.
+
+For a real SAP acceptance check, use a connected destination and a class with
+a distinctive `IF_OO_ADT_CLASSRUN` output. Follow [the Class Run setup](commands.md#sap-adt-class-run),
+verify the exact installed version and eligibility, invoke once, and confirm the
+new output via `read_output`. Confirm that switching to an unshared channel or
+revoking sharing suppresses reads. Record the SAP and VS Code versions and whether
+the run required any interaction.

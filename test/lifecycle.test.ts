@@ -10,7 +10,18 @@ import { clientConfiguration } from "../src/configuration";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function fixture(initialPolicy: string = "ask") {
+function fixture(
+  initialPolicy: string = "ask",
+  {
+    autoStart,
+    trusted = true,
+    hasWorkspace = true,
+  }: {
+    autoStart?: boolean;
+    trusted?: boolean;
+    hasWorkspace?: boolean;
+  } = {},
+) {
   const commands = new Map<string, () => Promise<void>>();
   const prompts: { resolve(value?: string): void }[] = [];
   const inputs: { resolve(value?: string): void }[] = [];
@@ -27,7 +38,10 @@ function fixture(initialPolicy: string = "ask") {
   const installedAdapters: string[] = [];
   const documents: { content: string; language: string }[] = [];
   const values = new Map<string, string>([[TLS_KEY, JSON.stringify(identity)]]);
-  const settings = new Map<string, unknown>([["writePolicy", initialPolicy]]);
+  const settings = new Map<string, unknown>([
+    ["writePolicy", initialPolicy],
+    ["autoStart", autoStart],
+  ]);
   const connections: {
     closed: boolean;
     authorized(): boolean;
@@ -72,12 +86,13 @@ function fixture(initialPolicy: string = "ask") {
         documents.push(options);
         return options;
       },
-      isTrusted: true,
+      isTrusted: trusted,
+      workspaceFolders: hasWorkspace ? [{}] : undefined,
       onDidChangeConfiguration: () => ({ dispose() {} }),
       getConfiguration: () => ({
         inspect: (key: string) => ({
           globalValue: settings.get(key),
-          workspaceValue: "allow",
+          workspaceValue: key === "autoStart" ? true : "allow",
         }),
         update: async (key: string, value: unknown) => {
           await settings.set(key, value);
@@ -155,6 +170,12 @@ function fixture(initialPolicy: string = "ask") {
         };
       if (id === "./commands-vscode")
         return { createCommandService: () => ({ dispose() {} }) };
+      if (id === "./output")
+        return {
+          OutputSharing: class {
+            clear() {}
+          },
+        };
       if (id === "./workspace")
         return {
           WorkspaceService: class {
@@ -221,6 +242,37 @@ function fixture(initialPolicy: string = "ask") {
     installedAdapters,
     changed: (key = preferences.TOKEN_KEY) => secretChanged!({ key }),
   };
+}
+
+for (const [label, options] of [
+  ["only workspace settings opt in", {}],
+  ["the user disables it", { autoStart: false }],
+  ["the workspace is untrusted", { autoStart: true, trusted: false }],
+  ["there are no workspace folders", { autoStart: true, hasWorkspace: false }],
+] as const) {
+  test(`does not start automatically when ${label}`, async () => {
+    const f = fixture("allow", options);
+    await tick();
+    assert.equal(f.connections.length, 0);
+    assert.equal(f.installedAdapters.length, 0);
+  });
+}
+
+for (const policy of ["allow", "deny", "ask"] as const) {
+  test(`automatic start honors the user write policy ${policy}`, async () => {
+    const f = fixture(policy, { autoStart: true });
+    await tick();
+    assert.equal(f.connections.length, 1);
+    assert.equal(f.connections[0]?.authorized(), true);
+    assert.equal(f.services[0]?.canWrite(), policy === "allow");
+    assert.equal(f.prompts.length, policy === "ask" ? 1 : 0);
+    await f.command("stop");
+    f.prompts[0]?.resolve("Allow for this session");
+    await tick();
+    assert.equal(f.connections[0]?.closed, true);
+    assert.equal(f.connections.length, 1);
+    assert.equal(f.services[0]?.canWrite(), false);
+  });
 }
 
 test("connection configuration uses the installed stable adapter path", async () => {

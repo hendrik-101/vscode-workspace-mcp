@@ -7,15 +7,19 @@ owner privately before disclosing an exploitable issue.
 
 ## Boundary
 
-- Explicit start, internal loopback-only TLS listener, persistent random SecretStorage
-  token and server identity; no autostart.
+- Manual start by default, with User-only opt-in to automatic startup in trusted
+  workspace windows with a root. The internal listener stays on loopback TLS
+  and uses the persistent random SecretStorage token and server identity.
 - User-only write policy: deny, allow or ask (default). Ask starts read-only and
   offers session-only or persistent allow/deny; dismissal denies writes.
 - Workspace operations admit only current roots; no arbitrary URI or terminal.
 - Direct commands are default-deny, with separate user-only command authority and
-  explicit exact-version non-interactive contracts. They may have destructive or
+  user-reviewed exact-version non-interactive profiles. They may have destructive or
   external effects beyond workspace roots; buffer-write authority is separate.
   See [command admission and limitations](docs/commands.md).
+- Output text is available only from a channel explicitly shared in the running
+  window, while that channel remains visible. Sharing exposes channel history and
+  subsequent text to authenticated clients until revoked or the bridge stops.
 - Live document versions required for writes. Saving is separate from editing.
 - Edits require Auto Save off. Stop permanently revokes the running session.
 - Host/Origin checks, request limits and bounded filesystem traversal.
@@ -30,8 +34,8 @@ network behavior and policies. Review those independently. The bridge does not
 manage SAP login, transports or activation.
 
 A bearer token grants configured read/write access to admitted roots and any
-separately authorized eligible direct commands in
-one VS Code window. Protect client configuration as a secret. Stopping the bridge
+separately authorized eligible direct commands and the explicitly shared
+Output channel in one VS Code window. Protect client configuration as a secret. Stopping the bridge
 revokes the session and closes its listener, but retains the stored credential.
 Restarting reuses it. Only **Workspace MCP: Rotate Token** replaces it after
 confirmation; rotation stops the local bridge even when cancelled or storage fails.
@@ -41,8 +45,9 @@ The credential is shared by windows using the same extension SecretStorage,
 including windows on different configured ports. Treat those windows as one
 credential trust domain; inspect workspace roots before working.
 
-Settings are application-scoped and read from user configuration only, never
-checked-in workspace settings. Changing write policy to deny also blocks writes
+Settings are application-scoped and read from user configuration only. The
+`autoStart` setting applies at window startup. Stop immediately revokes the
+current session even if automatic startup is enabled. Changing write policy to deny also blocks writes
 in a running session. Allow applies at the next start or explicit permission
 prompt. **Disable Writes for This Session** revokes writes and invalidates older
 permission prompts without closing read access or changing stored policy. Requests

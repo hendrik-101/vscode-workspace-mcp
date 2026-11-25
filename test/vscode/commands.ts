@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { createCommandService } from "../../src/commands-vscode";
+import { OutputSharing } from "../../src/output";
 
 export async function commandTools(): Promise<void> {
   const alpha = vscode.extensions.getExtension<{
@@ -17,8 +18,10 @@ export async function commandTools(): Promise<void> {
   assert.equal(beta.isActive, false);
   const settings = vscode.workspace.getConfiguration("workspaceMcp");
   const previous = settings.inspect("allowedCommands")?.globalValue;
+  const previousProfiles = settings.inspect("commandProfiles")?.globalValue;
   const allowed = [
     "issue40.alpha.complete",
+    "issue40.alpha.output",
     "issue40.alpha.undefined",
     "issue40.alpha.throw",
     "issue40.alpha.reject",
@@ -31,6 +34,22 @@ export async function commandTools(): Promise<void> {
   await settings.update(
     "allowedCommands",
     allowed,
+    vscode.ConfigurationTarget.Global,
+  );
+  await settings.update(
+    "commandProfiles",
+    allowed
+      .filter((command) => !command.endsWith(".prompt"))
+      .map((command) => {
+        const extension = command.startsWith("issue40.alpha.") ? alpha : beta;
+        return {
+          command,
+          extensionId: extension.id,
+          extensionVersion: extension.packageJSON.version,
+          argumentTypes: [],
+          nonInteractive: true,
+        };
+      }),
     vscode.ConfigurationTarget.Global,
   );
   const service = createCommandService(() => true);
@@ -148,6 +167,7 @@ export async function commandTools(): Promise<void> {
     } finally {
       restarted.dispose();
     }
+    await verifyOutputSharing(createCommandService(() => true));
     console.log(
       "Direct commands: two independent extension fixtures passed in the real host; no SAP compatibility claimed",
     );
@@ -155,9 +175,76 @@ export async function commandTools(): Promise<void> {
     await vscode.commands.executeCommand("issue40.alpha.release");
     service.dispose();
     await settings.update(
+      "commandProfiles",
+      previousProfiles,
+      vscode.ConfigurationTarget.Global,
+    );
+    await settings.update(
       "allowedCommands",
       previous,
       vscode.ConfigurationTarget.Global,
     );
+  }
+}
+
+async function verifyOutputSharing(
+  service: ReturnType<typeof createCommandService>,
+): Promise<void> {
+  const output = new OutputSharing();
+  const other = vscode.window.createOutputChannel(
+    "Workspace MCP Unshared Output",
+    "plaintext",
+  );
+  try {
+    assert.equal(
+      (await service.invoke({ commandId: "issue40.alpha.output" })).outcome,
+      "handler_completed",
+    );
+    await eventually(() =>
+      output
+        .candidates()
+        .some((document) => document.getText().includes("fixture output")),
+    );
+    const document = output
+      .candidates()
+      .find((candidate) => candidate.getText().includes("fixture output"));
+    assert.ok(document);
+    assert.deepEqual(output.read(200), { status: "not_shared" });
+    assert.equal(output.share(document), true);
+    assert.equal(
+      (await service.invoke({ commandId: "issue40.alpha.output" })).outcome,
+      "handler_completed",
+    );
+    await eventually(() => {
+      const snapshot = output.read(16);
+      return (
+        snapshot.status === "available" && snapshot.text === "fixture output 2"
+      );
+    });
+    const result = output.read(16);
+    assert.equal(result.status, "available");
+    if (result.status === "available") {
+      assert.equal(result.text, "fixture output 2");
+      assert.equal(result.truncated, true);
+    }
+    other.append("unrelated channel text");
+    other.show(true);
+    await eventually(() => output.read(200).status === "not_visible");
+    output.clear();
+    assert.deepEqual(output.read(200), { status: "not_shared" });
+  } finally {
+    service.dispose();
+    other.dispose();
+  }
+}
+
+async function eventually(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!predicate()) {
+    assert.ok(
+      Date.now() < deadline,
+      "Expected VS Code to expose the visible output document",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }

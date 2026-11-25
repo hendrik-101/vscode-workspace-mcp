@@ -33,13 +33,15 @@ as the VS Code extension host; hosted web sessions cannot connect directly.
    agent edits; the bridge refuses edits when Auto Save is enabled.
 4. Run **Workspace MCP: Start**. By default, it asks for write permission;
    dismissing the prompt keeps the bridge read-only. Editing and saving are
-   separate operations.
+   separate operations. To start automatically on future VS Code launches, set
+   `workspaceMcp.autoStart` in User settings. The bridge uses your configured
+   `workspaceMcp.writePolicy`.
 5. Run **Workspace MCP: Show Connection Details**, select your client and copy
    the generated **stdio** configuration into its private user settings.
    It contains a secret token: never commit or share it. Restart the client connection.
 6. Ask the agent to list workspace roots and read the active document.
 
-Use **Workspace MCP: Stop** to disconnect. See [client setup](docs/clients.md)
+Use **Workspace MCP: Stop** to disconnect the current window. See [client setup](docs/clients.md)
 for client-specific instructions, write policies, ports and remote-host limitations.
 CI artifacts expire after 14 days. [Versioned releases](docs/releases.md) attach a
 VSIX and checksum to GitHub Releases and publish the same tested file to Marketplace
@@ -81,15 +83,15 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 | `get_definition`, `get_references`, `get_hover` | Query installed language providers                                       |
 | `preview_rename`, `preview_code_actions`        | Preview provider text edits; no automatic application                    |
 
-| `search_commands` | Discover runtime command IDs, manifest metadata and admission reasons |
-| `invoke_command` | Invoke separately authorized, explicitly supported non-interactive zero-argument commands |
+| `search_commands` | Discover runtime and contributed command IDs, argument profiles and eligibility |
+| `invoke_command` | Invoke authorized commands using exact-version user profiles and typed arguments |
+| `read_output` | Read the tail of a visible Output channel explicitly shared for this session |
 
 Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are required.
-No file creation/deletion/renaming, arbitrary commands or terminal tools.
+File creation, deletion, renaming and terminal tools are outside the workspace API.
 [Direct commands](docs/commands.md) require separate user authorization and an
-explicit exact-version non-interactive extension contract; existing extensions
-without that contract remain unsupported. No UI is controlled, and autonomous
-ADT login is not provided.
+exact-version non-interactive profile in user settings. The same guide covers
+sharing an Output channel and configuring SAP ADT Class Run.
 Search reports truncation/errors: it is not an exhaustive SAP repository index.
 
 See the [tool reference](docs/tools.md) for parameters and limits.

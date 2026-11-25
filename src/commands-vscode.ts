@@ -17,6 +17,7 @@ export function createCommandService(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration("workspaceMcp.allowedCommands") ||
+        event.affectsConfiguration("workspaceMcp.commandProfiles") ||
         [...prerequisiteKeys].some((key) => event.affectsConfiguration(key))
       )
         changed();
@@ -76,6 +77,10 @@ export function createCommandService(
         allowedCommands: vscode.workspace
           .getConfiguration("workspaceMcp")
           .inspect("allowedCommands")?.globalValue,
+        commandProfiles: vscode.workspace
+          .getConfiguration("workspaceMcp")
+          .inspect("commandProfiles")?.globalValue,
+        activeEditorScheme: editor?.document.uri.scheme,
         context,
       };
     },
@@ -83,7 +88,8 @@ export function createCommandService(
       prerequisiteKeys.add(key);
       return vscode.workspace.getConfiguration().get(key);
     },
-    executeCommand: (commandId) => vscode.commands.executeCommand(commandId),
+    executeCommand: (commandId, ...args) =>
+      vscode.commands.executeCommand(commandId, ...args),
   });
   const dispose = service.dispose.bind(service);
   service.dispose = () => {
