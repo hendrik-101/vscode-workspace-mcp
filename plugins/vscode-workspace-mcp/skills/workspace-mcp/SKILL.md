@@ -47,9 +47,11 @@ argument types and eligibility. An empty `argumentTypes` list can be the
 bridge default. Verify from the extension's documentation or known behavior
 that the intended call works without arguments before omitting `args`.
 If the user needs to authorize a command, point them to **Workspace MCP:
-Configure Commands** and **Allowed Commands**. For commands that need arguments,
+Configure Commands** and **Allowed Zero Argument Commands**. For commands that
+need arguments,
 confirm the signature and prerequisites from the extension's documentation or
-verified behavior. Draft an entry for the user's **Command Profiles** in User
+verified behavior. Have the user add the ID to **Allowed Commands**, and draft
+an entry for **Command Profiles** in User
 Settings (JSON). Include the exact command ID, extension ID, installed version,
 ordered `argumentTypes` and `nonInteractive: true` only for a verified
 non-interactive call. Preserve other entries and let the user apply the settings.

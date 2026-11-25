@@ -18,9 +18,11 @@ export async function commandTools(): Promise<void> {
   assert.equal(beta.isActive, false);
   const settings = vscode.workspace.getConfiguration("workspaceMcp");
   const previous = settings.inspect("allowedCommands")?.globalValue;
+  const previousZero = settings.inspect(
+    "allowedZeroArgumentCommands",
+  )?.globalValue;
   const previousProfiles = settings.inspect("commandProfiles")?.globalValue;
   const allowed = [
-    "issue40.alpha.complete",
     "issue40.alpha.output",
     "issue40.alpha.undefined",
     "issue40.alpha.throw",
@@ -28,16 +30,24 @@ export async function commandTools(): Promise<void> {
     "issue40.alpha.hang",
     "issue40.beta.complete",
     "issue40.beta.opaque",
+    "issue40.alpha.prompt",
+    "issue40.beta.prompt",
   ];
   await settings.update(
     "allowedCommands",
     allowed,
     vscode.ConfigurationTarget.Global,
   );
+  const zeroArgumentCommands = ["issue40.alpha.complete"];
+  await settings.update(
+    "allowedZeroArgumentCommands",
+    zeroArgumentCommands,
+    vscode.ConfigurationTarget.Global,
+  );
   await settings.update(
     "commandProfiles",
     allowed
-      .filter((command) => command !== "issue40.alpha.complete")
+      .filter((command) => !command.endsWith(".prompt"))
       .map((command) => {
         const extension = command.startsWith("issue40.alpha.") ? alpha : beta;
         return {
@@ -117,7 +127,7 @@ export async function commandTools(): Promise<void> {
     assert.equal(opaque.resultOmitted, true);
     assert.equal(JSON.stringify(opaque).includes("secret"), false);
     await settings.update(
-      "allowedCommands",
+      "allowedZeroArgumentCommands",
       [],
       vscode.ConfigurationTarget.Global,
     );
@@ -128,8 +138,8 @@ export async function commandTools(): Promise<void> {
     );
     assert.equal(alpha.exports.calls("complete"), 1);
     await settings.update(
-      "allowedCommands",
-      allowed,
+      "allowedZeroArgumentCommands",
+      zeroArgumentCommands,
       vscode.ConfigurationTarget.Global,
     );
     const controller = new AbortController();
@@ -175,6 +185,11 @@ export async function commandTools(): Promise<void> {
     await settings.update(
       "commandProfiles",
       previousProfiles,
+      vscode.ConfigurationTarget.Global,
+    );
+    await settings.update(
+      "allowedZeroArgumentCommands",
+      previousZero,
       vscode.ConfigurationTarget.Global,
     );
     await settings.update(

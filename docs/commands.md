@@ -14,14 +14,16 @@ Incomplete discovery cannot grant execution eligibility.
 ## Allow a command in VS Code
 
 Open **Workspace MCP: Configure Commands** from the Command Palette. You can
-also open **Preferences: Open User Settings** and search
-`@id:workspaceMcp.allowedCommands`. Under **Workspace MCP: Allowed Commands**,
-choose **Add Item** and enter the exact command ID. Use an ID you trust to run
-without further input in the current editor. VS Code manifests do not establish
-whether the handler opens a dialog or what side effects it can have. On upgrade
-from 0.1.2, review existing allowlist entries because an entry can now run
-without a profile. To use the default for an existing command, remove its
-corresponding profile entry.
+also open **Preferences: Open Settings (UI)**, select **User**, and search
+`@id:workspaceMcp.allowedZeroArgumentCommands`. Under
+**Workspace MCP: Allowed Zero Argument Commands**, choose **Add Item** and
+enter the exact ID. This list is empty by default. Use an ID you trust to
+run without further input. VS Code manifests do not establish whether the
+handler opens a dialog or what side effects it can have.
+
+The existing **Allowed Commands** list continues to require a matching
+profile. To use the default for an existing command, add its ID to **Allowed
+Zero Argument Commands** and remove its corresponding profile entry.
 
 For a command without a configured profile, call
 `invoke_command({commandId: "example.run"})`. Workspace MCP sends zero
@@ -80,7 +82,7 @@ profiles and unmet prerequisites prevent dispatch. Correct malformed profile
 settings before invoking commands. Upgrade a profile after checking the
 installed extension version's behavior.
 
-Both settings are read from User settings. Agents can draft settings for
+Command allowlists and profiles are read from User settings. Agents can draft settings for
 the user and check eligibility after the user applies them.
 
 ## Return values and shared Output
@@ -110,7 +112,7 @@ MCP: Stop Sharing Output Channel** and stopping the bridge both revoke sharing.
 SAP documents Class Run from the open ABAP class using **ABAP: Run ABAP
 Application (Console)**. VS Code sends no positional arguments when launching
 a contributed command from the Command Palette. Add
-`adt-vscode.runApplication` to **Workspace MCP: Allowed Commands**. The
+`adt-vscode.runApplication` to **Workspace MCP: Allowed Zero Argument Commands**. The
 default zero-argument call uses the active class. First verify the behavior
 with your connected SAP destination and a class that implements
 `IF_OO_ADT_CLASSRUN`.

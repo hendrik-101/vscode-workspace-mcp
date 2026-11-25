@@ -105,6 +105,18 @@
           "scope": "application",
           "description": "Write access at each bridge start, including automatic starts. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
         },
+        "workspaceMcp.allowedZeroArgumentCommands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$"
+          },
+          "maxItems": 100,
+          "uniqueItems": true,
+          "default": [],
+          "scope": "application",
+          "description": "Exact command IDs that MCP may invoke with zero arguments without a command profile. Allow only commands whose behavior you trust. Commands can open dialogs or have destructive or external effects."
+        },
         "workspaceMcp.allowedCommands": {
           "type": "array",
           "items": {
@@ -115,7 +127,7 @@
           "uniqueItems": true,
           "default": [],
           "scope": "application",
-          "description": "Exact command IDs authorized for MCP invocation. Commands default to zero arguments. Add a command profile to configure typed arguments or prerequisites. Commands may open dialogs or have destructive or external effects."
+          "description": "Exact command IDs that MCP may invoke with a matching command profile. For calls without a profile, use workspaceMcp.allowedZeroArgumentCommands."
         },
         "workspaceMcp.commandProfiles": {
           "type": "array",

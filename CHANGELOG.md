@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Run allowlisted contributed commands with zero arguments without requiring
-  a user profile. Typed arguments and additional prerequisites use profiles.
+- Run contributed commands without a profile using the explicit
+  `allowedZeroArgumentCommands` User setting. Existing command permissions
+  continue to require matching profiles.
 - Open VS Code command settings from the Command Palette, and document how
   an agent can help prepare settings for commands with arguments.
 

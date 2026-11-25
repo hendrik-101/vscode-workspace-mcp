@@ -14,9 +14,10 @@ owner privately before disclosing an exploitable issue.
   offers session-only or persistent allow/deny; dismissal denies writes.
 - Workspace operations admit only current roots; no arbitrary URI or terminal.
 - Direct commands are default-deny and require separate User-only authorization
-  and an unambiguous extension contribution. Without a profile, an allowed
-  command is invoked with zero arguments. Calls with arguments require a
-  user-reviewed exact-version non-interactive profile. Allowed handlers may
+  and an unambiguous extension contribution. The separate
+  `allowedZeroArgumentCommands` setting opts in to profileless execution with
+  zero arguments. Entries in the existing `allowedCommands` setting continue
+  to require a user-reviewed exact-version non-interactive profile. Allowed handlers may
   open dialogs or cause destructive or external effects beyond workspace roots.
   Buffer-write authority is separate.
   See [command admission and limitations](docs/commands.md).

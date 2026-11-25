@@ -60,6 +60,7 @@ for continuation, ambiguity and conservative full-range availability rules.
 
 `search_commands` discovers live command IDs and installed extension manifest
 contributions. `invoke_command` checks separate user authorization and defaults
-to zero arguments. Typed arguments require a matching versioned user profile. `read_output` reads the
+to zero arguments for commands in the dedicated User allowlist. Calls using
+the original allowlist require a matching versioned user profile. `read_output` reads the
 tail of the visible session-shared Output channel. See
 [command profiles, Output sharing and Class Run](commands.md).

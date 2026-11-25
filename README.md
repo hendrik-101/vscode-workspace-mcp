@@ -89,8 +89,8 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 
 Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are required.
 File creation, deletion, renaming and terminal tools are outside the workspace API.
-Open **Workspace MCP: Configure Commands** to manage the user allowlist and
-optional argument profiles. The [command guide](docs/commands.md) also covers
+Open **Workspace MCP: Configure Commands** to manage the User command allowlists
+and argument profiles. The [command guide](docs/commands.md) also covers
 sharing an Output channel and configuring SAP ADT Class Run.
 Search reports truncation/errors: it is not an exhaustive SAP repository index.
 

@@ -26,7 +26,8 @@ function fixture() {
   const state = {
     trusted: true,
     authorized: true,
-    allowedCommands: ["one.run", "unknown"] as unknown,
+    allowedCommands: ["one.run", "one.prompt", "unknown"] as unknown,
+    allowedZeroArgumentCommands: undefined as unknown,
     commandProfiles: profiles as unknown,
     context: "workspace/editor:1",
   };
@@ -110,11 +111,18 @@ test("valid command executes exactly once with zero arguments and undefined is h
   assert.equal(result.businessSuccess, "unknown");
 });
 
-test("an allowlisted contributed command defaults to zero arguments with no user profile", async () => {
+test("profileless zero-argument execution requires its own explicit user permission", async () => {
   const f = fixture();
   f.state.commandProfiles = undefined;
   const calls: unknown[][] = [];
   f.host.executeCommand = (...args) => calls.push(args);
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run" }),
+    code("COMMAND_NOT_AUTHORIZED"),
+  );
+  assert.deepEqual(calls, []);
+  f.state.allowedCommands = [];
+  f.state.allowedZeroArgumentCommands = ["one.run"];
   const entry = (await f.service.search({ query: "one.run" })).commands[0];
   assert.equal(entry?.eligibility.eligible, true);
   assert.deepEqual(entry?.argumentTypes, []);
@@ -133,10 +141,26 @@ test("an allowlisted contributed command defaults to zero arguments with no user
 test("adding a mismatched profile during discovery cannot fall back to the default", async () => {
   const f = fixture();
   f.state.commandProfiles = undefined;
+  f.state.allowedZeroArgumentCommands = ["one.run"];
   f.host.getCommands = async () => {
     f.state.commandProfiles = [
       { ...f.profiles[0], extensionId: "example.other" },
     ];
+    return ["one.run"];
+  };
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run" }),
+    code("COMMAND_CONTEXT_CHANGED"),
+  );
+  assert.deepEqual(f.calls, []);
+});
+
+test("revokes zero-argument authorization changed during discovery", async () => {
+  const f = fixture();
+  f.state.commandProfiles = undefined;
+  f.state.allowedZeroArgumentCommands = ["one.run"];
+  f.host.getCommands = async () => {
+    f.state.allowedZeroArgumentCommands = [];
     return ["one.run"];
   };
   await assert.rejects(
