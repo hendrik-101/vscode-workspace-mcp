@@ -4,8 +4,11 @@
 extensions' `contributes.commands` manifests. Discovery never invokes a handler or
 activates an extension. Search matches ID, title, category or extension ID by
 case-insensitive substring. Results include `registered`, manifest metadata and an
-eligibility reason. Use `nextOffset` with the same query, and check `incomplete`.
-Discovery scans up to 10,000 runtime IDs, 256 extensions and 5,000 contributions.
+eligibility reason. `argumentTypes` describes the call that Workspace MCP
+accepts. Without a configured profile, `[]` is the bridge's zero-argument
+default. Consult the extension's documentation or verified behavior to
+determine the handler signature. Use `nextOffset` with the same query, and
+check `incomplete`. Discovery scans up to 10,000 runtime IDs, 256 extensions and 5,000 contributions.
 Incomplete discovery cannot grant execution eligibility.
 
 ## Allow a command in VS Code
