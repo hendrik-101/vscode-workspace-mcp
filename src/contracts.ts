@@ -105,6 +105,10 @@ export const results = {
     commands: z.array(
       z.looseObject({
         commandId: text,
+        registered: boolean,
+        argumentTypes: z
+          .array(z.enum(["string", "number", "boolean", "null"]))
+          .optional(),
         metadata: z.array(
           z.looseObject({
             extensionId: text,
@@ -134,6 +138,15 @@ export const results = {
     resultOmitted: boolean.optional(),
     reason: z.enum(["timeout", "cancelled", "session_stopped"]).optional(),
   }),
+  read_output: z.union([
+    z.strictObject({ status: z.enum(["not_shared", "not_visible"]) }),
+    z.strictObject({
+      status: z.literal("available"),
+      text,
+      truncated: boolean,
+      version: number,
+    }),
+  ]),
   workspace_roots: z.array(root),
   editor_context: z.looseObject({
     roots: z.array(root),

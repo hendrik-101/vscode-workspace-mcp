@@ -15,8 +15,9 @@ private sources or proprietary extension code.
 | `stdio.ts`           | Client adapter; dedicated certificate trust, loopback only, no redirects    |
 | `adapter.ts`         | Stable extension-owned adapter installation; no workspace resources         |
 | `extension.ts`       | Explicit start/stop, window lifecycle, connection details and write policy  |
-| `commands.ts`        | Generic command discovery, declaration admission and bounded invocation     |
+| `commands.ts`        | Command discovery, profile admission and bounded invocation                 |
 | `commands-vscode.ts` | Public command/extension APIs, user-only authority and context invalidation |
+| `output.ts`          | Explicit per-session sharing and bounded reads of a visible Output channel  |
 | Client packages      | Shared workflow, thin Claude/Codex manifests and stdio settings             |
 
 No autostart. Writes use user-only `deny`/`allow`/`ask` policy, default `ask`.
@@ -40,8 +41,8 @@ extensions, outside this boundary.
 
 No telemetry, analytics, external requests, remote listener, shell, terminal,
 arbitrary commands, file deletion or implicit backend activation.
-[Direct command invocation](commands.md) requires separate authority and capability
-evidence; declared commands can have external/destructive effects. Only the stdio adapter
+[Direct command invocation](commands.md) requires separate authority and
+a user-reviewed profile; profiled commands can have external/destructive effects. Only the stdio adapter
 initiates product connections, to the authenticated loopback listener.
 See [SECURITY.md](../SECURITY.md) for threats and reporting.
 

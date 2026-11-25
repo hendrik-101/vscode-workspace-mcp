@@ -58,7 +58,8 @@ for continuation, ambiguity and conservative full-range availability rules.
 
 ## Direct commands
 
-`search_commands` discovers IDs and untrusted manifest metadata without probing
-handlers. `invoke_command` requires separate user authority and explicit supported
-zero-argument non-interactive evidence. Unknown/prompting commands are denied
-before dispatch. See [contracts, bounds and ADT limitations](commands.md).
+`search_commands` discovers live command IDs and installed extension manifest
+contributions. `invoke_command` checks separate user authorization and a
+matching versioned profile, including argument types. `read_output` reads the
+tail of the visible session-shared Output channel. See
+[command profiles, Output sharing and Class Run](commands.md).

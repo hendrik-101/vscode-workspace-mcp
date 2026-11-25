@@ -517,6 +517,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     "preview_code_actions",
     "preview_rename",
     "read_document",
+    "read_output",
     "read_symbol",
     "save_document",
     "search_commands",

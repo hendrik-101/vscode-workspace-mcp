@@ -8,6 +8,7 @@ import { workspace } from "./fixtures/workspace.js";
 
 test("MCP command tools advertise open-world side effects, reject args and return timeout before transport expires", async (t) => {
   let calls = 0;
+  let received: unknown[] = [];
   let release!: () => void;
   const commands = new CommandService({
     getCommands: async () => ["fixture.run"],
@@ -19,16 +20,6 @@ test("MCP command tools advertise open-world side effects, reject args and retur
           contributes: {
             commands: [{ command: "fixture.run", title: "Fixture Run" }],
           },
-          workspaceMcpCommandContracts: [
-            {
-              command: "fixture.run",
-              extensionVersion: "1",
-              arguments: "none",
-              interaction: "none",
-              context: "workspace",
-              documentation: "https://example.org/fixture",
-            },
-          ],
         },
       },
     ],
@@ -36,10 +27,20 @@ test("MCP command tools advertise open-world side effects, reject args and retur
       authorized: true,
       trusted: true,
       allowedCommands: ["fixture.run"],
+      commandProfiles: [
+        {
+          command: "fixture.run",
+          extensionId: "fixture.one",
+          extensionVersion: "1",
+          argumentTypes: ["string"],
+          nonInteractive: true,
+        },
+      ],
       context: "workspace",
     }),
     configuration: () => undefined,
-    executeCommand: () => {
+    executeCommand: (...args) => {
+      received = args;
       calls++;
       return new Promise<void>((resolve) => {
         release = resolve;
@@ -86,16 +87,37 @@ test("MCP command tools advertise open-world side effects, reject args and retur
   });
   assert.equal(denied.isError, true);
   assert.equal(calls, 0);
+  const oversized = await fetch(server.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${server.token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "invoke_command",
+        arguments: { commandId: "fixture.run", args: Array(9).fill("demo") },
+      },
+    }),
+  });
+  assert.equal(oversized.status, 413);
+  await oversized.text();
+  assert.equal(calls, 0);
   const before = Date.now();
   const reply = await client.callTool({
     name: "invoke_command",
-    arguments: { commandId: "fixture.run", timeoutMs: 10 },
+    arguments: { commandId: "fixture.run", args: ["demo"], timeoutMs: 10 },
   });
   assert.equal(
     (reply.structuredContent as any).result.outcome,
     "completion_unconfirmed",
   );
   assert.equal(calls, 1);
+  assert.deepEqual(received, ["fixture.run", "demo"]);
   assert.ok(Date.now() - before < 5000);
 });
 
@@ -127,4 +149,48 @@ test("failed listener startup disposes its command service", async (t) => {
     (error: unknown) => (error as { code: string }).code === "EADDRINUSE",
   );
   assert.equal(disposed, 1);
+});
+
+test("MCP reads a bounded shared output snapshot", async (t) => {
+  let received: number | undefined;
+  const server = await startServer(workspace, {
+    readOutput: (maxChars) => {
+      received = maxChars;
+      return {
+        status: "available",
+        text: "fixture output",
+        version: 2,
+        truncated: true,
+      };
+    },
+  });
+  const client = new Client({ name: "output-test", version: "1" });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${server.token}` } },
+    }),
+  );
+  const tools = (await client.listTools()).tools;
+  assert.equal(
+    tools.find((tool) => tool.name === "read_output")?.annotations
+      ?.readOnlyHint,
+    true,
+  );
+  const result = await client.callTool({
+    name: "read_output",
+    arguments: { maxChars: 14 },
+  });
+  assert.deepEqual(result.structuredContent, {
+    result: {
+      status: "available",
+      text: "fixture output",
+      version: 2,
+      truncated: true,
+    },
+  });
+  assert.equal(received, 14);
 });

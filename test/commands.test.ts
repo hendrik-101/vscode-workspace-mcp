@@ -12,22 +12,22 @@ function fixture() {
         { command: "one.prompt", title: "Prompt" },
       ],
     },
-    workspaceMcpCommandContracts: [
-      {
-        command: "one.run",
-        extensionVersion: "1.0.0",
-        arguments: "none",
-        interaction: "none",
-        context: "workspace",
-        documentation: "https://example.org/contract",
-        requiresConfiguration: [{ key: "one.ready", value: true }],
-      },
-    ],
   };
+  const profiles = [
+    {
+      command: "one.run",
+      extensionId: "example.one",
+      extensionVersion: "1.0.0",
+      argumentTypes: [] as Array<"string" | "boolean">,
+      nonInteractive: true,
+      requiresConfiguration: [{ key: "one.ready", value: true }],
+    },
+  ];
   const state = {
     trusted: true,
     authorized: true,
     allowedCommands: ["one.run", "one.prompt", "unknown"] as unknown,
+    commandProfiles: profiles as unknown,
     context: "workspace/editor:1",
   };
   let ready: unknown = true;
@@ -45,6 +45,7 @@ function fixture() {
     host,
     state,
     manifest,
+    profiles,
     calls,
     ready: (value: unknown) => {
       ready = value;
@@ -114,6 +115,7 @@ for (const change of [
   "prerequisite",
   "context",
   "authorization",
+  "profile",
   "trust",
   "stop",
   "cancel",
@@ -126,6 +128,7 @@ for (const change of [
       if (change === "prerequisite") f.ready(false);
       if (change === "context") f.state.context = "workspace/editor:2";
       if (change === "authorization") f.state.allowedCommands = [];
+      if (change === "profile") f.profiles[0]!.argumentTypes = ["string"];
       if (change === "trust") f.state.trusted = false;
       if (change === "stop") f.service.dispose();
       if (change === "cancel") controller.abort();
@@ -330,7 +333,7 @@ test("discovery is bounded and incomplete metadata cannot authorize dispatch", a
   assert.deepEqual(f.calls, []);
 });
 
-test("malformed declarations and missing workspace prerequisites fail closed", async () => {
+test("malformed profiles and missing workspace prerequisites fail closed", async () => {
   const f = fixture();
   f.state.context = "";
   await assert.rejects(
@@ -338,7 +341,7 @@ test("malformed declarations and missing workspace prerequisites fail closed", a
     code("COMMAND_UNSUPPORTED"),
   );
   f.state.context = "workspace";
-  (f.manifest.workspaceMcpCommandContracts[0] as any).interaction = "prompt";
+  f.profiles[0]!.nonInteractive = false;
   await assert.rejects(
     f.service.invoke({ commandId: "one.run" }),
     code("COMMAND_UNSUPPORTED"),
@@ -355,4 +358,48 @@ test("numeric and boolean scalar payloads are summarized without exposing creden
     assert.equal("value" in result, false);
     assert.equal(result.resultOmitted, true);
   }
+});
+
+test("finds manifest-only commands without activating their extensions", async () => {
+  const f = fixture();
+  f.host.getCommands = async () => [];
+  const result = await f.service.search({ query: "one.run" });
+  assert.equal(result.commands[0]?.commandId, "one.run");
+  assert.equal(result.commands[0]?.registered, false);
+  assert.deepEqual(f.calls, []);
+});
+
+test("dispatches only positional arguments matching the user profile", async () => {
+  const f = fixture();
+  f.profiles[0]!.argumentTypes = ["string", "boolean"];
+  const calls: unknown[][] = [];
+  f.host.executeCommand = (...args) => calls.push(args);
+  assert.deepEqual(
+    (await f.service.search({ query: "one.run" })).commands[0]?.argumentTypes,
+    ["string", "boolean"],
+  );
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run", args: [true, "demo"] }),
+    code("INVALID_ARGUMENT"),
+  );
+  assert.deepEqual(calls, []);
+  await f.service.invoke({ commandId: "one.run", args: ["demo", true] });
+  assert.deepEqual(calls, [["one.run", "demo", true]]);
+});
+
+test("requires the profile's exact extension and active editor scheme", async () => {
+  const f = fixture();
+  f.state.commandProfiles = [{ ...f.profiles[0], activeEditorScheme: "abap" }];
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run" }),
+    code("COMMAND_UNSUPPORTED"),
+  );
+  f.state.commandProfiles = [
+    { ...f.profiles[0], extensionId: "example.other" },
+  ];
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run" }),
+    code("COMMAND_UNSUPPORTED"),
+  );
+  assert.deepEqual(f.calls, []);
 });

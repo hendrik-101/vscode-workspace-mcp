@@ -13,9 +13,12 @@ owner privately before disclosing an exploitable issue.
   offers session-only or persistent allow/deny; dismissal denies writes.
 - Workspace operations admit only current roots; no arbitrary URI or terminal.
 - Direct commands are default-deny, with separate user-only command authority and
-  explicit exact-version non-interactive contracts. They may have destructive or
+  user-reviewed exact-version non-interactive profiles. They may have destructive or
   external effects beyond workspace roots; buffer-write authority is separate.
   See [command admission and limitations](docs/commands.md).
+- Output text is available only from a channel explicitly shared in the running
+  window, while that channel remains visible. Sharing exposes channel history and
+  subsequent text to authenticated clients until revoked or the bridge stops.
 - Live document versions required for writes. Saving is separate from editing.
 - Edits require Auto Save off. Stop permanently revokes the running session.
 - Host/Origin checks, request limits and bounded filesystem traversal.
@@ -30,8 +33,8 @@ network behavior and policies. Review those independently. The bridge does not
 manage SAP login, transports or activation.
 
 A bearer token grants configured read/write access to admitted roots and any
-separately authorized eligible direct commands in
-one VS Code window. Protect client configuration as a secret. Stopping the bridge
+separately authorized eligible direct commands and the explicitly shared
+Output channel in one VS Code window. Protect client configuration as a secret. Stopping the bridge
 revokes the session and closes its listener, but retains the stored credential.
 Restarting reuses it. Only **Workspace MCP: Rotate Token** replaces it after
 confirmation; rotation stops the local bridge even when cancelled or storage fails.

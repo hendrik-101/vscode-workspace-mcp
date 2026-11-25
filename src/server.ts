@@ -13,7 +13,12 @@ import { z } from "zod";
 
 import { SYMBOL_TYPES, type WorkspaceApi } from "./types.js";
 import { outputSchema, results } from "./contracts.js";
-import type { CommandApi } from "./commands.js";
+import {
+  commandArguments,
+  MAX_COMMAND_ARGUMENTS,
+  type CommandApi,
+} from "./commands.js";
+import type { OutputRead } from "./output.js";
 import { ResponseBudget, jsonBytes } from "./responseBudget.js";
 import { JsonStructureError, JsonStructureGuard } from "./jsonStructure.js";
 import {
@@ -30,6 +35,7 @@ const BODY_TOO_LARGE = `Request body exceeds the ${MAX_BODY / (1024 * 1024)} MiB
 const MAX_REQUESTS = 16;
 const MAX_SEARCH_GLOBS = 20;
 const ARRAY_LIMITS = [
+  ["invoke_command", "args", MAX_COMMAND_ARGUMENTS],
   ["edit_document", "edits", MAX_EDITS],
   ["search_workspace", "include", MAX_SEARCH_GLOBS],
   ["search_workspace", "exclude", MAX_SEARCH_GLOBS],
@@ -60,7 +66,7 @@ const preserveFocus = z
   .describe("Keep keyboard focus in the current editor; default true.");
 const errors: Record<string, string> = {
   COMMAND_UNSUPPORTED:
-    "Command has no applicable supported non-interactive, zero-argument contract. No command was dispatched.",
+    "Command has no applicable supported non-interactive command profile. No command was dispatched.",
   COMMAND_NOT_AUTHORIZED:
     "Command is outside the user-authorized scope. No command was dispatched.",
   COMMAND_CONTEXT_CHANGED:
@@ -103,10 +109,11 @@ function createMcpServer(
   reserveResponse: (content: unknown, id: string | number) => void,
   signal: AbortSignal,
   commands?: CommandApi,
+  readOutput?: (maxChars: number) => OutputRead,
 ) {
   const server = new McpServer({
     name: "vscode-workspace-mcp",
-    version: "0.1.0",
+    version: "0.1.2",
   });
   function tool<S extends z.ZodRawShape>(
     name: keyof typeof results,
@@ -653,7 +660,7 @@ function createMcpServer(
   );
   tool(
     "search_commands",
-    "Discover bounded live command IDs with untrusted manifest metadata and eligibility reasons. Never executes or activates handlers. Metadata is not ownership proof. Continue with nextOffset and unchanged query; inspect incomplete. Unknown or prompting commands cannot be invoked.",
+    "Find runtime and manifest command IDs, profile argument types and eligibility. Discovery never activates extensions. Continue with nextOffset and the same query.",
     z.strictObject({
       query: z
         .string()
@@ -666,7 +673,7 @@ function createMcpServer(
         .number()
         .int()
         .min(0)
-        .max(10_000)
+        .max(15_000)
         .optional()
         .describe(
           "Live filtered offset; default 0. Continue with nextOffset and unchanged query.",
@@ -692,23 +699,22 @@ function createMcpServer(
   );
   tool(
     "invoke_command",
-    "Execute one user-authorized command with an explicit version-specific non-interactive, zero-argument contract. May have external or destructive side effects. Unknown/prompting commands are rejected before dispatch. No UI is controlled. Reports handler completion, failure or completion_unconfirmed after a bounded wait. Timeout/cancellation cannot stop the handler: never automatically retry ambiguous execution. Only result type summaries are returned; raw payloads and errors are suppressed; completion does not prove business success.",
+    "Run an authorized command matching a versioned user profile. May have external side effects. On completion_unconfirmed, do not retry automatically. Results summarize handler completion and omit raw payloads.",
     z.strictObject({
       commandId: z
         .string()
         .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/)
-        .describe(
-          "Exact discovered ID with supported evidence and user authorization; no arguments are accepted.",
-        ),
+        .describe("Exact command ID."),
+      args: commandArguments
+        .optional()
+        .describe("Positional values matching discovered argumentTypes."),
       timeoutMs: z
         .number()
         .int()
         .min(1)
         .max(20_000)
         .optional()
-        .describe(
-          "Maximum wait; default/maximum 20000 ms, below the 30-second transport timeout.",
-        ),
+        .describe("Wait in ms, default and max 20000."),
     }),
     (args, requestSignal) => {
       if (!commands)
@@ -720,6 +726,21 @@ function createMcpServer(
     false,
     true,
     true,
+  );
+  tool(
+    "read_output",
+    "Read the tail of the visible Output channel explicitly shared for this session. May include prior or unrelated writes.",
+    z.strictObject({
+      maxChars: z
+        .number()
+        .int()
+        .min(1)
+        .max(64_000)
+        .optional()
+        .describe("Maximum UTF-16 units, default 16000."),
+    }),
+    ({ maxChars }) =>
+      readOutput?.(maxChars ?? 16_000) ?? { status: "not_shared" },
   );
   return server;
 }
@@ -835,6 +856,7 @@ export async function startServer(
     authorized?: () => boolean;
     tls?: ServerIdentity;
     commands?: CommandApi;
+    readOutput?: (maxChars: number) => OutputRead;
   } = {},
 ): Promise<{
   url: string;
@@ -1032,6 +1054,7 @@ export async function startServer(
         },
         controller.signal,
         options.commands,
+        options.readOutput,
       );
       sessions.add(mcp);
       const transport = new StreamableHTTPServerTransport({

@@ -81,15 +81,15 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 | `get_definition`, `get_references`, `get_hover` | Query installed language providers                                       |
 | `preview_rename`, `preview_code_actions`        | Preview provider text edits; no automatic application                    |
 
-| `search_commands` | Discover runtime command IDs, manifest metadata and admission reasons |
-| `invoke_command` | Invoke separately authorized, explicitly supported non-interactive zero-argument commands |
+| `search_commands` | Discover runtime and contributed command IDs, argument profiles and eligibility |
+| `invoke_command` | Invoke authorized commands using exact-version user profiles and typed arguments |
+| `read_output` | Read the tail of a visible Output channel explicitly shared for this session |
 
 Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are required.
-No file creation/deletion/renaming, arbitrary commands or terminal tools.
+File creation, deletion, renaming and terminal tools are outside the workspace API.
 [Direct commands](docs/commands.md) require separate user authorization and an
-explicit exact-version non-interactive extension contract; existing extensions
-without that contract remain unsupported. No UI is controlled, and autonomous
-ADT login is not provided.
+exact-version non-interactive profile in user settings. The same guide covers
+sharing an Output channel and configuring SAP ADT Class Run.
 Search reports truncation/errors: it is not an exhaustive SAP repository index.
 
 See the [tool reference](docs/tools.md) for parameters and limits.

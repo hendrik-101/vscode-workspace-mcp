@@ -24,18 +24,17 @@ test("VS Code adapter filters internal IDs and reads command authority only from
   const manifest = {
     version: "1",
     contributes: { commands: [{ command: "fixture.run", title: "Run" }] },
-    workspaceMcpCommandContracts: [
-      {
-        command: "fixture.run",
-        extensionVersion: "1",
-        arguments: "none",
-        interaction: "none",
-        context: "workspace",
-        documentation: "https://example.org",
-        requiresConfiguration: [{ key: "fixture.ready", value: true }],
-      },
-    ],
   };
+  const profiles = [
+    {
+      command: "fixture.run",
+      extensionId: "fixture.one",
+      extensionVersion: "1",
+      argumentTypes: [],
+      nonInteractive: true,
+      requiresConfiguration: [{ key: "fixture.ready", value: true }],
+    },
+  ];
   const vscode = {
     extensions: {
       all: [{ id: "fixture.one", packageJSON: manifest }],
@@ -45,8 +44,8 @@ test("VS Code adapter filters internal IDs and reads command authority only from
       isTrusted: true,
       workspaceFolders: [{ uri: { toString: () => "memfs:/project" } }],
       getConfiguration: () => ({
-        inspect: () => ({
-          globalValue,
+        inspect: (key: string) => ({
+          globalValue: key === "commandProfiles" ? profiles : globalValue,
           workspaceValue: ["fixture.run"],
           workspaceFolderValue: ["fixture.run"],
         }),
@@ -136,9 +135,12 @@ test("VS Code adapter filters internal IDs and reads command authority only from
   // prerequisite keys, including those needed by the waiting invocation.
   const other = structuredClone(manifest);
   other.contributes.commands[0]!.command = "fixture.other";
-  other.workspaceMcpCommandContracts[0]!.command = "fixture.other";
-  other.workspaceMcpCommandContracts[0]!.requiresConfiguration[0]!.key =
-    "fixture.otherReady";
+  profiles.push({
+    ...profiles[0]!,
+    command: "fixture.other",
+    extensionId: "fixture.two",
+    requiresConfiguration: [{ key: "fixture.otherReady", value: true }],
+  });
   vscode.extensions.all.push({ id: "fixture.two", packageJSON: other });
   configuration.set("fixture.otherReady", true);
   events[0]!({});

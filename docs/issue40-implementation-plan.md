@@ -1,4 +1,6 @@
-# Issue40 direct commands implementation plan
+# Historical Issue40 direct commands implementation plan
+
+For current profile and Output behavior, see [commands](commands.md).
 
 Scope confirmed by parent: implement the live issue's zero-argument,
 noninteractive subset; resource contracts remain follow-on work. Execution is
@@ -7,8 +9,7 @@ native, with an independent final simplification/security review. No publishing.
 ## Design decisions
 
 - A focused host-independent `CommandService` uses a public VS Code adapter.
-- Installed extensions may explicitly declare `workspaceMcpCommandContracts`
-  in their manifests. The format pins extension version, command ID,
+- The original preview used opt-in extension manifest declarations. The format pins extension version, command ID,
   `arguments: none`, `interaction: none`, `context: workspace`, and a
   documentation URL. Optional scalar configuration prerequisites must match.
   This is an opt-in contract format, not a standard VS Code contribution.

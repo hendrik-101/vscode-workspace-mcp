@@ -155,6 +155,12 @@ function fixture(initialPolicy: string = "ask") {
         };
       if (id === "./commands-vscode")
         return { createCommandService: () => ({ dispose() {} }) };
+      if (id === "./output")
+        return {
+          OutputSharing: class {
+            clear() {}
+          },
+        };
       if (id === "./workspace")
         return {
           WorkspaceService: class {

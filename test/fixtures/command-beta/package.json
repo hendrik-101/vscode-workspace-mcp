@@ -22,23 +22,5 @@
         "title": "Beta Prompt"
       }
     ]
-  },
-  "workspaceMcpCommandContracts": [
-    {
-      "command": "issue40.beta.complete",
-      "extensionVersion": "2.0.0",
-      "arguments": "none",
-      "interaction": "none",
-      "context": "workspace",
-      "documentation": "https://example.invalid/issue40-beta"
-    },
-    {
-      "command": "issue40.beta.opaque",
-      "extensionVersion": "2.0.0",
-      "arguments": "none",
-      "interaction": "none",
-      "context": "workspace",
-      "documentation": "https://example.invalid/issue40-beta"
-    }
-  ]
+  }
 }
