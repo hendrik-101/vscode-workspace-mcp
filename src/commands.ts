@@ -181,7 +181,11 @@ export class CommandService implements CommandApi {
   private snapshot() {
     const state = this.host.state();
     const allowed = z.array(id).max(100).safeParse(state.allowedCommands);
-    const profiles = z.array(profile).max(100).safeParse(state.commandProfiles);
+    const profiles = z
+      .array(profile)
+      .max(100)
+      .default([])
+      .safeParse(state.commandProfiles);
     const profilesById = new Map<string, Profile | undefined>();
     for (const item of profiles.success ? profiles.data : []) {
       profilesById.set(
@@ -268,6 +272,8 @@ export class CommandService implements CommandApi {
             allowedCommands: allowed.success ? allowed.data : [],
           },
           incomplete,
+          profilesValid: profiles.success,
+          profiledCommands: [...profilesById.keys()],
           claims: [...claims],
         }),
       )
@@ -276,6 +282,8 @@ export class CommandService implements CommandApi {
       state,
       allowed: allowed.success ? allowed.data : [],
       claims,
+      profilesValid: profiles.success,
+      profilesById,
       incomplete,
       fingerprint,
     };
@@ -287,14 +295,18 @@ export class CommandService implements CommandApi {
   ): CommandEntry {
     const claims = snapshot.claims.get(commandId) ?? [];
     const evidence = claims[0];
+    const profile = evidence?.profile;
+    const profileMismatch =
+      !snapshot.profilesValid ||
+      (snapshot.profilesById.has(commandId) && !profile);
+    const stale =
+      profile !== undefined &&
+      profile.extensionVersion !== evidence?.metadata.extensionVersion;
     let reason: EligibilityReason;
     if (snapshot.incomplete) reason = "DISCOVERY_INCOMPLETE";
     else if (claims.length > 1) reason = "AMBIGUOUS_METADATA";
-    else if (!evidence?.profile) reason = "UNSUPPORTED_CONTRACT";
-    else if (
-      evidence.profile.extensionVersion !== evidence.metadata.extensionVersion
-    )
-      reason = "STALE_CONTRACT";
+    else if (!evidence || profileMismatch) reason = "UNSUPPORTED_CONTRACT";
+    else if (stale) reason = "STALE_CONTRACT";
     else if (!evidence.prerequisites || !snapshot.state.context)
       reason = "PREREQUISITE_UNMET";
     else if (!snapshot.state.trusted) reason = "UNTRUSTED_WORKSPACE";
@@ -304,10 +316,8 @@ export class CommandService implements CommandApi {
     return {
       commandId,
       registered,
-      ...(evidence?.profile &&
-      claims.length === 1 &&
-      evidence.profile.extensionVersion === evidence.metadata.extensionVersion
-        ? { argumentTypes: evidence.profile.argumentTypes }
+      ...(claims.length === 1 && !profileMismatch && !stale
+        ? { argumentTypes: profile?.argumentTypes ?? [] }
         : {}),
       metadata: claims.map((claim) => claim.metadata),
       eligibility: { eligible: reason === "SUPPORTED", reason },

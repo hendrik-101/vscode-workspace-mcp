@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Run allowlisted contributed commands with zero arguments without requiring
+  a user profile. Typed arguments and additional prerequisites use profiles.
+- Open VS Code command settings from the Command Palette, and document how
+  an agent can help prepare settings for commands with arguments.
+
 ## 0.1.2 — command and Output preview
 
 - Discover contributed commands before extension activation and show their

@@ -43,8 +43,10 @@ extensions, outside this boundary.
 
 No telemetry, analytics, external requests, remote listener, shell, terminal,
 arbitrary commands, file deletion or implicit backend activation.
-[Direct command invocation](commands.md) requires separate authority and
-a user-reviewed profile; profiled commands can have external/destructive effects. Only the stdio adapter
+[Direct command invocation](commands.md) requires separate authority. The
+default dispatch passes zero arguments. Typed arguments require a user-reviewed
+profile. Authorized commands can have external or destructive effects.
+Only the stdio adapter
 initiates product connections, to the authenticated loopback listener.
 See [SECURITY.md](../SECURITY.md) for threats and reporting.
 

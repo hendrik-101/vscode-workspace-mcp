@@ -84,13 +84,13 @@ Install the resulting `artifacts/workspace-mcp.vsix` using the steps above.
 | `preview_rename`, `preview_code_actions`        | Preview provider text edits; no automatic application                    |
 
 | `search_commands` | Discover runtime and contributed command IDs, argument profiles and eligibility |
-| `invoke_command` | Invoke authorized commands using exact-version user profiles and typed arguments |
+| `invoke_command` | Run authorized commands with zero arguments by default or typed arguments from a user profile |
 | `read_output` | Read the tail of a visible Output channel explicitly shared for this session |
 
 Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are required.
 File creation, deletion, renaming and terminal tools are outside the workspace API.
-[Direct commands](docs/commands.md) require separate user authorization and an
-exact-version non-interactive profile in user settings. The same guide covers
+Open **Workspace MCP: Configure Commands** to manage the user allowlist and
+optional argument profiles. The [command guide](docs/commands.md) also covers
 sharing an Output channel and configuring SAP ADT Class Run.
 Search reports truncation/errors: it is not an exhaustive SAP repository index.
 

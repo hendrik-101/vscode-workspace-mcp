@@ -26,7 +26,7 @@ function fixture() {
   const state = {
     trusted: true,
     authorized: true,
-    allowedCommands: ["one.run", "one.prompt", "unknown"] as unknown,
+    allowedCommands: ["one.run", "unknown"] as unknown,
     commandProfiles: profiles as unknown,
     context: "workspace/editor:1",
   };
@@ -63,7 +63,7 @@ test("discovery enriches metadata, paginates and never probes handlers", async (
   assert.equal(page.commands.length, 1);
   assert.equal(page.commands[0]?.commandId, "one.prompt");
   assert.equal(page.commands[0]?.metadata[0]?.extensionId, "example.one");
-  assert.equal(page.commands[0]?.eligibility.reason, "UNSUPPORTED_CONTRACT");
+  assert.equal(page.commands[0]?.eligibility.reason, "NOT_AUTHORIZED");
   assert.equal(page.nextOffset, 1);
   const next = await f.service.search({
     query: "one",
@@ -73,11 +73,11 @@ test("discovery enriches metadata, paginates and never probes handlers", async (
   assert.deepEqual(f.calls, []);
 });
 
-test("authorization is separate from capability evidence; unknown and prompting denied predispatch", async () => {
+test("unregistered owners and commands outside the user allowlist are denied", async () => {
   const f = fixture();
   await assert.rejects(
     f.service.invoke({ commandId: "one.prompt" }),
-    code("COMMAND_UNSUPPORTED"),
+    code("COMMAND_NOT_AUTHORIZED"),
   );
   await assert.rejects(
     f.service.invoke({ commandId: "unknown" }),
@@ -108,6 +108,42 @@ test("valid command executes exactly once with zero arguments and undefined is h
   assert.equal(result.outcome, "handler_completed");
   assert.equal(result.resultType, "undefined");
   assert.equal(result.businessSuccess, "unknown");
+});
+
+test("an allowlisted contributed command defaults to zero arguments with no user profile", async () => {
+  const f = fixture();
+  f.state.commandProfiles = undefined;
+  const calls: unknown[][] = [];
+  f.host.executeCommand = (...args) => calls.push(args);
+  const entry = (await f.service.search({ query: "one.run" })).commands[0];
+  assert.equal(entry?.eligibility.eligible, true);
+  assert.deepEqual(entry?.argumentTypes, []);
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run", args: ["unexpected"] }),
+    code("INVALID_ARGUMENT"),
+  );
+  assert.deepEqual(calls, []);
+  assert.equal(
+    (await f.service.invoke({ commandId: "one.run" })).outcome,
+    "handler_completed",
+  );
+  assert.deepEqual(calls, [["one.run"]]);
+});
+
+test("adding a mismatched profile during discovery cannot fall back to the default", async () => {
+  const f = fixture();
+  f.state.commandProfiles = undefined;
+  f.host.getCommands = async () => {
+    f.state.commandProfiles = [
+      { ...f.profiles[0], extensionId: "example.other" },
+    ];
+    return ["one.run"];
+  };
+  await assert.rejects(
+    f.service.invoke({ commandId: "one.run" }),
+    code("COMMAND_CONTEXT_CHANGED"),
+  );
+  assert.deepEqual(f.calls, []);
 });
 
 for (const change of [

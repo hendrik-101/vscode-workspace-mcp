@@ -26,10 +26,8 @@ export async function commandTools(): Promise<void> {
     "issue40.alpha.throw",
     "issue40.alpha.reject",
     "issue40.alpha.hang",
-    "issue40.alpha.prompt",
     "issue40.beta.complete",
     "issue40.beta.opaque",
-    "issue40.beta.prompt",
   ];
   await settings.update(
     "allowedCommands",
@@ -39,7 +37,7 @@ export async function commandTools(): Promise<void> {
   await settings.update(
     "commandProfiles",
     allowed
-      .filter((command) => !command.endsWith(".prompt"))
+      .filter((command) => command !== "issue40.alpha.complete")
       .map((command) => {
         const extension = command.startsWith("issue40.alpha.") ? alpha : beta;
         return {
@@ -86,7 +84,7 @@ export async function commandTools(): Promise<void> {
       await assert.rejects(
         service.invoke({ commandId }),
         (error: unknown) =>
-          (error as { code: string }).code === "COMMAND_UNSUPPORTED",
+          (error as { code: string }).code === "COMMAND_NOT_AUTHORIZED",
       );
     }
     assert.equal(alpha.exports.calls("prompt"), 0);

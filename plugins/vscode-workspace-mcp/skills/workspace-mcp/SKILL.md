@@ -42,8 +42,16 @@ means text edits are present; `applicationSupported: false` (also the legacy
 `supported: false`) forbids treating them as an applicable complete operation.
 Use the native VS Code refactoring UI rather than reconstructing a rename.
 
-For extension functions, use `search_commands` to find IDs, argument types and
-eligibility reasons. Supply only arguments matching the versioned user profile.
+For extension functions, use `search_commands` to find IDs, extension versions,
+argument types and eligibility. For an eligible zero-argument command, omit
+`args`. If the user needs to authorize a command, point them to **Workspace MCP:
+Configure Commands** and **Allowed Commands**. For commands that need arguments,
+confirm the signature and prerequisites from the extension's documentation or
+verified behavior. Draft an entry for the user's **Command Profiles** in User
+Settings (JSON). Include the exact command ID, extension ID, installed version,
+ordered `argumentTypes` and `nonInteractive: true` only for a verified
+non-interactive call. Preserve other entries and let the user apply the settings.
+See the [command setup guide](https://github.com/hendrik-101/vscode-workspace-mcp/blob/main/docs/commands.md#commands-with-arguments).
 Never change settings to gain authority, guess resource/TreeView arguments, or
 automate dialogs. After `completion_unconfirmed`, never automatically retry
 because timeout and cancellation cannot stop the handler. Handler completion

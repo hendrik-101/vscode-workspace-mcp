@@ -8,41 +8,77 @@ eligibility reason. Use `nextOffset` with the same query, and check `incomplete`
 Discovery scans up to 10,000 runtime IDs, 256 extensions and 5,000 contributions.
 Incomplete discovery cannot grant execution eligibility.
 
-## Configure a command
+## Allow a command in VS Code
 
-In **Preferences: Open User Settings (JSON)**, add the exact command ID to
-`workspaceMcp.allowedCommands` and a matching profile to
-`workspaceMcp.commandProfiles`. Both settings default to empty and are read only
-from VS Code's user configuration. An agent or repository should never supply
-permission through workspace settings. Each profile describes one exact command
-ID, extension ID and installed version and confirms that the user has verified
-non-interactive behavior for that version.
+Open **Workspace MCP: Configure Commands** from the Command Palette. You can
+also open **Preferences: Open User Settings** and search
+`@id:workspaceMcp.allowedCommands`. Under **Workspace MCP: Allowed Commands**,
+choose **Add Item** and enter the exact command ID. Use an ID you trust to run
+without further input in the current editor. VS Code manifests do not establish
+whether the handler opens a dialog or what side effects it can have. On upgrade
+from 0.1.2, review existing allowlist entries because an entry can now run
+without a profile. To use the default for an existing command, remove its
+corresponding profile entry.
 
-`argumentTypes` is the ordered list of expected positional argument types. An
-empty list means zero arguments. Supported types are `string`, `number`,
-`boolean` and `null`, with at most eight arguments and 2,048 UTF-16 code units per
-string. Discovery reports these types from the profile. VS Code's ordinary
-command manifests supply labels and context menu placement. A shortcut can
-supply an argument, but ordinary manifest entries provide no general handler
-signature. In particular, passing an ABAP URI as a string does not create a
-`vscode.Uri` or an Explorer/TreeView object. Verify argument types and context
-for each command before enabling it.
+For a command without a configured profile, call
+`invoke_command({commandId: "example.run"})`. Workspace MCP sends zero
+positional arguments. The user allowlist, Workspace Trust, a workspace root,
+an unambiguous manifest contribution and a live registration are required.
+The bridge checks authorization and context again before dispatch. Manifest
+metadata identifies a contribution and cannot prove handler ownership.
 
-An optional `activeEditorScheme` requires a matching active editor. An optional
-`requiresConfiguration` array requires exact matches for up to ten effective
-configuration values, for example
+## Commands with arguments
+
+Agents should use `search_commands` to find the exact ID, contributing
+extension and installed version. Establish the handler's positional arguments
+and prerequisites from the extension's documentation or other verified
+behavior. VS Code provides no general command-signature API. A shortcut's
+fixed `args` or a menu placement describes that invocation only.
+
+For a command that takes arguments, help the user add a profile in **User
+Settings (JSON)**. In the graphical Settings editor, search
+`@id:workspaceMcp.commandProfiles` and choose **Edit in settings.json**.
+VS Code lists this setting in the UI and edits the array of objects in JSON.
+Ask the user to apply the entry. Merge into their existing settings arrays
+and preserve existing entries. This example assumes a documented command
+`example.refreshItem` in extension `example.tools` version `1.2.3` that
+accepts an item ID and a boolean.
+
+```json
+{
+  "workspaceMcp.allowedCommands": ["example.refreshItem"],
+  "workspaceMcp.commandProfiles": [
+    {
+      "command": "example.refreshItem",
+      "extensionId": "example.tools",
+      "extensionVersion": "1.2.3",
+      "argumentTypes": ["string", "boolean"],
+      "nonInteractive": true
+    }
+  ]
+}
+```
+
+After configuration, check eligibility with `search_commands`, then call
+`invoke_command({commandId: "example.refreshItem", args: ["item-42", true]})`.
+Supported positional types are `string`, `number`, `boolean` and `null`, with
+at most eight arguments and 2,048 UTF-16 code units per string. An empty
+`argumentTypes` array describes a zero-argument command with extra
+prerequisites. The bridge cannot convert an ABAP URI string to a `vscode.Uri`
+or reconstruct an Explorer or TreeView object.
+
+Set `nonInteractive` to `true` only when the reviewed call can complete
+without user input. An optional `activeEditorScheme` requires a matching
+active editor. An optional `requiresConfiguration` array requires exact
+matches for up to ten effective configuration values, for example
 `[{ "key": "example.ready", "value": true }]`. Use non-secret flags.
-A command needs an unambiguous manifest contribution, a registered ID and a
-trusted workspace with at least one root. Duplicate profiles, stale versions,
-unmet prerequisites and missing registrations are ineligible. The bridge checks
-authorization, profiles and editor context again immediately before dispatch.
-Manifest claims cannot prove handler ownership. A profile is a user-reviewed
-call description, and installed handlers may have effects beyond workspace roots.
+Wrong arity, mismatched types, stale versions, duplicate or mismatched
+profiles and unmet prerequisites prevent dispatch. Correct malformed profile
+settings before invoking commands. Upgrade a profile after checking the
+installed extension version's behavior.
 
-Call `invoke_command({commandId, args, timeoutMs})`. Omit `args` for a
-zero-argument profile. Input with the wrong arity or types is rejected before
-dispatch. A command with a profile that expects an active editor runs with
-the editor already active. Set up that editor before invoking it.
+Both settings are read from User settings. Agents can draft settings for
+the user and check eligibility after the user applies them.
 
 ## Return values and shared Output
 
@@ -70,27 +106,11 @@ MCP: Stop Sharing Output Channel** and stopping the bridge both revoke sharing.
 
 SAP documents Class Run from the open ABAP class using **ABAP: Run ABAP
 Application (Console)**. VS Code sends no positional arguments when launching
-a contributed command from the Command Palette. The following is a profile to
-try for that editor-based workflow. Replace `INSTALLED_ADT_VERSION` with the exact
-installed version reported by `search_commands`, and first verify the behavior
+a contributed command from the Command Palette. Add
+`adt-vscode.runApplication` to **Workspace MCP: Allowed Commands**. The
+default zero-argument call uses the active class. First verify the behavior
 with your connected SAP destination and a class that implements
 `IF_OO_ADT_CLASSRUN`.
-
-```json
-{
-  "workspaceMcp.allowedCommands": ["adt-vscode.runApplication"],
-  "workspaceMcp.commandProfiles": [
-    {
-      "command": "adt-vscode.runApplication",
-      "extensionId": "sapse.adt-vscode",
-      "extensionVersion": "INSTALLED_ADT_VERSION",
-      "argumentTypes": [],
-      "nonInteractive": true,
-      "activeEditorScheme": "abap"
-    }
-  ]
-}
-```
 
 1. Run Class Run manually once if needed to identify its Output channel. Share
    that channel and leave it visible alongside the ABAP editor.

@@ -544,6 +544,11 @@ export function activate(context: vscode.ExtensionContext): void {
       "Server identity replaced. Start Workspace MCP and update your private client configuration.",
     );
   });
+  register("workspaceMcp.configureCommands", async () => {
+    await vscode.commands.executeCommand("workbench.action.openSettings2", {
+      query: "@ext:hendrik101.vscode-workspace-mcp command",
+    });
+  });
   register("workspaceMcp.connection", async () => {
     const session = running;
     if (!session) {

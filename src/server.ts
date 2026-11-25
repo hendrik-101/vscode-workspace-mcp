@@ -66,7 +66,7 @@ const preserveFocus = z
   .describe("Keep keyboard focus in the current editor; default true.");
 const errors: Record<string, string> = {
   COMMAND_UNSUPPORTED:
-    "Command has no applicable supported non-interactive command profile. No command was dispatched.",
+    "Command metadata, prerequisites or configuration do not permit this call. No command was dispatched.",
   COMMAND_NOT_AUTHORIZED:
     "Command is outside the user-authorized scope. No command was dispatched.",
   COMMAND_CONTEXT_CHANGED:
@@ -699,7 +699,7 @@ function createMcpServer(
   );
   tool(
     "invoke_command",
-    "Run an authorized command matching a versioned user profile. May have external side effects. On completion_unconfirmed, do not retry automatically. Results summarize handler completion and omit raw payloads.",
+    "Run an authorized command. Omit args for a zero-argument call with no profile. Arguments need a matching user profile. Do not retry completion_unconfirmed. Raw results are omitted.",
     z.strictObject({
       commandId: z
         .string()
