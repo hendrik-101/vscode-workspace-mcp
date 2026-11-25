@@ -116,7 +116,25 @@ Set these in **User** settings; workspace overrides are ignored:
 | Setting                    | Behavior                                                                       |
 | -------------------------- | ------------------------------------------------------------------------------ |
 | `workspaceMcp.port`        | Default fixed port `39117`, range 1024–65535. Conflicts fail without fallback. |
+| `workspaceMcp.autoStart`   | Off by default. Start on launch or reload in trusted workspaces with a root.   |
 | `workspaceMcp.writePolicy` | `ask` (default), `allow` or `deny`; Workspace Trust remains required.          |
+
+For automatic read/write access on future VS Code launches, set both values in
+**Preferences: Open User Settings (JSON)**:
+
+```json
+{
+  "workspaceMcp.autoStart": true,
+  "workspaceMcp.writePolicy": "allow"
+}
+```
+
+Use `"deny"` for automatic read-only access or keep `"ask"` to approve access at
+each start. Auto-start applies when a trusted nonempty workspace window opens
+or reloads. **Workspace MCP: Stop** disconnects the current window until you
+start it again or reload it. Change User `autoStart` to `false` to switch off
+automatic startup for future windows. Connection details remain valid across
+bridge starts when the port, token and server identity are the same.
 
 For simultaneous windows, run **Workspace MCP: Select Port for This Window** in
 each window that needs a different port. Enter an unused port explicitly. Accepting

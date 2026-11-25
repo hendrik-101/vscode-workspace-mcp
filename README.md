@@ -33,13 +33,15 @@ as the VS Code extension host; hosted web sessions cannot connect directly.
    agent edits; the bridge refuses edits when Auto Save is enabled.
 4. Run **Workspace MCP: Start**. By default, it asks for write permission;
    dismissing the prompt keeps the bridge read-only. Editing and saving are
-   separate operations.
+   separate operations. To start automatically on future VS Code launches, set
+   `workspaceMcp.autoStart` in User settings. The bridge uses your configured
+   `workspaceMcp.writePolicy`.
 5. Run **Workspace MCP: Show Connection Details**, select your client and copy
    the generated **stdio** configuration into its private user settings.
    It contains a secret token: never commit or share it. Restart the client connection.
 6. Ask the agent to list workspace roots and read the active document.
 
-Use **Workspace MCP: Stop** to disconnect. See [client setup](docs/clients.md)
+Use **Workspace MCP: Stop** to disconnect the current window. See [client setup](docs/clients.md)
 for client-specific instructions, write policies, ports and remote-host limitations.
 CI artifacts expire after 14 days. [Versioned releases](docs/releases.md) attach a
 VSIX and checksum to GitHub Releases and publish the same tested file to Marketplace

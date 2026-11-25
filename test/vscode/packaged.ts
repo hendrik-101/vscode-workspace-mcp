@@ -150,6 +150,19 @@ async function connect(connection: Connection): Promise<{
   }
 }
 
+async function connectOnStartup(connection: Connection) {
+  const startBy = Date.now() + 15_000;
+  for (;;) {
+    try {
+      return await connect(connection);
+    } catch {
+      if (Date.now() >= startBy)
+        throw new Error("Automatic start did not accept the saved connection");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
 async function readThroughProtocol(client: Client): Promise<void> {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri;
   assert.ok(root);
@@ -192,6 +205,30 @@ async function readThroughProtocol(client: Client): Promise<void> {
   assert.equal(result.text, "unsaved packaged buffer\n");
   assert.equal(result.dirty, true);
   assert.equal(result.version, document.version);
+  if (process.env.WORKSPACE_MCP_TEST_PHASE === "reinstall") {
+    const edit = await client.callTool({
+      name: "edit_document",
+      arguments: {
+        uri: file.toString(),
+        version: result.version,
+        edits: [
+          {
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 7 },
+            },
+            text: "updated",
+          },
+        ],
+      },
+    });
+    assert.equal(
+      edit.isError,
+      undefined,
+      "Stored write policy must allow edits",
+    );
+    assert.equal(document.getText(), "updated packaged buffer\n");
+  }
   assert.equal(
     Buffer.from(await vscode.workspace.fs.readFile(file)).toString(),
     "packaged disk fixture\n",
@@ -241,21 +278,30 @@ export async function run(): Promise<void> {
     extension.packageJSON.version,
     process.env.WORKSPACE_MCP_TEST_VERSION,
   );
-  await extension.activate();
+  const previous: Saved | undefined =
+    phase === "install"
+      ? undefined
+      : (JSON.parse(await readFile(statePath, "utf8")) as Saved);
   let session: Awaited<ReturnType<typeof connect>> | undefined;
   try {
-    await deadline(vscode.commands.executeCommand("workspaceMcp.start"));
-    await requireListener();
+    if (phase === "reinstall" && previous) {
+      session = await connectOnStartup(previous.connection);
+      assert.equal(extension.isActive, true);
+    } else {
+      await extension.activate();
+      await deadline(vscode.commands.executeCommand("workspaceMcp.start"));
+      await requireListener();
+    }
     console.log(
       `Packaged VSIX ${phase}: bridge listening; requesting generated configuration`,
     );
     const current = await connectionDetails();
     let saved: Saved;
-    if (phase === "install") {
+    if (!previous) {
       saved = { connection: current, extensionPath: extension.extensionPath };
       await writeFile(statePath, JSON.stringify(saved), { mode: 0o600 });
     } else {
-      saved = JSON.parse(await readFile(statePath, "utf8")) as Saved;
+      saved = previous;
       // Boolean comparisons keep tokens/certificates out of failed assertions.
       assert.ok(
         JSON.stringify(saved.connection.args) === JSON.stringify(current.args),
@@ -308,7 +354,7 @@ export async function run(): Promise<void> {
         "Upgrade must replace the synthetic predecessor payload",
       );
     }
-    session = await connect(saved.connection);
+    session ??= await connect(saved.connection);
     await readThroughProtocol(session.client);
     await deadline(vscode.commands.executeCommand("workspaceMcp.stop"));
     try {

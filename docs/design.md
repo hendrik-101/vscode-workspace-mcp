@@ -7,20 +7,22 @@ private sources or proprietary extension code.
 
 ## Components
 
-| Component            | Responsibility                                                              |
-| -------------------- | --------------------------------------------------------------------------- |
-| `workspace.ts`       | VS Code URIs, live buffers, versioned edits and explicit save               |
-| `server.ts`          | Official MCP SDK, schemas, request bounds and authenticated loopback HTTPS  |
-| `tls.ts`             | SecretStorage identity, native WebCrypto and pinned certificate library     |
-| `stdio.ts`           | Client adapter; dedicated certificate trust, loopback only, no redirects    |
-| `adapter.ts`         | Stable extension-owned adapter installation; no workspace resources         |
-| `extension.ts`       | Explicit start/stop, window lifecycle, connection details and write policy  |
-| `commands.ts`        | Command discovery, profile admission and bounded invocation                 |
-| `commands-vscode.ts` | Public command/extension APIs, user-only authority and context invalidation |
-| `output.ts`          | Explicit per-session sharing and bounded reads of a visible Output channel  |
-| Client packages      | Shared workflow, thin Claude/Codex manifests and stdio settings             |
+| Component            | Responsibility                                                                     |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `workspace.ts`       | VS Code URIs, live buffers, versioned edits and explicit save                      |
+| `server.ts`          | Official MCP SDK, schemas, request bounds and authenticated loopback HTTPS         |
+| `tls.ts`             | SecretStorage identity, native WebCrypto and pinned certificate library            |
+| `stdio.ts`           | Client adapter; dedicated certificate trust, loopback only, no redirects           |
+| `adapter.ts`         | Stable extension-owned adapter installation; no workspace resources                |
+| `extension.ts`       | Manual and opt-in automatic start, window lifecycle, connection details and writes |
+| `commands.ts`        | Command discovery, profile admission and bounded invocation                        |
+| `commands-vscode.ts` | Public command/extension APIs, user-only authority and context invalidation        |
+| `output.ts`          | Explicit per-session sharing and bounded reads of a visible Output channel         |
+| Client packages      | Shared workflow, thin Claude/Codex manifests and stdio settings                    |
 
-No autostart. Writes use user-only `deny`/`allow`/`ask` policy, default `ask`.
+Manual start is the default. An application-scoped User setting opts in to
+automatic startup for trusted workspace windows with at least one root.
+Both start modes use the User `deny`/`allow`/`ask` write policy, default `ask`.
 Workspace operations use `workspace.fs`, `TextDocument` and `WorkspaceEdit`, never
 OS paths. Search requires neither a search provider nor local ripgrep. Saving is
 separate from editing and never activates ABAP objects; SAP save hooks may prompt

@@ -7,6 +7,8 @@
 - Run separately authorized commands using versioned user profiles with
   optional editor prerequisites and typed positional arguments.
 - Read bounded snapshots of an explicitly shared visible Output channel.
+- Opt in to automatic startup in trusted workspace windows using the existing
+  User write policy.
 
 ## 0.1.1 — dependency security preview
 

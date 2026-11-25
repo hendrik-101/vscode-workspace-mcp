@@ -220,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       vscode.commands.registerCommand(id, () => action().catch(report)),
     );
-  register("workspaceMcp.start", () => {
+  const start = (automatic = false) => {
     if (running) return Promise.resolve();
     if (cancelStartup) void stopSessions().catch(report);
     const requestedGeneration = ++generation;
@@ -380,15 +380,18 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           refresh();
           // An informational toast must never hold the lifecycle or Stop command open.
-          void vscode.window
-            .showInformationMessage(
-              "Workspace MCP started. The status bar shows current write access.",
-              "Connection details",
-            )
-            .then((choice) => {
-              if (choice && running === started)
-                void vscode.commands.executeCommand("workspaceMcp.connection");
-            });
+          if (!automatic)
+            void vscode.window
+              .showInformationMessage(
+                "Workspace MCP started. The status bar shows current write access.",
+                "Connection details",
+              )
+              .then((choice) => {
+                if (choice && running === started)
+                  void vscode.commands.executeCommand(
+                    "workspaceMcp.connection",
+                  );
+              });
         }),
     )
       .catch((error: unknown) => {
@@ -398,7 +401,8 @@ export function activate(context: vscode.ExtensionContext): void {
         if (cancelStartup === cancel) cancelStartup = undefined;
       });
     return starting;
-  });
+  };
+  register("workspaceMcp.start", () => start());
   register("workspaceMcp.stop", async () => {
     await stop();
   });
@@ -590,6 +594,12 @@ export function activate(context: vscode.ExtensionContext): void {
       void deactivate().catch(report);
     },
   });
+  if (
+    vscode.workspace.isTrusted &&
+    vscode.workspace.workspaceFolders?.length &&
+    settings().inspect("autoStart")?.globalValue === true
+  )
+    void start(true).catch(report);
 }
 
 /** Revokes active and starting sessions without waiting for unavailable storage. */

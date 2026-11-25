@@ -27,7 +27,9 @@
       "supported": false
     }
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -82,6 +84,12 @@
           "scope": "application",
           "description": "Default fixed loopback port. Restart the bridge after changing. Use Select Port for This Window for a temporary window override. Conflicts fail; no fallback port is selected."
         },
+        "workspaceMcp.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Start Workspace MCP when opening or reloading a trusted workspace, using the current user settings. Stop can still disconnect the current window."
+        },
         "workspaceMcp.writePolicy": {
           "type": "string",
           "enum": [
@@ -91,7 +99,7 @@
           ],
           "default": "ask",
           "scope": "application",
-          "description": "Write access at each explicit bridge start. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
+          "description": "Write access at each bridge start, including automatic starts. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
         },
         "workspaceMcp.allowedCommands": {
           "type": "array",

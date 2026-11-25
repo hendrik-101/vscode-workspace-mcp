@@ -7,8 +7,9 @@ owner privately before disclosing an exploitable issue.
 
 ## Boundary
 
-- Explicit start, internal loopback-only TLS listener, persistent random SecretStorage
-  token and server identity; no autostart.
+- Manual start by default, with User-only opt-in to automatic startup in trusted
+  workspace windows with a root. The internal listener stays on loopback TLS
+  and uses the persistent random SecretStorage token and server identity.
 - User-only write policy: deny, allow or ask (default). Ask starts read-only and
   offers session-only or persistent allow/deny; dismissal denies writes.
 - Workspace operations admit only current roots; no arbitrary URI or terminal.
@@ -44,8 +45,9 @@ The credential is shared by windows using the same extension SecretStorage,
 including windows on different configured ports. Treat those windows as one
 credential trust domain; inspect workspace roots before working.
 
-Settings are application-scoped and read from user configuration only, never
-checked-in workspace settings. Changing write policy to deny also blocks writes
+Settings are application-scoped and read from user configuration only. The
+`autoStart` setting applies at window startup. Stop immediately revokes the
+current session even if automatic startup is enabled. Changing write policy to deny also blocks writes
 in a running session. Allow applies at the next start or explicit permission
 prompt. **Disable Writes for This Session** revokes writes and invalidates older
 permission prompts without closing read access or changing stored policy. Requests
