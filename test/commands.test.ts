@@ -136,7 +136,8 @@ for (const change of [
     };
     await assert.rejects(
       f.service.invoke({ commandId: "one.run" }, controller.signal),
-      change === "profile" ? code("COMMAND_CONTEXT_CHANGED") : undefined,
+      (error: unknown) =>
+        change !== "profile" || code("COMMAND_CONTEXT_CHANGED")(error),
     );
     assert.deepEqual(f.calls, []);
   });
