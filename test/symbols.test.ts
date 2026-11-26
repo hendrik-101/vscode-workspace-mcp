@@ -164,6 +164,7 @@ test("pending diff snapshots survive capacity pressure, failures and stop", asyn
   let content!: (uri: Uri) => string;
   const commands: Array<{
     uri: Uri;
+    preview: boolean;
     resolve(): void;
     reject(error: Error): void;
   }> = [];
@@ -204,9 +205,15 @@ test("pending diff snapshots survive capacity pressure, failures and stop", asyn
       },
     },
     commands: {
-      executeCommand: (_command: string, _left: Uri, right: Uri) =>
+      executeCommand: (
+        _command: string,
+        _left: Uri,
+        right: Uri,
+        _title: string,
+        { preview }: { preview: boolean },
+      ) =>
         new Promise<void>((resolve, reject) => {
-          commands.push({ uri: right, resolve, reject });
+          commands.push({ uri: right, preview, resolve, reject });
         }),
     },
   };
@@ -220,6 +227,7 @@ test("pending diff snapshots survive capacity pressure, failures and stop", asyn
       pending.push(start(`proposal-${index}`));
     await tick();
     assert.equal(commands.length, 8);
+    assert.ok(commands.every(({ preview }) => preview === false));
     assert.equal(registered, 1);
     await assert.rejects(
       start("ninth"),
@@ -228,6 +236,7 @@ test("pending diff snapshots survive capacity pressure, failures and stop", asyn
         error.code === "LIMIT_EXCEEDED",
     );
     assert.equal(commands.length, 8);
+    assert.ok(commands.every(({ preview }) => preview === false));
     assert.equal(content(commands[0]!.uri), "proposal-0");
     // Complete one opening; a retry may evict that completed snapshot only.
     commands[1]!.resolve();

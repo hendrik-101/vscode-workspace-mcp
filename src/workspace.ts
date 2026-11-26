@@ -949,7 +949,7 @@ export class WorkspaceService implements WorkspaceApi {
         document.uri,
         right,
         "Workspace MCP: Compare",
-        { preserveFocus: input.preserveFocus ?? true, preview: true },
+        { preserveFocus: input.preserveFocus ?? true, preview: false },
       );
       signal?.throwIfAborted();
       this.currentRoot(document.uri);

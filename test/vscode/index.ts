@@ -968,6 +968,19 @@ async function ideTools(
     assert.ok(ranged.edits);
     assert.equal(formattedText(document, ranged.edits), "Tessy");
     const writesBefore = provider.writes;
+    await vscode.window.showTextDocument(
+      await vscode.workspace.openTextDocument(legacySymbolTarget),
+      { preview: true },
+    );
+    const findPreview = () =>
+      vscode.window.tabGroups.all
+        .flatMap((group) => group.tabs)
+        .find(
+          (tab) =>
+            tab.input instanceof vscode.TabInputText &&
+            tab.input.uri.toString() === legacySymbolTarget.toString(),
+        );
+    assert.equal(findPreview()?.isPreview, true);
     assert.deepEqual(
       await service.diff({
         uri: file.toString(),
@@ -976,6 +989,7 @@ async function ideTools(
       }),
       { shown: true },
     );
+    assert.equal(findPreview()?.isPreview, true);
     const diffTabs = vscode.window.tabGroups.all
       .flatMap((group) => group.tabs)
       .filter((tab) => tab.input instanceof vscode.TabInputTextDiff);
