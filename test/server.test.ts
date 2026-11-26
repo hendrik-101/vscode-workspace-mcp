@@ -1832,7 +1832,7 @@ test("symbol-read contract validates bounded source and preserves additive metad
   );
 });
 
-test("MCP rejects version zero before dispatching a version-checked operation", async (t) => {
+test("MCP rejects version zero and accepts opaque safe-integer versions", async (t) => {
   let called = 0;
   const server = await startServer({
     ...workspace,
@@ -1861,6 +1861,12 @@ test("MCP rejects version zero before dispatching a version-checked operation", 
   });
   assert.equal(one.isError, undefined);
   assert.equal(called, 1);
+  const latest = await client.callTool({
+    name: "save_document",
+    arguments: { uri: "vfs:/project/file", version: Number.MAX_SAFE_INTEGER },
+  });
+  assert.equal(latest.isError, undefined);
+  assert.equal(called, 2);
 });
 
 test("read_document exposes exact ranges and budgets and forwards them without mutation", async (t) => {
