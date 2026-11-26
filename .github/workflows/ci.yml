@@ -46,9 +46,6 @@ jobs:
       - name: VS Code integration (Windows/macOS)
         if: runner.os != 'Linux'
         run: npm run test:vscode
-      - name: SAP ADT coexistence without a backend
-        if: runner.os == 'Linux'
-        run: xvfb-run -a npm run test:vscode -- --adt
       - name: Package extension
         run: npm run package ${{ inputs.pre-release && '-- --pre-release' || '' }}
       - name: Packaged VSIX install, upgrade and reinstall (Linux)

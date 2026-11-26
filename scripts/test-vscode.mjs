@@ -3,17 +3,11 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  downloadAndUnzipVSCode,
-  resolveCliArgsFromVSCodeExecutablePath,
-  runTests,
-} from "@vscode/test-electron";
+import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporary = await mkdtemp(join(tmpdir(), "workspace-mcp-vscode-"));
 const packaged = process.argv.includes("--packaged");
-const withAdt = process.argv.includes("--adt");
-const adtVersion = "1.1.2";
 
 try {
   if (
@@ -65,30 +59,6 @@ try {
       "update.mode": "none",
     }),
   );
-  if (withAdt) {
-    const [cli, ...args] = resolveCliArgsFromVSCodeExecutablePath(
-      vscodeExecutablePath,
-      { reuseMachineInstall: true },
-    );
-    execFileSync(
-      cli,
-      [
-        ...args,
-        "--no-sandbox",
-        "--disable-telemetry",
-        "--disable-crash-reporter",
-        `--user-data-dir=${userData}`,
-        `--extensions-dir=${extensions}`,
-        "--install-extension",
-        `SAPSE.adt-vscode@${adtVersion}`,
-      ],
-      {
-        stdio: "inherit",
-        timeout: 180_000,
-        shell: process.platform === "win32",
-      },
-    );
-  }
   if (packaged) {
     const { testPackaged } = await import("./test-packaged.mjs");
     await testPackaged({
@@ -108,9 +78,6 @@ try {
         join(project, "test/fixtures/command-beta"),
       ],
       extensionTestsPath: join(project, "dist/test/vscode.cjs"),
-      extensionTestsEnv: {
-        WORKSPACE_MCP_ADT_VERSION: withAdt ? adtVersion : "",
-      },
       launchArgs: [
         workspaceFile,
         "--no-sandbox",
@@ -118,7 +85,7 @@ try {
         "--disable-workspace-trust",
         "--skip-welcome",
         "--skip-release-notes",
-        ...(withAdt ? [] : ["--disable-extensions"]),
+        "--disable-extensions",
         `--user-data-dir=${userData}`,
         `--extensions-dir=${extensions}`,
       ],

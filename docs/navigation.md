@@ -37,4 +37,4 @@ UTF-16 code units; invalid entries count as omitted.
 Check cancellation/current roots before dispatch and return. Public provider
 commands cannot cancel running work; cancelled results are discarded. Listeners
 are removed on cancellation/stop even if providers never settle.
-SAP validation remains [manual](acceptance.md).
+Provider-specific validation remains [manual](acceptance.md).

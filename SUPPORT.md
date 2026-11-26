@@ -5,8 +5,8 @@ Include the extension, VS Code, Node.js and client versions; workspace provider;
 steps to reproduce; and redacted error codes. Note whether the problem occurs
 with an unsaved buffer, a virtual workspace or a remote extension host.
 
-Never include connection tokens, private source, SAP destinations or credentials.
+Never include connection tokens, private source, workspace identifiers or credentials.
 For vulnerabilities, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
-This independent preview has no support SLA. SAP backend and native-client
+This independent preview has no support SLA. Native-client
 compatibility require the [acceptance checks](docs/acceptance.md).

@@ -24,7 +24,7 @@ empty list means zero arguments. Supported types are `string`, `number`,
 string. Discovery reports these types from the profile. VS Code's ordinary
 command manifests supply labels and context menu placement. A shortcut can
 supply an argument, but ordinary manifest entries provide no general handler
-signature. In particular, passing an ABAP URI as a string does not create a
+signature. In particular, passing a workspace URI as a string does not create a
 `vscode.Uri` or an Explorer/TreeView object. Verify argument types and context
 for each command before enabling it.
 
@@ -66,43 +66,5 @@ writes to the same channel, with no attribution to an individual invocation.
 Share only a channel whose contents may go to connected clients. **Workspace
 MCP: Stop Sharing Output Channel** and stopping the bridge both revoke sharing.
 
-## SAP ADT Class Run
-
-SAP documents Class Run from the open ABAP class using **ABAP: Run ABAP
-Application (Console)**. VS Code sends no positional arguments when launching
-a contributed command from the Command Palette. The following is a profile to
-try for that editor-based workflow. Replace `INSTALLED_ADT_VERSION` with the exact
-installed version reported by `search_commands`, and first verify the behavior
-with your connected SAP destination and a class that implements
-`IF_OO_ADT_CLASSRUN`.
-
-```json
-{
-  "workspaceMcp.allowedCommands": ["adt-vscode.runApplication"],
-  "workspaceMcp.commandProfiles": [
-    {
-      "command": "adt-vscode.runApplication",
-      "extensionId": "sapse.adt-vscode",
-      "extensionVersion": "INSTALLED_ADT_VERSION",
-      "argumentTypes": [],
-      "nonInteractive": true,
-      "activeEditorScheme": "abap"
-    }
-  ]
-}
-```
-
-1. Run Class Run manually once if needed to identify its Output channel. Share
-   that channel and leave it visible alongside the ABAP editor.
-2. Keep the intended class active and check `search_commands` for eligibility.
-3. Call `invoke_command({commandId: "adt-vscode.runApplication"})`, then
-   `read_output`. Compare the Output snapshot or its version with a pre-run
-   snapshot if the channel already contains output.
-
-SAP backend behavior, exact URI arguments and unattended destination login
-require separate verification. This flow assumes an already connected
-destination.
-
-[SAP's Class Run instructions](https://developers.sap.com/tutorials/abap-environment-adt-coretools-vscode/)
 · [VS Code command arguments](https://code.visualstudio.com/api/extension-guides/command#command-arguments)
 · [VS Code Output API](https://code.visualstudio.com/api/references/vscode-api#window.createOutputChannel)

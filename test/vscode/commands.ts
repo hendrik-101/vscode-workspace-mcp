@@ -169,7 +169,7 @@ export async function commandTools(): Promise<void> {
     }
     await verifyOutputSharing(createCommandService(() => true));
     console.log(
-      "Direct commands: two independent extension fixtures passed in the real host; no SAP compatibility claimed",
+      "Direct commands: two independent extension fixtures passed in the real host; provider-specific compatibility not implied",
     );
   } finally {
     await vscode.commands.executeCommand("issue40.alpha.release");

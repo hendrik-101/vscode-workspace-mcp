@@ -1,12 +1,4 @@
-# SAP ADT and client acceptance
-
-## Automated coexistence
-
-`xvfb-run -a npm run test:vscode -- --adt` installs SAPSE.adt-vscode 1.1.2 in an
-isolated VS Code 1.137.0 profile without destinations/credentials. CI verifies ADT
-activation and `abap` filesystem-provider registration, then runs synthetic VFS
-tests with ADT loaded. This does not verify real ABAP listing, reading or saving.
-Third-party setup/telemetry policy: [development rules](development.md).
+# Workspace and client acceptance
 
 ## Packaged extension
 
@@ -21,48 +13,35 @@ current VSIX, followed by uninstall/reinstall. Saved configuration must work
 unchanged and the stable launcher must select the installed payload. This tests
 the installer mechanism, not compatibility with a historical released version.
 
-## Manual backend/client checks
+## Manual client checks
 
-Use a disposable object and authorized SAP development user. Keep private sources,
-system URLs and tokens out of public feedback. Follow [client setup](clients.md),
-including Node.js 24+ and Auto Save off.
+Use a disposable workspace and a representative provider-backed document. Keep
+private sources, workspace identifiers and tokens out of public reports. Follow
+[client setup](clients.md), including Node.js 24+ and Auto Save off.
 
-1. Install the VSIX alongside official ADT. Start without a configured SAP system:
-   no crash, absent roots return an empty list. This proves coexistence only.
-2. Connect ADT, open a virtual source and select a method. Connect a client using
-   generated stdio settings; no OS certificate installation. Verify root
-   scheme/authority and `editor_context` selection.
-3. Type an unsaved marker; `read_document` must return it.
-4. Under default `ask`, deny the session; writes must fail. Enable writes, read
-   the version, edit a harmless range and inspect the unsaved buffer.
-5. Change the buffer manually; an edit using the old version must fail and require
-   rereading.
-6. Save explicitly; verify ADT lock/transport prompts and save result. Use the
-   separate SAP ADT MCP server for activation/checks only after saving and verifying
-   system/object identity.
-7. Open another VS Code window/system. No silent crossover or alternate-port
-   fallback; port conflicts must fail. Stop the first bridge: connection closes.
-   Restart: saved settings work. Test all four write-prompt choices.
-8. Rotate token: old credentials fail and clients require refreshed settings.
-   Rotate server identity separately: old trust fails without changing the token;
-   refresh configuration and reconnect.
+1. Open a trusted workspace and connect using the generated stdio settings.
+2. Open a document, select a range and verify editor context and unsaved reads.
+3. Verify write denial, session approval, stale-version refusal and explicit save.
+4. Check window isolation, port conflicts and reconnection after Stop and Start.
+5. Rotate the token and server identity separately and verify old settings fail.
+6. Where applicable, run an authorized non-interactive command and verify new
+   output appears only in the explicitly shared channel.
 
-Report VS Code/ADT/client versions, operations and redacted error codes separately
-for Claude Code, Codex IDE and local desktop. Native diff/rewind support for
-provider-backed edits is not guaranteed.
+Record the exact extension build, VS Code and client versions, operations, and
+redacted errors separately for Claude Code, Codex IDE and local desktop.
 
 ## IDE providers
 
 On the work device:
 
-- `show_document`: reveal ADT URI/selection without focus change unless requested.
+- `show_document`: reveal the document URI/selection without focus change unless requested.
 - `document_symbols`/`workspace_symbols`: find a known class/method; empty results
   cannot distinguish absent providers from absent matches.
 - `show_diff`: preview without changing backend or live buffer.
 - Formatting: preview document/range, explicitly apply with write permission and
   Auto Save off; reject stale versions and keep saving separate.
 
-Synthetic providers exercise these paths in CI, not SAP ADT provider compatibility.
+Synthetic providers exercise these paths in CI; individual provider behavior may differ.
 
 ## Direct-command fixtures
 
@@ -73,10 +52,3 @@ revocation, cancellation, safe undefined/failure/opaque results, four outstandin
 handlers retained across bridge restarts, and bounded reads from an explicitly
 shared Output channel. Transport tests verify checked positional arguments and
 the Output result contract.
-
-For a real SAP acceptance check, use a connected destination and a class with
-a distinctive `IF_OO_ADT_CLASSRUN` output. Follow [the Class Run setup](commands.md#sap-adt-class-run),
-verify the exact installed version and eligibility, invoke once, and confirm the
-new output via `read_output`. Confirm that switching to an unshared channel or
-revoking sharing suppresses reads. Record the SAP and VS Code versions and whether
-the run required any interaction.

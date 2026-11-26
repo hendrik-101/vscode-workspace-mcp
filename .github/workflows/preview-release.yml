@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       acceptance:
-        description: Redacted evidence of real SAP and native-client acceptance at this revision
+        description: Redacted evidence of native-client acceptance at this revision
         required: true
         type: string
       security:
@@ -66,7 +66,6 @@ jobs:
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - run: xvfb-run -a npm run test:vscode
-      - run: xvfb-run -a npm run test:vscode -- --adt
       - name: Package preview and checksum
         run: |
           npm run build

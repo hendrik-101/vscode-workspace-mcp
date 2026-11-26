@@ -4,15 +4,14 @@
 [![CI on main](https://img.shields.io/github/actions/workflow/status/hendrik-101/vscode-workspace-mcp/ci.yml?branch=main&label=CI&labelColor=171717)](https://github.com/hendrik-101/vscode-workspace-mcp/actions/workflows/ci.yml?query=branch%3Amain) [![License: MIT](https://img.shields.io/github/license/hendrik-101/vscode-workspace-mcp?labelColor=171717&color=FF570A)](https://github.com/hendrik-101/vscode-workspace-mcp/blob/main/LICENSE) [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/hendrik-101/vscode-workspace-mcp?utm_source=oss&amp;utm_medium=github&amp;utm_campaign=hendrik-101%2Fvscode-workspace-mcp&amp;labelColor=171717&amp;color=FF570A&amp;link=https%3A%2F%2Fcoderabbit.ai&amp;label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
 Connect MCP clients such as Codex and Claude Code to the workspace open in VS Code,
-including virtual filesystems such as SAP ADT. Read live editor content, inspect
+including virtual filesystems. Read live editor content, inspect
 symbols and diagnostics, and apply edits without saving automatically.
 
 Unlike a local filesystem server, this extension uses VS Code's workspace APIs
 and preserves full URIs. Unsaved editor changes are included in reads.
 
-MIT licensed. No telemetry or shell tools. **Initial preview:** compatibility with
-a real SAP backend still requires [acceptance testing](docs/acceptance.md).
-Independent project, not affiliated with SAP or OpenAI.
+MIT licensed. No telemetry or shell tools. This is an independent preview; see
+[acceptance testing](docs/acceptance.md) for verified scope.
 
 ## Install and connect
 
@@ -91,8 +90,8 @@ Positions are zero-based UTF-16; ranges are end-exclusive. Full URIs are require
 File creation, deletion, renaming and terminal tools are outside the workspace API.
 [Direct commands](docs/commands.md) require separate user authorization and an
 exact-version non-interactive profile in user settings. The same guide covers
-sharing an Output channel and configuring SAP ADT Class Run.
-Search reports truncation/errors: it is not an exhaustive SAP repository index.
+sharing an Output channel and configuring allowed VS Code commands.
+Search reports truncation/errors: it is not an exhaustive workspace index.
 
 See the [tool reference](docs/tools.md) for parameters and limits.
 
@@ -101,6 +100,6 @@ See the [tool reference](docs/tools.md) for parameters and limits.
 - [Client setup and optional workflow plugin](docs/clients.md)
 - [Development, tests and review rules](docs/development.md)
 - [Architecture](docs/design.md) and [security](SECURITY.md)
-- [SAP acceptance checks](docs/acceptance.md)
+- [Acceptance checks](docs/acceptance.md)
 - [Support and issue reporting](SUPPORT.md)
 - [Releases and Marketplace setup](docs/releases.md)

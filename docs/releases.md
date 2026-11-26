@@ -18,7 +18,7 @@ that same artifact to VS Code Marketplace under `hendrik101`.
 The GitHub publication job does not check out or execute repository scripts.
 The Marketplace job checks out the validated commit without persisted credentials
 and installs its reviewed lockfile with `npm ci --ignore-scripts` before
-Marketplace authentication. Package-manager caching is disabled; both authentication
+Marketplace authentication. Package-manager caching is disabled; all authentication
 paths invoke the local locked `vsce` binary. No repository scripts or dependency
 lifecycle hooks run in that job. GitHub and Marketplace publication are jobs in
 one workflow, avoiding reliance on events created by `GITHUB_TOKEN` to start
@@ -44,7 +44,7 @@ When the owner is ready to activate publishing:
 2. Verify the publisher dependency-lock remediation in the reviewed release
    revision: the Marketplace job checks out the validated SHA without persisted
    credentials, disables package-manager caching, runs `npm ci --ignore-scripts`
-   before authentication and uses the local `vsce` binary for both authentication
+   before authentication and uses the local `vsce` binary for all authentication
    paths. Confirm the lockfile is reviewed and current-head CI and security review
    pass. Do not enable publishing while this remediation or verification is pending.
 3. In repository **Settings → Secrets and variables → Actions → Variables**, create
@@ -78,7 +78,7 @@ and [Entra free/Premium capabilities](https://learn.microsoft.com/en-us/entra/wo
 1. Merge reviewed changes through the [development gates](development.md).
 2. Set a numeric version in `package.json` and both lockfile entries and add one
    nonempty matching `CHANGELOG.md` entry. Publisher must remain `hendrik101`.
-3. Complete [real SAP/native-client acceptance](acceptance.md) and an actual
+3. Complete [native-client acceptance](acceptance.md) and an actual
    Codex Security repository scan for the exact intended release revision.
    Keep redacted evidence references for that commit. PR reviews and synthetic
    tests do not substitute for these checks.
@@ -88,12 +88,12 @@ and [Entra free/Premium capabilities](https://learn.microsoft.com/en-us/entra/wo
 Workspace MCP 0.1.0
 
 Channel: preview
-Acceptance: redacted reference to completed real SAP/client checks for this commit
+Acceptance: redacted reference to completed native-client checks for this commit
 Security: redacted reference to completed Codex Security repository scan for this commit
 ```
 
 These references are owner-reviewed evidence, not automatically verified
-attestations. Do not publish tokens, SAP system details, private findings or sources
+attestations. Do not publish tokens, private workspace details, private findings or sources
 in annotations or release notes. Replace the example references with real evidence.
 
 5. After CI is green, publication authentication is configured and the repository
@@ -121,7 +121,18 @@ approval is optional: without it, the owner's tag is the deliberate authorizatio
 This repository contains no publishing credentials. Registration alone does not
 authorize a GitHub runner to publish.
 
-### Microsoft Entra workload federation (default)
+### Marketplace Trusted Publishing (default)
+
+In the Marketplace publisher management for `hendrik101`, create a **Trusted
+Publishing** policy for owner `hendrik-101`, repository `vscode-workspace-mcp`,
+workflow `release.yml` and environment `marketplace`. Leave the environment
+variable `MARKETPLACE_AUTH` unset or set it to `oidc`. The release job exchanges
+its GitHub OIDC token with Marketplace using `vsce publish --oidc`. This path
+does not use a PAT or need a separate Microsoft Entra application.
+
+See [Microsoft’s Trusted Publishing instructions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#publish-with-github-actions-and-trusted-publishing).
+
+### Existing Microsoft Entra workload federation (optional)
 
 This route uses short-lived credentials, with no stored client secret:
 
@@ -131,8 +142,8 @@ This route uses short-lived credentials, with no stored client secret:
    - issuer: `https://token.actions.githubusercontent.com`
    - audience: `api://AzureADTokenExchange`
    - subject: `repo:hendrik-101/vscode-workspace-mcp:environment:marketplace`
-3. Add environment secrets `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`. Keep
-   `MARKETPLACE_AUTH` unset or set its environment variable to `entra`.
+3. Add environment secrets `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`. Set
+   the environment variable `MARKETPLACE_AUTH` to `entra`.
    `azure/login` uses OIDC with `allow-no-subscriptions: true`; this publishing
    job does not access Azure resource subscriptions.
 4. Authenticate as that identity and obtain its Azure DevOps profile ID:

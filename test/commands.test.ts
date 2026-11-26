@@ -391,7 +391,9 @@ test("dispatches only positional arguments matching the user profile", async () 
 
 test("requires the profile's exact extension and active editor scheme", async () => {
   const f = fixture();
-  f.state.commandProfiles = [{ ...f.profiles[0], activeEditorScheme: "abap" }];
+  f.state.commandProfiles = [
+    { ...f.profiles[0], activeEditorScheme: "other-provider" },
+  ];
   await assert.rejects(
     f.service.invoke({ commandId: "one.run" }),
     code("COMMAND_UNSUPPORTED"),

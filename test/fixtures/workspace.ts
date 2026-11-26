@@ -100,7 +100,7 @@ export const workspace: WorkspaceApi = {
     text: "unsaved buffer",
     version: 4,
     dirty: true,
-    languageId: "abap",
+    languageId: "plaintext",
     lineCount: 1,
     startLine: 0,
     endLine: 1,

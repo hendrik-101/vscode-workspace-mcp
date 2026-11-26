@@ -1,6 +1,6 @@
 # Security
 
-This is an initial preview, not a certification or a completed SAP backend test.
+This is an initial preview, not a certification of any external provider.
 Do not post credentials, MCP tokens or private source code in public issues.
 Use GitHub private vulnerability reporting when enabled, or contact the repository
 owner privately before disclosing an exploitable issue.
@@ -29,9 +29,9 @@ owner privately before disclosing an exploitable issue.
   It refuses redirects and never transmits the token over plaintext HTTP.
 
 The client/model provider may receive content returned through MCP. That is the
-purpose of the bridge, not telemetry. VS Code and SAP extensions have their own
+purpose of the bridge, not telemetry. VS Code and other extensions have their own
 network behavior and policies. Review those independently. The bridge does not
-manage SAP login, transports or activation.
+manage external login or backend activation.
 
 A bearer token grants configured read/write access to admitted roots and any
 separately authorized eligible direct commands and the explicitly shared

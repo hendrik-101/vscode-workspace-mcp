@@ -41,13 +41,13 @@ try {
     !security?.trim()
   ) {
     throw new Error(
-      "full revision, SAP/client acceptance and Codex Security scan evidence are required",
+      "full revision, native-client acceptance and Codex Security scan evidence are required",
     );
   }
   mkdirSync("artifacts", { recursive: true });
   writeFileSync(
     "artifacts/release-notes.md",
-    `# Workspace MCP ${version}${channel === "preview" ? " preview" : ""}\n\nCommit: ${sha}\n\n${entry[0][2].trim()}\n\n## Validation evidence\n\n- SAP/client acceptance: ${acceptance.trim()}\n- Codex Security repository scan: ${security.trim()}\n\nInstall the attached VSIX with **Extensions: Install from VSIX**. Verify its SHA256 against the attached checksum file. ${channel === "preview" ? "This is a preview release. " : ""}${draft ? "This is a draft-only preview, not a Marketplace publication." : "Marketplace publication is a separate workflow job; consult its result."}\n`,
+    `# Workspace MCP ${version}${channel === "preview" ? " preview" : ""}\n\nCommit: ${sha}\n\n${entry[0][2].trim()}\n\n## Validation evidence\n\n- native-client acceptance: ${acceptance.trim()}\n- Codex Security repository scan: ${security.trim()}\n\nInstall the attached VSIX with **Extensions: Install from VSIX**. Verify its SHA256 against the attached checksum file. ${channel === "preview" ? "This is a preview release. " : ""}${draft ? "This is a draft-only preview, not a Marketplace publication." : "Marketplace publication is a separate workflow job; consult its result."}\n`,
   );
 } catch (error) {
   console.error(`Release validation: ${error.message}`);

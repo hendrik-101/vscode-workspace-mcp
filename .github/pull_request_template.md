@@ -11,6 +11,6 @@ Describe the problem and resulting behavior.
 - [ ] Codex cloud review covers the current head; findings are addressed.
 - [ ] CodeRabbit review covers the current head; findings are addressed.
 - [ ] Security-sensitive changes received a Codex Security scan/review.
-- [ ] SAP backend checks are described accurately (tested or still pending).
+- [ ] Native-client checks are described accurately (tested or still pending).
 
-Never include tokens, credentials or customer ABAP sources.
+Never include tokens, credentials or private source files.

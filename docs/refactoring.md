@@ -81,7 +81,7 @@ closing a tab does not guarantee VS Code releases a buffer. These are operation
 budgets, not a total extension-host RAM cap; VS Code, providers, text projections
 and already open documents require additional memory.
 
-Synthetic non-file provider tests do not verify SAP backends, transports, locks
+Synthetic non-file provider tests do not verify external backends, prompts, locks
 or activation; see [acceptance](acceptance.md).
 API references: [provider commands](https://code.visualstudio.com/api/references/commands),
 [WorkspaceEdit](https://code.visualstudio.com/api/references/vscode-api#WorkspaceEdit).
