@@ -9,6 +9,7 @@ export interface CommandHost {
     trusted: boolean;
     authorized: boolean;
     allowedCommands: unknown;
+    allowedZeroArgumentCommands?: unknown;
     commandProfiles: unknown;
     activeEditorScheme?: string;
     /** Opaque fingerprint of workspace roots and current editor context. */
@@ -79,6 +80,7 @@ type EligibilityReason =
   | "DISCOVERY_INCOMPLETE"
   | "NOT_REGISTERED";
 const id = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/);
+const allowedCommandIds = z.array(id).max(100).catch([]);
 const scalar = z.union([
   z.string().max(256),
   z.number().finite(),
@@ -180,8 +182,15 @@ export class CommandService implements CommandApi {
   }
   private snapshot() {
     const state = this.host.state();
-    const allowed = z.array(id).max(100).safeParse(state.allowedCommands);
-    const profiles = z.array(profile).max(100).safeParse(state.commandProfiles);
+    const allowed = allowedCommandIds.parse(state.allowedCommands);
+    const allowedZeroArguments = allowedCommandIds.parse(
+      state.allowedZeroArgumentCommands,
+    );
+    const profiles = z
+      .array(profile)
+      .max(100)
+      .default([])
+      .safeParse(state.commandProfiles);
     const profilesById = new Map<string, Profile | undefined>();
     for (const item of profiles.success ? profiles.data : []) {
       profilesById.set(
@@ -265,17 +274,23 @@ export class CommandService implements CommandApi {
             authorized: state.authorized,
             context: state.context,
             activeEditorScheme: state.activeEditorScheme,
-            allowedCommands: allowed.success ? allowed.data : [],
+            allowedCommands: allowed,
+            allowedZeroArgumentCommands: allowedZeroArguments,
           },
           incomplete,
+          profilesValid: profiles.success,
+          profiledCommands: [...profilesById.keys()],
           claims: [...claims],
         }),
       )
       .digest("hex");
     return {
       state,
-      allowed: allowed.success ? allowed.data : [],
+      allowed,
+      allowedZeroArguments,
       claims,
+      profilesValid: profiles.success,
+      profilesById,
       incomplete,
       fingerprint,
     };
@@ -287,27 +302,34 @@ export class CommandService implements CommandApi {
   ): CommandEntry {
     const claims = snapshot.claims.get(commandId) ?? [];
     const evidence = claims[0];
+    const profile = evidence?.profile;
+    const profileMismatch =
+      !snapshot.profilesValid ||
+      (snapshot.profilesById.has(commandId) && !profile);
+    const stale =
+      profile !== undefined &&
+      profile.extensionVersion !== evidence?.metadata.extensionVersion;
     let reason: EligibilityReason;
     if (snapshot.incomplete) reason = "DISCOVERY_INCOMPLETE";
     else if (claims.length > 1) reason = "AMBIGUOUS_METADATA";
-    else if (!evidence?.profile) reason = "UNSUPPORTED_CONTRACT";
-    else if (
-      evidence.profile.extensionVersion !== evidence.metadata.extensionVersion
-    )
-      reason = "STALE_CONTRACT";
+    else if (!evidence || profileMismatch) reason = "UNSUPPORTED_CONTRACT";
+    else if (stale) reason = "STALE_CONTRACT";
     else if (!evidence.prerequisites || !snapshot.state.context)
       reason = "PREREQUISITE_UNMET";
     else if (!snapshot.state.trusted) reason = "UNTRUSTED_WORKSPACE";
-    else if (!snapshot.allowed.includes(commandId)) reason = "NOT_AUTHORIZED";
+    else if (
+      !(profile ? snapshot.allowed : snapshot.allowedZeroArguments).includes(
+        commandId,
+      )
+    )
+      reason = "NOT_AUTHORIZED";
     else if (!registered) reason = "NOT_REGISTERED";
     else reason = "SUPPORTED";
     return {
       commandId,
       registered,
-      ...(evidence?.profile &&
-      claims.length === 1 &&
-      evidence.profile.extensionVersion === evidence.metadata.extensionVersion
-        ? { argumentTypes: evidence.profile.argumentTypes }
+      ...(claims.length === 1 && !profileMismatch && !stale
+        ? { argumentTypes: profile?.argumentTypes ?? [] }
         : {}),
       metadata: claims.map((claim) => claim.metadata),
       eligibility: { eligible: reason === "SUPPORTED", reason },
@@ -388,13 +410,17 @@ export class CommandService implements CommandApi {
     if (before.fingerprint !== current.fingerprint)
       fail("COMMAND_CONTEXT_CHANGED");
     if (!current.state.trusted) fail("UNTRUSTED_WORKSPACE");
-    if (!current.allowed.includes(input.commandId))
-      fail("COMMAND_NOT_AUTHORIZED");
     const entry = this.entry(
       input.commandId,
       ids.includes(input.commandId),
       current,
     );
+    if (
+      (!current.allowed.includes(input.commandId) &&
+        !current.allowedZeroArguments.includes(input.commandId)) ||
+      entry.eligibility.reason === "NOT_AUTHORIZED"
+    )
+      fail("COMMAND_NOT_AUTHORIZED");
     if (ids.length > MAX_IDS || !entry.eligibility.eligible)
       fail("COMMAND_UNSUPPORTED");
     const args = input.args ?? [];

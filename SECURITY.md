@@ -13,9 +13,13 @@ owner privately before disclosing an exploitable issue.
 - User-only write policy: deny, allow or ask (default). Ask starts read-only and
   offers session-only or persistent allow/deny; dismissal denies writes.
 - Workspace operations admit only current roots; no arbitrary URI or terminal.
-- Direct commands are default-deny, with separate user-only command authority and
-  user-reviewed exact-version non-interactive profiles. They may have destructive or
-  external effects beyond workspace roots; buffer-write authority is separate.
+- Direct commands are default-deny and require separate User-only authorization
+  and an unambiguous extension contribution. The separate
+  `allowedZeroArgumentCommands` setting opts in to profileless execution with
+  zero arguments. Entries in the existing `allowedCommands` setting continue
+  to require a user-reviewed exact-version non-interactive profile. Allowed handlers may
+  open dialogs or cause destructive or external effects beyond workspace roots.
+  Buffer-write authority is separate.
   See [command admission and limitations](docs/commands.md).
 - Output text is available only from a channel explicitly shared in the running
   window, while that channel remains visible. Sharing exposes channel history and

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 — command settings and Marketplace preview
+
+- Run contributed commands without a profile using the explicit
+  `allowedZeroArgumentCommands` User setting. Existing command permissions
+  continue to require matching profiles.
+- Open VS Code command settings from the Command Palette, and document how
+  an agent can help prepare settings for commands with arguments.
+- Prepare Marketplace publication through Trusted Publishing, using the same
+  tested VSIX as the GitHub release.
+- Refresh transitive HTTP dependencies for upstream security fixes.
+
 ## 0.1.2 — command and Output preview
 
 - Discover contributed commands before extension activation and show their

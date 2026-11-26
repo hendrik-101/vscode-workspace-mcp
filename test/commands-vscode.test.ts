@@ -10,6 +10,7 @@ test("VS Code adapter filters internal IDs and reads command authority only from
   const events: Array<(event: any) => void> = [];
   let disposed = 0;
   let globalValue: unknown;
+  let globalZeroArgumentCommands: unknown;
   let filter: unknown;
   let dispatched = 0;
   const configuration = new Map<string, unknown>([["fixture.ready", true]]);
@@ -45,7 +46,12 @@ test("VS Code adapter filters internal IDs and reads command authority only from
       workspaceFolders: [{ uri: { toString: () => "memfs:/project" } }],
       getConfiguration: () => ({
         inspect: (key: string) => ({
-          globalValue: key === "commandProfiles" ? profiles : globalValue,
+          globalValue:
+            key === "commandProfiles"
+              ? profiles
+              : key === "allowedZeroArgumentCommands"
+                ? globalZeroArgumentCommands
+                : globalValue,
           workspaceValue: ["fixture.run"],
           workspaceFolderValue: ["fixture.run"],
         }),
@@ -179,6 +185,19 @@ test("VS Code adapter filters internal IDs and reads command authority only from
     complete(["fixture.run", "fixture.other"]);
   await denied;
   assert.equal(dispatched, callsBefore);
+  profiles.length = 0;
+  await assert.rejects(
+    service.invoke({ commandId: "fixture.run" }),
+    (error: unknown) =>
+      (error as { code: string }).code === "COMMAND_NOT_AUTHORIZED",
+  );
+  assert.equal(dispatched, callsBefore);
+  globalZeroArgumentCommands = ["fixture.run"];
+  assert.equal(
+    (await service.invoke({ commandId: "fixture.run" })).outcome,
+    "handler_completed",
+  );
+  assert.equal(dispatched, callsBefore + 1);
   service.dispose();
   assert.equal(disposed, events.length);
 });

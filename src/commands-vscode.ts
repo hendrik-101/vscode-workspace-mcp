@@ -17,6 +17,9 @@ export function createCommandService(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration("workspaceMcp.allowedCommands") ||
+        event.affectsConfiguration(
+          "workspaceMcp.allowedZeroArgumentCommands",
+        ) ||
         event.affectsConfiguration("workspaceMcp.commandProfiles") ||
         [...prerequisiteKeys].some((key) => event.affectsConfiguration(key))
       )
@@ -69,17 +72,17 @@ export function createCommandService(
             )
             .digest("hex")
         : "";
+      const settings = vscode.workspace.getConfiguration("workspaceMcp");
       return {
         trusted: vscode.workspace.isTrusted,
         authorized: authorized(),
         // Application/user settings alone supply authority, never workspace or
         // folder overrides and never existing buffer-write permission.
-        allowedCommands: vscode.workspace
-          .getConfiguration("workspaceMcp")
-          .inspect("allowedCommands")?.globalValue,
-        commandProfiles: vscode.workspace
-          .getConfiguration("workspaceMcp")
-          .inspect("commandProfiles")?.globalValue,
+        allowedCommands: settings.inspect("allowedCommands")?.globalValue,
+        allowedZeroArgumentCommands: settings.inspect(
+          "allowedZeroArgumentCommands",
+        )?.globalValue,
+        commandProfiles: settings.inspect("commandProfiles")?.globalValue,
         activeEditorScheme: editor?.document.uri.scheme,
         context,
       };
