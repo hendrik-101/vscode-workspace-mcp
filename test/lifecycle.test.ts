@@ -36,6 +36,7 @@ function fixture(
     bindFailure?: Error;
   } = {};
   const installedAdapters: string[] = [];
+  const builtinCalls: unknown[][] = [];
   const documents: { content: string; language: string }[] = [];
   const values = new Map<string, string>([[TLS_KEY, JSON.stringify(identity)]]);
   const settings = new Map<string, unknown>([
@@ -73,6 +74,9 @@ function fixture(
     StatusBarAlignment: { Right: 1 },
     ConfigurationTarget: { Global: 1 },
     commands: {
+      executeCommand: async (...args: unknown[]) => {
+        builtinCalls.push(args);
+      },
       registerCommand: (id: string, callback: () => Promise<void>) => {
         commands.set(id, callback);
         return { dispose() {} };
@@ -240,6 +244,7 @@ function fixture(
     context,
     documents,
     installedAdapters,
+    builtinCalls,
     changed: (key = preferences.TOKEN_KEY) => secretChanged!({ key }),
   };
 }
@@ -274,6 +279,18 @@ for (const policy of ["allow", "deny", "ask"] as const) {
     assert.equal(f.services[0]?.canWrite(), false);
   });
 }
+
+test("Configure Commands opens the filtered graphical settings editor", async () => {
+  const f = fixture();
+  await f.command("configureCommands");
+  assert.deepEqual(JSON.parse(JSON.stringify(f.builtinCalls)), [
+    [
+      "workbench.action.openSettings2",
+      { query: "@ext:hendrik101.vscode-workspace-mcp command" },
+    ],
+  ]);
+  assert.equal(f.connections.length, 0);
+});
 
 test("connection configuration uses the installed stable adapter path", async () => {
   const f = fixture("deny");

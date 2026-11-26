@@ -68,7 +68,8 @@ Synthetic providers exercise these paths in CI, not SAP ADT provider compatibili
 
 The development-host suite loads two independent fixture extensions with their
 own manifests and real handlers. It verifies passive discovery without activation,
-zero-argument execution, predispatch refusal of prompting commands, authorization
+zero-argument execution with and without a profile, refusal of commands outside
+the allowlist, authorization
 revocation, cancellation, safe undefined/failure/opaque results, four outstanding
 handlers retained across bridge restarts, and bounded reads from an explicitly
 shared Output channel. Transport tests verify checked positional arguments and

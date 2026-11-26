@@ -49,6 +49,10 @@
         "title": "Workspace MCP: Show Connection Details"
       },
       {
+        "command": "workspaceMcp.configureCommands",
+        "title": "Workspace MCP: Configure Commands"
+      },
+      {
         "command": "workspaceMcp.enableWrites",
         "title": "Workspace MCP: Enable Writes for This Session"
       },
@@ -101,6 +105,18 @@
           "scope": "application",
           "description": "Write access at each bridge start, including automatic starts. Ask offers session-only or persistent allow/deny. Workspace Trust remains required."
         },
+        "workspaceMcp.allowedZeroArgumentCommands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$"
+          },
+          "maxItems": 100,
+          "uniqueItems": true,
+          "default": [],
+          "scope": "application",
+          "description": "Exact command IDs that MCP may invoke with zero arguments without a command profile. Allow only commands whose behavior you trust. Commands can open dialogs or have destructive or external effects."
+        },
         "workspaceMcp.allowedCommands": {
           "type": "array",
           "items": {
@@ -111,14 +127,14 @@
           "uniqueItems": true,
           "default": [],
           "scope": "application",
-          "description": "Exact command IDs authorized for direct MCP invocation. This grants authority only; commands also need an applicable explicit non-interactive command profile. Commands may have destructive or external side effects. Workspace overrides and writePolicy cannot grant command authority."
+          "description": "Exact command IDs that MCP may invoke with a matching command profile. For calls without a profile, use workspaceMcp.allowedZeroArgumentCommands."
         },
         "workspaceMcp.commandProfiles": {
           "type": "array",
           "default": [],
           "maxItems": 100,
           "scope": "application",
-          "description": "User-reviewed call profiles for exact extension versions. Profiles do not grant execution permission. Also authorize the command in workspaceMcp.allowedCommands.",
+          "description": "Optional user-reviewed call profiles for exact extension versions. Use Edit in settings.json to configure typed arguments or prerequisites. Authorize the command in workspaceMcp.allowedCommands.",
           "items": {
             "type": "object",
             "additionalProperties": false,
