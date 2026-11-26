@@ -246,4 +246,4 @@ catalog, ask Codex to read `plugins/vscode-workspace-mcp/skills/workspace-mcp/SK
 and use the paired tools.
 
 Check the connection by listing roots and reading a document with an unsaved
-change. Verify SAP/backend behavior separately using [acceptance](acceptance.md).
+change. Verify native-client behavior separately using [acceptance](acceptance.md).

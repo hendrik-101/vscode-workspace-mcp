@@ -15,7 +15,7 @@ nodes, and report pagination and scan completeness. See
 [symbol ranges, filters and paging](symbols.md). Names are capped at 1,000
 characters. External,
 unsafe, inaccessible and symlink targets are omitted. Empty results can mean no
-matching symbols or no applicable provider; no ADT capability is assumed.
+matching symbols or no applicable provider; no specific provider capability is assumed.
 
 `show_diff` accepts `uri` and exactly one of `otherUri` or `proposedText`.
 Proposals also require the current `version` from `read_document`. They use
@@ -42,7 +42,7 @@ limit; see [formatting response size](formatting.md).
 cancellation checks as `edit_document`; it never implicitly saves. Preview
 validates edit ranges, overlap and size too. Empty edits may mean the text is
 already formatted or no formatter is available. Provider availability and
-behavior with SAP ADT require acceptance testing on an actual backend.
+behavior with individual providers require acceptance testing on an actual backend.
 
 `read_symbol({uri, version, name})` reads a unique provider-reported full body
 with optional immediate `containerName` and identifier-start `position`.

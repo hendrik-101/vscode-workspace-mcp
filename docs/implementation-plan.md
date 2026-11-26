@@ -14,7 +14,7 @@ Current architecture and gates: [design](design.md), [development](development.m
 5. Build the VSIX; run checks, tests, dependency review and a separate Codex Security
    scan. Record unavailable checks as blockers.
 6. Open a PR, configure protection/cloud reviews where account access permits,
-   and supply [manual SAP checks](acceptance.md).
+   and supply [manual client checks](acceptance.md).
 
 Review URI aliases, traversal, symlinks, provider errors, concurrent edits,
 resource exhaustion and credential leakage.

@@ -69,7 +69,7 @@ After configuration, check eligibility with `search_commands`, then call
 Supported positional types are `string`, `number`, `boolean` and `null`, with
 at most eight arguments and 2,048 UTF-16 code units per string. An empty
 `argumentTypes` array describes a zero-argument command with extra
-prerequisites. The bridge cannot convert an ABAP URI string to a `vscode.Uri`
+prerequisites. The bridge cannot convert a workspace URI string to a `vscode.Uri`
 or reconstruct an Explorer or TreeView object.
 
 Set `nonInteractive` to `true` only when the reviewed call can complete
@@ -107,27 +107,5 @@ writes to the same channel, with no attribution to an individual invocation.
 Share only a channel whose contents may go to connected clients. **Workspace
 MCP: Stop Sharing Output Channel** and stopping the bridge both revoke sharing.
 
-## SAP ADT Class Run
-
-SAP documents Class Run from the open ABAP class using **ABAP: Run ABAP
-Application (Console)**. VS Code sends no positional arguments when launching
-a contributed command from the Command Palette. Add
-`adt-vscode.runApplication` to **Workspace MCP: Allowed Zero Argument Commands**. The
-default zero-argument call uses the active class. First verify the behavior
-with your connected SAP destination and a class that implements
-`IF_OO_ADT_CLASSRUN`.
-
-1. Run Class Run manually once if needed to identify its Output channel. Share
-   that channel and leave it visible alongside the ABAP editor.
-2. Keep the intended class active and check `search_commands` for eligibility.
-3. Call `invoke_command({commandId: "adt-vscode.runApplication"})`, then
-   `read_output`. Compare the Output snapshot or its version with a pre-run
-   snapshot if the channel already contains output.
-
-SAP backend behavior, exact URI arguments and unattended destination login
-require separate verification. This flow assumes an already connected
-destination.
-
-[SAP's Class Run instructions](https://developers.sap.com/tutorials/abap-environment-adt-coretools-vscode/)
-· [VS Code command arguments](https://code.visualstudio.com/api/extension-guides/command#command-arguments)
+[VS Code command arguments](https://code.visualstudio.com/api/extension-guides/command#command-arguments)
 · [VS Code Output API](https://code.visualstudio.com/api/references/vscode-api#window.createOutputChannel)

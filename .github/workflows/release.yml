@@ -132,7 +132,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
-      MARKETPLACE_AUTH: ${{ vars.MARKETPLACE_AUTH || 'entra' }}
+      MARKETPLACE_AUTH: ${{ vars.MARKETPLACE_AUTH || 'oidc' }}
       AZURE_CORE_OUTPUT: none
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -157,11 +157,20 @@ jobs:
           [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           case "$MARKETPLACE_AUTH" in
             entra) test -n "$AZURE_CLIENT_ID" && test -n "$AZURE_TENANT_ID" ;;
-            pat) ;;
-            *) echo "MARKETPLACE_AUTH must be entra or pat" >&2; exit 1 ;;
+            oidc|pat) ;;
+            *) echo "MARKETPLACE_AUTH must be oidc, entra or pat" >&2; exit 1 ;;
           esac
           cd artifacts
           sha256sum --check "workspace-mcp-$RELEASE_VERSION.vsix.sha256"
+      - name: Publish exact VSIX with Marketplace Trusted Publishing
+        if: env.MARKETPLACE_AUTH == 'oidc'
+        run: |
+          case "$RELEASE_CHANNEL" in
+            preview) channel_args=(--pre-release) ;;
+            stable) channel_args=() ;;
+            *) exit 1 ;;
+          esac
+          ./node_modules/.bin/vsce publish --oidc --packagePath "artifacts/workspace-mcp-$RELEASE_VERSION.vsix" "${channel_args[@]}"
       - name: Authenticate with Microsoft Entra workload federation
         if: env.MARKETPLACE_AUTH == 'entra'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0

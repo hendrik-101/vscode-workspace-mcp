@@ -11,9 +11,9 @@
   they preserve safety. Pin dependencies and commit the lockfile.
 - Run Prettier, a separate simplification review and all [local checks](#run-checks-locally).
 - Record results and limitations; unrun checks remain pending. Synthetic tests
-  cannot establish SAP-backend/native-client acceptance.
-- Isolated VS Code/SAP ADT test profiles may use Microsoft/SAP downloads and
-  telemetry. Product runtime must emit none.
+  cannot establish native-client acceptance.
+- Isolated integration test profiles may download VS Code. Product runtime must
+  emit no telemetry.
 
 ## Run checks locally
 
@@ -28,8 +28,7 @@ npm run package
 npm audit --omit=dev --audit-level=high
 ```
 
-On headless Linux, use `xvfb-run -a npm run test:vscode`. Add `-- --adt` for
-SAP ADT coexistence checks without a backend. The runner downloads VS Code
+On headless Linux, use `xvfb-run -a npm run test:vscode`. The runner downloads VS Code
 1.137.0; set `VSCODE_VERSION` to test another supported release. Node.js types
 and the bundle target use 24; VS Code API types match the minimum supported version.
 
@@ -119,7 +118,7 @@ the repository scan.
 PR and main CI produce VSIX artifacts, never publications. An owner-created
 annotated release tag authorizes automatic GitHub and Marketplace publication
 through the [release workflow](releases.md). Releases require version/changelog
-updates, passing three-platform checks, documented SAP/client acceptance and the
+updates, passing three-platform checks, documented native-client acceptance and the
 actual Security repository scan for the tagged revision. The manual preview
 workflow still produces drafts only. Publisher credentials and identity federation
 are configured outside the repository; never store publishing tokens here.

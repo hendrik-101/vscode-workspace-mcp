@@ -7,7 +7,7 @@ import { workspace } from "../test/fixtures/workspace.js";
 
 const bytes = (value: unknown) =>
   Buffer.byteLength(JSON.stringify(value), "utf8");
-const uri = "memfs:/project/example.abap";
+const uri = "memfs:/project/example.txt";
 const position = (character: number) => ({ line: 0, character });
 
 // Synthetic provider results, as in server.test.ts. This benchmark measures the

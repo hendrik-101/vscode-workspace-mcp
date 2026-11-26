@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 — command settings and Marketplace preview
 
 - Run contributed commands without a profile using the explicit
   `allowedZeroArgumentCommands` User setting. Existing command permissions
   continue to require matching profiles.
 - Open VS Code command settings from the Command Palette, and document how
   an agent can help prepare settings for commands with arguments.
+- Prepare Marketplace publication through Trusted Publishing, using the same
+  tested VSIX as the GitHub release.
+- Refresh transitive HTTP dependencies for upstream security fixes.
 
 ## 0.1.2 — command and Output preview
 
@@ -26,7 +29,7 @@
   and the minimum supported VS Code 1.137.0 API types.
 - Supersede the unpublished 0.1.0 candidate. Its existing annotated tag remains
   unchanged; no GitHub or Marketplace publication of that version is claimed.
-- Real SAP/native-client acceptance and a Codex Security repository scan remain
+- Native-client acceptance and a Codex Security repository scan remain
   pending for this revision. The owner exceptions recorded for 0.1.0 do not apply
   to this patch release.
 
@@ -52,14 +55,12 @@
 - Authenticated loopback TLS, certificate pinning, token/identity rotation and a
   bundled stdio adapter whose configured path survives extension upgrades.
 - Typed tool responses and concise discovery guidance for Codex and Claude Code.
-- Synthetic VS Code/provider tests and SAP ADT coexistence checks; real SAP and
-  native-client acceptance remain separate release gates.
+- Synthetic VS Code/provider tests; native-client acceptance remains a separate release gate.
 - Registered publisher ID `hendrik101`; owner-created annotated tags publish
   versioned GitHub releases and the same tested VSIX to Marketplace after full CI.
 - Preview/stable channels, acceptance/Security evidence, SHA256 and release notes;
   Entra workload federation or explicitly selected PAT authentication. The manual
   draft preview workflow remains available.
 - Update MCP SDK to 1.31.0 to resolve the production dependency audit advisory.
-- Generic workspace APIs remain independent of SAP ADT. File/folder creation,
-  ABAP object creation, autonomous ADT login and backend activation are not included.
+- File/folder creation, external login and backend activation are not included.
 - MIT licensed, without telemetry, shell tools or arbitrary command execution.

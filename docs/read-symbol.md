@@ -55,7 +55,7 @@ Continue by repeating the exact URI, version and symbol selector, passing the
 returned `nextPosition` as `startPosition`. Provider resolution repeats on every
 page; ranges are provider observations, not an atomic multi-page snapshot.
 Provider availability and full-range fidelity depend on the installed language
-extension; SAP ADT behavior requires backend acceptance testing.
+extension; individual provider behavior requires backend acceptance testing.
 
 ## Implementation steps
 

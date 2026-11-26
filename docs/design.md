@@ -1,9 +1,7 @@
 # Design
 
 An MIT-licensed VS Code extension exposes one window's workspace and live documents
-to MCP clients, including virtual URI schemes. SAP ADT and its MCP server remain
-separate products. This independent community project contains no SAP credentials,
-private sources or proprietary extension code.
+to MCP clients, including virtual URI schemes.
 
 ## Components
 
@@ -25,8 +23,7 @@ automatic startup for trusted workspace windows with at least one root.
 Both start modes use the User `deny`/`allow`/`ask` write policy, default `ask`.
 Workspace operations use `workspace.fs`, `TextDocument` and `WorkspaceEdit`, never
 OS paths. Search requires neither a search provider nor local ripgrep. Saving is
-separate from editing and never activates ABAP objects; SAP save hooks may prompt
-for locks/transports.
+separate from editing. External providers may prompt during save.
 
 ## Security boundary
 
@@ -55,7 +52,7 @@ See [SECURITY.md](../SECURITY.md) for threats and reporting.
 Fixed VS Code APIs provide document display, symbols, diffs, formatting,
 [navigation](navigation.md), [diagnostics](diagnostics.md) and
 [refactoring previews](refactoring.md). Registered providers determine support;
-there is no direct LSP connection or ABAP-specific protocol.
+there is no direct LSP connection.
 
 Formatting uses the normal edit validator and mutation path. Symbol locations
 are bounded and independently authorized. Proposal diffs use a bounded read-only
@@ -68,7 +65,7 @@ dispatch; dispatched UI operations and edits cannot be rolled back on disconnect
 Real extension-host tests use an in-memory non-file FileSystemProvider to cover
 unsaved text, write refusal, version conflicts, search, save and containment.
 Transport tests use real MCP clients and sockets. See [acceptance](acceptance.md)
-for SAP coexistence versus backend/client validation.
+for the distinction between automated and native-client validation.
 
 CI builds, tests and packages a VSIX without publishing. Initial delivery is an
 unmerged PR, not a production-readiness claim. Review, scan and release gates are

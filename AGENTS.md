@@ -17,7 +17,7 @@ Keep this MIT project small, readable and telemetry-free.
 - Never log or commit secrets/customer code. Never push development to `main`,
   bypass protection, merge without the owner's instruction, or publish without approval.
 - Report incomplete results and failed operations honestly. Synthetic tests do
-  not prove SAP/backend or native-client compatibility; PR reviews are not Security scans.
+  not prove native-client compatibility; PR reviews are not Security scans.
 
 Read [development rules](docs/development.md) for every change, including the
 current-head review and actual merge-gate checklist before handoff.
@@ -27,7 +27,7 @@ current-head review and actual merge-gate checklist before handoff.
 | [Design](docs/design.md)                    | Architecture and runtime boundaries           |
 | [Security](SECURITY.md)                     | Threat model, credentials and reporting       |
 | [Clients](docs/clients.md)                  | Connection and optional plugin setup          |
-| [Acceptance](docs/acceptance.md)            | Automated scope and manual SAP/client checks  |
+| [Acceptance](docs/acceptance.md)            | Automated scope and manual client checks      |
 | [Tools](docs/tools.md)                      | Display, symbols, diffs and formatting        |
 | [Navigation](docs/navigation.md)            | Definitions, references and hover             |
 | [Diagnostics](docs/diagnostics.md)          | Waiting semantics and limits                  |
@@ -49,7 +49,7 @@ Leave formatting to CI; avoid style preferences and speculative rewrites.
 - Preserve full virtual-workspace URIs and live buffers. Check scheme, authority,
   root membership and provider symlink metadata for both requested and returned
   targets, including navigation, previews and continuations. OS-path conversion
-  or file-only assumptions can bypass admission or break SAP workspaces.
+  or file-only assumptions can bypass admission or break virtual workspaces.
 - Trace writes through approval, Workspace Trust, Auto Save and document-version
   checks to the actual edit/save call. Recheck after asynchronous work; stop,
   revocation, token changes and stale prompts must not restore old permissions.
@@ -87,7 +87,7 @@ Leave formatting to CI; avoid style preferences and speculative rewrites.
   path with a meaningful assertion: stale versions, concurrent changes, revoked
   writes, late/rejected provider results, timeout or limit boundaries as relevant.
   Explain the uncovered failure; missing tests alone do not establish a defect.
-  Mocks do not prove SAP/backend or native-client compatibility.
+  Mocks do not prove native-client compatibility.
 - Review simplifications separately: remove duplication or clarify ownership only
   when it reduces a concrete risk without weakening guards, error reporting or
   public contracts. Do not demand broad refactors or dependencies for stylistic

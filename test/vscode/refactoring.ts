@@ -4,7 +4,7 @@ import { WorkspaceService } from "../../src/workspace";
 import { WorkspaceError } from "../../src/types";
 import { MemoryProvider } from "./memory-provider";
 
-/** Real extension-host dispatch; synthetic providers do not establish SAP behavior. */
+/** Real extension-host dispatch; synthetic providers do not establish external provider behavior. */
 export async function refactoringTools(
   provider: MemoryProvider,
   first: vscode.Uri,

@@ -532,11 +532,11 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ["workspace_roots", {}],
     ["editor_context", {}],
     ["list_directory", { uri: "memfs:/project" }],
-    ["get_diagnostics", { uri: "memfs:/project/a.abap" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.txt" }],
     [
       "edit_document",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         edits: [
           {
@@ -549,11 +549,11 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
         ],
       },
     ],
-    ["show_document", { uri: "memfs:/project/a.abap", preserveFocus: true }],
+    ["show_document", { uri: "memfs:/project/a.txt", preserveFocus: true }],
     [
       "document_symbols",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 1,
         name: "member",
         kind: "method",
@@ -563,12 +563,12 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ],
     [
       "wait_for_diagnostics",
-      { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 1 },
+      { uri: "memfs:/project/a.txt", version: 4, timeoutMs: 1 },
     ],
     [
       "get_diagnostics",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         maxResults: 100,
         severity: "error",
         offset: 20,
@@ -578,7 +578,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     [
       "wait_for_diagnostics",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         maxResults: 1,
         severity: "hint",
@@ -593,24 +593,24 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     ],
     [
       "get_definition",
-      { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
+      { uri: "memfs:/project/a.txt", position: { line: 0, character: 1 } },
     ],
     [
       "get_references",
-      { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
+      { uri: "memfs:/project/a.txt", position: { line: 0, character: 1 } },
     ],
     [
       "get_hover",
-      { uri: "memfs:/project/a.abap", position: { line: 0, character: 1 } },
+      { uri: "memfs:/project/a.txt", position: { line: 0, character: 1 } },
     ],
     [
       "show_diff",
-      { uri: "memfs:/project/a.abap", proposedText: "", version: 4 },
+      { uri: "memfs:/project/a.txt", proposedText: "", version: 4 },
     ],
     [
       "format_document",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         apply: false,
         includeEdits: true,
@@ -619,7 +619,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     [
       "preview_rename",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         position: { line: 0, character: 0 },
         newName: "renamed",
@@ -628,7 +628,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     [
       "preview_code_actions",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         range: {
           start: { line: 0, character: 0 },
@@ -647,7 +647,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     [
       "preview_rename",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         position: { line: 0, character: 0 },
         newName: "renamed",
@@ -657,7 +657,7 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     [
       "preview_code_actions",
       {
-        uri: "memfs:/project/a.abap",
+        uri: "memfs:/project/a.txt",
         version: 4,
         range: {
           start: { line: 0, character: 0 },
@@ -666,27 +666,27 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
         kind: "source",
       },
     ],
-    ["show_document", { uri: "memfs:/project/a.abap", command: "unsafe" }],
+    ["show_document", { uri: "memfs:/project/a.txt", command: "unsafe" }],
     [
       "format_document",
-      { uri: "memfs:/project/a.abap", version: 4, tabSize: 0 },
+      { uri: "memfs:/project/a.txt", version: 4, tabSize: 0 },
     ],
     ["workspace_symbols", { query: "" }],
     ["workspace_symbols", { query: "x", maxResults: 101 }],
     ["workspace_symbols", { query: "x", kind: "bogus" }],
-    ["document_symbols", { uri: "memfs:/project/a.abap", offset: -1 }],
+    ["document_symbols", { uri: "memfs:/project/a.txt", offset: -1 }],
     [
       "wait_for_diagnostics",
-      { uri: "memfs:/project/a.abap", version: 4, timeoutMs: 20001 },
+      { uri: "memfs:/project/a.txt", version: 4, timeoutMs: 20001 },
     ],
-    ["wait_for_diagnostics", { uri: "memfs:/project/a.abap" }],
-    ["get_diagnostics", { uri: "memfs:/project/a.abap", maxResults: 101 }],
-    ["get_diagnostics", { uri: "memfs:/project/a.abap", severity: "fatal" }],
-    ["get_diagnostics", { uri: "memfs:/project/a.abap", offset: -1 }],
-    ["get_diagnostics", { uri: "memfs:/project/a.abap", snapshotId: "bad" }],
+    ["wait_for_diagnostics", { uri: "memfs:/project/a.txt" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.txt", maxResults: 101 }],
+    ["get_diagnostics", { uri: "memfs:/project/a.txt", severity: "fatal" }],
+    ["get_diagnostics", { uri: "memfs:/project/a.txt", offset: -1 }],
+    ["get_diagnostics", { uri: "memfs:/project/a.txt", snapshotId: "bad" }],
     [
       "wait_for_diagnostics",
-      { uri: "memfs:/project/a.abap", version: 4, maxResults: 0 },
+      { uri: "memfs:/project/a.txt", version: 4, maxResults: 0 },
     ],
   ] as const) {
     assert.equal(
@@ -696,15 +696,15 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
   }
   const read = await client.callTool({
     name: "read_document",
-    arguments: { uri: "memfs:/project/a.abap" },
+    arguments: { uri: "memfs:/project/a.txt" },
   });
   assert.deepEqual(read.structuredContent, {
     result: {
-      uri: "memfs:/project/a.abap",
+      uri: "memfs:/project/a.txt",
       text: "unsaved buffer",
       version: 4,
       dirty: true,
-      languageId: "abap",
+      languageId: "plaintext",
       lineCount: 1,
       startLine: 0,
       endLine: 1,
@@ -722,10 +722,10 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
   assert.equal(read.isError, undefined);
   const save = await client.callTool({
     name: "save_document",
-    arguments: { uri: "memfs:/project/a.abap", version: 4 },
+    arguments: { uri: "memfs:/project/a.txt", version: 4 },
   });
   assert.deepEqual(save.structuredContent, {
-    result: { uri: "memfs:/project/a.abap", version: 4, dirty: false },
+    result: { uri: "memfs:/project/a.txt", version: 4, dirty: false },
   });
   assert.equal(
     (
@@ -746,9 +746,9 @@ test("official MCP client initializes, lists bounded tools and calls live-docume
     true,
   );
   for (const arguments_ of [
-    { uri: "memfs:/project/a.abap", version: -1 },
-    { uri: "memfs:/project/a.abap" },
-    { uri: "memfs:/project/a.abap", version: 4, surprise: true },
+    { uri: "memfs:/project/a.txt", version: -1 },
+    { uri: "memfs:/project/a.txt" },
+    { uri: "memfs:/project/a.txt", version: 4, surprise: true },
   ]) {
     const result = await client.callTool({
       name: "save_document",
@@ -779,7 +779,7 @@ test("provider exceptions never expose paths, stack traces or secrets over MCP",
   );
   const result = await client.callTool({
     name: "read_document",
-    arguments: { uri: "memfs:/project/a.abap" },
+    arguments: { uri: "memfs:/project/a.txt" },
   });
   assert.equal(result.isError, true);
   assert.doesNotMatch(JSON.stringify(result), /secret|private|server\.ts/);
@@ -903,7 +903,7 @@ for (const filter of ["include", "exclude"])
           arguments: {
             uri: "memfs:/project",
             query: "a",
-            [filter]: Array(20).fill("*.abap"),
+            [filter]: Array(20).fill("*.txt"),
           },
         },
       }),
@@ -959,7 +959,7 @@ test("MCP admits a 10000-edit request and diagnostic continuation beyond offset 
   const result = await client.callTool({
     name: "edit_document",
     arguments: {
-      uri: "memfs:/project/a.abap",
+      uri: "memfs:/project/a.txt",
       version: 1,
       edits: Array.from({ length: 10000 }, (_, line) => ({
         range: { start: { line, character: 0 }, end: { line, character: 0 } },
@@ -972,7 +972,7 @@ test("MCP admits a 10000-edit request and diagnostic continuation beyond offset 
   const diagnostics = await client.callTool({
     name: "get_diagnostics",
     arguments: {
-      uri: "memfs:/project/a.abap",
+      uri: "memfs:/project/a.txt",
       offset: 4900,
       snapshotId: "a".repeat(64),
     },
@@ -1525,7 +1525,7 @@ test("discovery documents tool roles, URI/position conventions and search contin
   }
   // Both the SDK's advertised JSON Schema and the server's Zod parser must
   // reject missing unconditional metadata, while accepting absent conditionals.
-  const uri = "memfs:/project/a.abap";
+  const uri = "memfs:/project/a.txt";
   const point = { line: 0, character: 0 };
   const range = { start: point, end: point };
   const diagnostic = {
@@ -1802,7 +1802,7 @@ test("symbol-read contract validates bounded source and preserves additive metad
     uri: "vfs:/project/file",
     version: 3,
     dirty: true,
-    languageId: "abap",
+    languageId: "plaintext",
     lineCount: 4,
     startLine: 1,
     endLine: 3,
@@ -1881,7 +1881,7 @@ test("read_document exposes exact ranges and budgets and forwards them without m
     }),
   );
   const input = {
-    uri: "memfs:/project/a.abap",
+    uri: "memfs:/project/a.txt",
     range: { start: { line: 0, character: 1 }, end: { line: 1, character: 0 } },
     version: 4,
     maxLines: 1,
@@ -1950,7 +1950,7 @@ test("read_symbol requires version and forwards exact selectors, continuation an
     }),
   );
   const input = {
-    uri: "memfs:/project/a.abap",
+    uri: "memfs:/project/a.txt",
     version: 4,
     name: "method",
     containerName: "Class",
@@ -2037,7 +2037,7 @@ test("symbol resolution errors keep actionable codes while redacting provider de
     code = value;
     const result = await client.callTool({
       name: "read_symbol",
-      arguments: { uri: "memfs:/project/a.abap", version: 4, name: "method" },
+      arguments: { uri: "memfs:/project/a.txt", version: 4, name: "method" },
     });
     assert.equal(result.isError, true);
     assert.equal(

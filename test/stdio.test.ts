@@ -672,7 +672,7 @@ test("large full formatting previews cross stdio when the client receive buffer 
   t.after(() => client.close());
   const result = await client.callTool({
     name: "format_document",
-    arguments: { uri: "memfs:/project/a.abap", version: 1 },
+    arguments: { uri: "memfs:/project/a.txt", version: 1 },
   });
   assert.notEqual(result.isError, true);
   const data = result.structuredContent as {

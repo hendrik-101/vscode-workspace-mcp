@@ -36,13 +36,6 @@ before implementing. A workspace folder URI does not establish the parameter
 contract of an extension-owned TreeView element. Never substitute an active
 editor URI or guessed opaque element.
 
-Universal autonomous authentication is unsupported in either approach. SAP's
-[documented workflow](https://developers.sap.com/tutorials/abap-environment-adt-coretools-vscode?embed=full)
-includes destination selection and browser credentials. The inspected-package
-findings preserved in Issue40 are not a tested public headless API. A direct
-download of the referenced manifest returned HTTP 403 in this environment;
-no fresh SAP bundle inspection or SAP runtime test has been performed here.
-
 ## Proposed architecture for the recommended scope
 
 Add a focused command service outside the large document service. Use a small
@@ -108,7 +101,7 @@ the command admission system cannot enforce. Discovery stays read-only.
    extension-host command registrations. Exercise discovery, approved
    zero-argument calls, unapproved prompting handlers, undefined/throw/reject,
    delayed settlement and bounded outstanding capacity. Fixtures prove the
-   generic mechanism, not SAP compatibility.
+   generic mechanism, not compatibility with a particular provider.
 4. Update command contracts, architecture, security boundaries, acceptance and
    the bundled workspace skill consistently. Avoid PR41's review-guidance and
    badge changes. Persist the agreed plan and a draft PR.
