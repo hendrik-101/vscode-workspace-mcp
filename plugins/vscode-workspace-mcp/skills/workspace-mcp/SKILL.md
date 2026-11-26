@@ -46,9 +46,9 @@ For extension functions, use `search_commands` to find IDs, extension versions,
 argument types and eligibility. An empty `argumentTypes` list can be the
 bridge default. Verify from the extension's documentation or known behavior
 that the intended call works without arguments before omitting `args`.
-If the user needs to authorize a command, point them to **Workspace MCP:
-Configure Commands** and **Allowed Zero Argument Commands**. For commands that
-need arguments,
+Only if the user intends to authorize profileless execution, point them to
+**Workspace MCP: Configure Commands** and **Allowed Zero Argument Commands**.
+For commands that need arguments, leave that allowlist unchanged. Instead,
 confirm the signature and prerequisites from the extension's documentation or
 verified behavior. Have the user add the ID to **Allowed Commands**, and draft
 an entry for **Command Profiles** in User
