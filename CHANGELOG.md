@@ -10,6 +10,8 @@
 - Prepare Marketplace publication through Trusted Publishing, using the same
   tested VSIX as the GitHub release.
 - Refresh transitive HTTP dependencies for upstream security fixes.
+- Tie document versions to the live buffer and limit the number of editor tabs
+  that bridge requests can open.
 
 ## 0.1.2 — command and Output preview
 

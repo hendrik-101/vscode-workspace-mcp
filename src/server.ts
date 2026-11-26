@@ -58,7 +58,7 @@ const range = z
 const version = index
   .min(1)
   .describe(
-    "Current document version returned by a live read; rejects stale edits or positions.",
+    "Opaque current document version returned by a live read; echo it unchanged.",
   );
 const preserveFocus = z
   .boolean()

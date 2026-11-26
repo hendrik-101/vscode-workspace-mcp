@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import { Buffer } from "node:buffer";
 import * as vscode from "vscode";
+import { documentRevision, EditorTabBudget } from "./editorState.js";
 import {
   MAX_DOCUMENT_BYTES as MAX_FILE_BYTES,
   MAX_EDITS,
@@ -255,10 +256,17 @@ function range(value: vscode.Range): TextRange {
   return { start: position(value.start), end: position(value.end) };
 }
 
+const editorTabBudget = new EditorTabBudget(() =>
+  vscode.window.tabGroups.all.reduce(
+    (count, group) => count + group.tabs.length,
+    0,
+  ),
+);
+
 function state(document: vscode.TextDocument): DocumentState {
   return {
     uri: document.uri.toString(),
-    version: document.version,
+    version: documentRevision(document),
     dirty: document.isDirty,
   };
 }
@@ -328,11 +336,17 @@ export class WorkspaceService implements WorkspaceApi {
       : undefined;
     signal?.throwIfAborted();
     this.active();
-    await vscode.window.showTextDocument(document, {
-      preserveFocus: input.preserveFocus ?? true,
-      preview: false,
-      ...(selection ? { selection } : {}),
-    });
+    this.currentRoot(document.uri);
+    const releaseTab = editorTabBudget.reserve();
+    try {
+      await vscode.window.showTextDocument(document, {
+        preserveFocus: input.preserveFocus ?? true,
+        preview: false,
+        ...(selection ? { selection } : {}),
+      });
+    } finally {
+      releaseTab();
+    }
     this.currentRoot(document.uri);
     return state(document);
   }
@@ -587,7 +601,7 @@ export class WorkspaceService implements WorkspaceApi {
     const document = await this.document(uri, signal);
     this.text(document);
     if (input.version !== undefined) this.expected(document, input.version);
-    const version = document.version;
+    const version = documentRevision(document);
     const complete = () => {
       signal?.throwIfAborted();
       this.currentRoot(uri);
@@ -620,7 +634,7 @@ export class WorkspaceService implements WorkspaceApi {
     const position = this.exactPosition(document, input.position);
     signal?.throwIfAborted();
     this.currentRoot(document.uri);
-    return { document, position, version: document.version };
+    return { document, position, version: documentRevision(document) };
   }
 
   private navigationComplete(
@@ -664,7 +678,7 @@ export class WorkspaceService implements WorkspaceApi {
       initialBytes += Buffer.byteLength(uri);
       if (initialBytes > 256 * 1024)
         fail("LIMIT_EXCEEDED", "Provider snapshot URI text exceeds 256 KiB.");
-      initial.set(uri, { document, version: document.version });
+      initial.set(uri, { document, version: documentRevision(document) });
     }
     const changed = new Set<string>();
     let changedBytes = 0;
@@ -755,15 +769,15 @@ export class WorkspaceService implements WorkspaceApi {
             changed.has(key) ||
             (initial &&
               (initial.document !== document ||
-                initial.version !== document.version))
+                initial.version !== documentRevision(document)))
           )
             fail(
               "VERSION_CONFLICT",
               "Target changed during the provider query.",
             );
-          if (validated.get(key) !== document.version) {
+          if (validated.get(key) !== documentRevision(document)) {
             this.text(document);
-            validated.set(key, document.version);
+            validated.set(key, documentRevision(document));
           }
           this.currentRoot(uri);
           const target = this.exactRange(
@@ -884,47 +898,49 @@ export class WorkspaceService implements WorkspaceApi {
     this.active();
     let right: vscode.Uri;
     let snapshot: string | undefined;
-    if (input.otherUri !== undefined) {
-      const other = await this.document(parseUri(input.otherUri));
-      this.text(other);
-      right = other.uri;
-    } else {
-      this.expected(document, input.version ?? 0);
-      if (Buffer.byteLength(input.proposedText!) > MAX_FILE_BYTES)
-        fail("LIMIT_EXCEEDED", "Proposal exceeds 8 MiB.");
-      if (!this.snapshotProvider)
-        this.snapshotProvider =
-          vscode.workspace.registerTextDocumentContentProvider(
-            this.snapshotScheme,
-            {
-              provideTextDocumentContent: (uri) => {
-                const text = this.snapshots.get(uri.toString());
-                if (text === undefined)
-                  throw vscode.FileSystemError.FileNotFound(uri);
-                return text;
-              },
-            },
-          );
-      if (this.snapshots.size >= 8) {
-        const expired = [...this.snapshots.keys()].find(
-          (key) => !this.pendingSnapshots.has(key),
-        );
-        if (expired === undefined)
-          fail(
-            "LIMIT_EXCEEDED",
-            "All eight diff snapshots are still opening. Retry after a diff completes.",
-          );
-        this.snapshots.delete(expired);
-      }
-      right = vscode.Uri.from({
-        scheme: this.snapshotScheme,
-        path: `/${randomUUID()}/proposal`,
-      });
-      snapshot = right.toString();
-      this.snapshots.set(snapshot, input.proposedText!);
-      this.pendingSnapshots.add(snapshot);
-    }
+    const releaseTab = editorTabBudget.reserve();
     try {
+      if (input.otherUri !== undefined) {
+        const other = await this.document(parseUri(input.otherUri));
+        this.text(other);
+        right = other.uri;
+      } else {
+        this.expected(document, input.version ?? 0);
+        if (Buffer.byteLength(input.proposedText!) > MAX_FILE_BYTES)
+          fail("LIMIT_EXCEEDED", "Proposal exceeds 8 MiB.");
+        if (!this.snapshotProvider)
+          this.snapshotProvider =
+            vscode.workspace.registerTextDocumentContentProvider(
+              this.snapshotScheme,
+              {
+                provideTextDocumentContent: (uri) => {
+                  const text = this.snapshots.get(uri.toString());
+                  if (text === undefined)
+                    throw vscode.FileSystemError.FileNotFound(uri);
+                  return text;
+                },
+              },
+            );
+        if (this.snapshots.size >= 8) {
+          const expired = [...this.snapshots.keys()].find(
+            (key) => !this.pendingSnapshots.has(key),
+          );
+          if (expired === undefined)
+            fail(
+              "LIMIT_EXCEEDED",
+              "All eight diff snapshots are still opening. Retry after a diff completes.",
+            );
+          this.snapshots.delete(expired);
+        }
+        right = vscode.Uri.from({
+          scheme: this.snapshotScheme,
+          path: `/${randomUUID()}/proposal`,
+        });
+        snapshot = right.toString();
+        this.snapshots.set(snapshot, input.proposedText!);
+        this.pendingSnapshots.add(snapshot);
+      }
+      this.active();
       this.currentRoot(document.uri);
       if (input.otherUri !== undefined) this.currentRoot(right);
       signal?.throwIfAborted();
@@ -943,6 +959,7 @@ export class WorkspaceService implements WorkspaceApi {
       if (snapshot !== undefined) this.snapshots.delete(snapshot);
       throw error;
     } finally {
+      releaseTab();
       if (snapshot !== undefined) this.pendingSnapshots.delete(snapshot);
     }
   }
@@ -1179,7 +1196,7 @@ export class WorkspaceService implements WorkspaceApi {
               "VERSION_CONFLICT",
               "A provider target was closed and reopened during preview.",
             );
-          const version = previous?.version ?? document.version;
+          const version = previous?.version ?? documentRevision(document);
           this.expected(document, version);
           observed.set(target.toString(), { document, version });
           editCount += edits.length;
@@ -1367,7 +1384,7 @@ export class WorkspaceService implements WorkspaceApi {
 
   private expected(document: vscode.TextDocument, version: number): void {
     integer(version, "version", 1);
-    if (document.version !== version)
+    if (document.isClosed || documentRevision(document) !== version)
       fail(
         "VERSION_CONFLICT",
         "Document changed. Read it again before writing.",
@@ -1640,7 +1657,7 @@ export class WorkspaceService implements WorkspaceApi {
       );
     const document = await this.document(parseUri(value));
     if (expectedVersion !== undefined) this.expected(document, expectedVersion);
-    const version = document.version;
+    const version = documentRevision(document);
     const original = this.text(document);
     let startLine: number;
     let endLine: number;
@@ -2449,7 +2466,7 @@ export class WorkspaceService implements WorkspaceApi {
     if (!(await document.save()))
       fail("SAVE_FAILED", "The document could not be saved.");
     this.currentRoot(uri);
-    if (document.version !== version) {
+    if (document.isClosed || documentRevision(document) !== version) {
       fail(
         "VERSION_CONFLICT",
         "Document changed during save, possibly through save participants. Read it again.",
@@ -2576,7 +2593,7 @@ export class WorkspaceService implements WorkspaceApi {
           return {
             ...this.diagnosticSnapshot(uri, input),
             outcome,
-            documentVersion: document.version,
+            documentVersion: documentRevision(document),
             capturedAt: new Date().toISOString(),
             analysisComplete: "unknown",
           };

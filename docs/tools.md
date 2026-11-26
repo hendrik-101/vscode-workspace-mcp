@@ -8,6 +8,14 @@ zero-based UTF-16 and the end is exclusive. `preserveFocus` defaults to `true`;
 set it to `false` to focus the editor. Reading and editing do not implicitly show
 an editor.
 
+Treat document `version` values as opaque positive integers: echo the token from
+a live read for the same document, not VS Code's own version number. Read again
+after the model closes, the content changes, or the extension host restarts.
+
+Both reveal and diff can return `LIMIT_EXCEEDED` when the window's open tabs plus
+pending MCP openings reach 32. Close a tab or wait before retrying. The bridge
+never closes your tabs.
+
 `workspace_symbols({query})` and `document_symbols({uri})` call VS Code's fixed
 public provider commands, supporting both native extensions and LSP-backed
 providers. Results default to 20 symbols (maximum 100), inspect at most 1,000

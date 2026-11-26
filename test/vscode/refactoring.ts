@@ -1,3 +1,4 @@
+import { documentRevision } from "../../src/editorState";
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
@@ -65,7 +66,7 @@ export async function refactoringTools(
   ];
   const input = () => ({
     uri: file.toString(),
-    version: document.version,
+    version: documentRevision(document),
     position: { line: 0, character: 0 },
     newName: "after",
   });
@@ -78,11 +79,14 @@ export async function refactoringTools(
     assert.equal(rename.preview.complete, false);
     assert.deepEqual(rename.preview.reasons, ["OPAQUE_WORKSPACE_EDIT"]);
     assert.equal(rename.preview.documents.length, 2);
-    assert.equal(rename.preview.documents[1]?.version, sibling.version);
+    assert.equal(
+      rename.preview.documents[1]?.version,
+      documentRevision(sibling),
+    );
     for (const kind of ["quickfix", "refactor"] as const) {
       const actions = await service.codeActions({
         uri: file.toString(),
-        version: document.version,
+        version: documentRevision(document),
         range,
         kind,
       });

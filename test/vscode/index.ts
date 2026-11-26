@@ -1,3 +1,4 @@
+import { documentRevision } from "../../src/editorState";
 import assert from "node:assert/strict";
 import { refactoringTools } from "./refactoring";
 import { commandTools } from "./commands";
@@ -234,7 +235,11 @@ export async function run(): Promise<void> {
     const live = await service.read({ uri: file.toString() });
     assert.equal(live.text, "unsaved needle\nsecond needle\n");
     assert.equal(live.dirty, true);
-    assert.equal(live.version, document.version);
+    assert.notEqual(live.version, initial.version);
+    assert.notEqual(
+      live.version,
+      (await service.read({ uri: sibling.toString() })).version,
+    );
     assert.equal(provider.stored(file), initial.text);
     assert.equal(
       (await service.read({ uri: file.toString(), startLine: 1, endLine: 2 }))
@@ -320,7 +325,7 @@ export async function run(): Promise<void> {
       { name: "AbortError" },
     );
     assert.equal(document.getText(), live.text);
-    assert.equal(document.version, live.version);
+    assert.equal(documentRevision(document), live.version);
     assert.equal(document.isDirty, true);
     assert.equal(provider.stored(file), initial.text);
     assert.equal(
@@ -407,7 +412,7 @@ export async function run(): Promise<void> {
       );
       const backendBefore = provider.stored(file);
       const writesBefore = provider.writes;
-      const versionBefore = document.version;
+      const versionBefore = documentRevision(document);
       await rejectsCode(
         service.edit({
           uri: file.toString(),
@@ -417,7 +422,7 @@ export async function run(): Promise<void> {
         "AUTO_SAVE_ENABLED",
       );
       assert.equal(document.getText(), backendBefore);
-      assert.equal(document.version, versionBefore);
+      assert.equal(documentRevision(document), versionBefore);
       assert.equal(document.isDirty, false);
       assert.equal(
         provider.stored(file),
@@ -447,7 +452,7 @@ export async function run(): Promise<void> {
     const diagnosticDocument = await vscode.workspace.openTextDocument(file);
     const awaitingDiagnostics = service.waitForDiagnostics({
       uri: file.toString(),
-      version: diagnosticDocument.version,
+      version: documentRevision(diagnosticDocument),
       timeoutMs: 2000,
     });
     diagnostics.set(file, [diagnostic]);
@@ -455,7 +460,7 @@ export async function run(): Promise<void> {
     assert.equal(observedDiagnostics.outcome, "event_observed");
     assert.equal(
       observedDiagnostics.documentVersion,
-      diagnosticDocument.version,
+      documentRevision(diagnosticDocument),
     );
     assert.equal(observedDiagnostics.analysisComplete, "unknown");
     assert.equal(
@@ -571,7 +576,7 @@ export async function run(): Promise<void> {
     assert.equal(shrunkenSearch.matches.length, 1);
     const liveEdit = await service.edit({
       uri: large.toString(),
-      version: largeDocument.version,
+      version: documentRevision(largeDocument),
       edits: [{ range: range(0, 5), text: "short" }],
     });
     assert.equal(liveEdit.dirty, true);
@@ -935,8 +940,8 @@ async function ideTools(
       start: { line: 0, character: 0 },
       end: { line: 0, character: 2 },
     });
-    await disposedUiOperations(provider, file, document.version);
-    const version = document.version;
+    await disposedUiOperations(provider, file, documentRevision(document));
+    const version = documentRevision(document);
     const preview = await service.format({ uri: file.toString(), version });
     assert.equal(preview.applied, false);
     assert.ok(preview.edits);
@@ -1022,11 +1027,11 @@ async function ideTools(
     formattedReplacement = replacement;
     const largePreview = await service.format({
       uri: file.toString(),
-      version: document.version,
+      version: documentRevision(document),
     });
     const compact = await service.format({
       uri: file.toString(),
-      version: document.version,
+      version: documentRevision(document),
       apply: true,
     });
     assert.equal(document.getText(), replacement);
@@ -1039,7 +1044,7 @@ async function ideTools(
     formattedReplacement = "tidy!";
     const included = await service.format({
       uri: file.toString(),
-      version: document.version,
+      version: documentRevision(document),
       apply: true,
       includeEdits: true,
     });
@@ -1047,13 +1052,13 @@ async function ideTools(
     assert.equal(included.editCount, included.edits.length);
     const unchangedPreview = await service.format({
       uri: file.toString(),
-      version: document.version,
+      version: documentRevision(document),
     });
     assert.ok(unchangedPreview.edits);
     assert.equal(formattedText(document, unchangedPreview.edits), "tidy!");
     const summary = await service.format({
       uri: file.toString(),
-      version: document.version,
+      version: documentRevision(document),
       includeEdits: false,
     });
     assert.equal("edits" in summary, false);
@@ -1063,7 +1068,10 @@ async function ideTools(
     assert.equal(provider.writes, writesBefore);
     formatMode = "change";
     await rejectsCode(
-      service.format({ uri: file.toString(), version: document.version }),
+      service.format({
+        uri: file.toString(),
+        version: documentRevision(document),
+      }),
       "VERSION_CONFLICT",
     );
   } finally {
