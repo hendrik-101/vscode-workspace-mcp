@@ -204,7 +204,7 @@ async function readThroughProtocol(client: Client): Promise<void> {
   ).result;
   assert.equal(result.text, "unsaved packaged buffer\n");
   assert.equal(result.dirty, true);
-  assert.equal(result.version, document.version);
+  assert.ok(Number.isSafeInteger(result.version) && result.version > 0);
   if (process.env.WORKSPACE_MCP_TEST_PHASE === "reinstall") {
     const edit = await client.callTool({
       name: "edit_document",

@@ -1,3 +1,4 @@
+import { documentRevision } from "../../src/editorState";
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
@@ -53,7 +54,7 @@ export async function navigationTools(
     const input = {
       uri: file.toString(),
       position: { line: 0, character: 2 },
-      version: document.version,
+      version: documentRevision(document),
     };
     const definitions = await service.definition(input);
     assert.equal(definitions.locations.length, 1);

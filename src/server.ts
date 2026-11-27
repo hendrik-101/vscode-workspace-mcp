@@ -55,10 +55,12 @@ const position = z
 const range = z
   .strictObject({ start: position, end: position })
   .describe("Zero-based UTF-16 range; end is exclusive.");
-const version = index
+const version = z
+  .number()
+  .int()
   .min(1)
   .describe(
-    "Current document version returned by a live read; rejects stale edits or positions.",
+    "Opaque current document version returned by a live read; echo it unchanged.",
   );
 const preserveFocus = z
   .boolean()
@@ -247,8 +249,7 @@ function createMcpServer(
           .describe(
             "Exact half-open UTF-16 range; excludes startLine and endLine.",
           ),
-        version: index
-          .min(1)
+        version: version
           .optional()
           .describe("Expected live document version; rejects stale ranges."),
         maxLines: index
@@ -281,11 +282,9 @@ function createMcpServer(
       uri: uri.describe(
         "Complete admitted workspace document URI, including its scheme.",
       ),
-      version: index
-        .min(1)
-        .describe(
-          "Required current live document version; rejects stale symbol ranges.",
-        ),
+      version: version.describe(
+        "Required current live document version; rejects stale symbol ranges.",
+      ),
       name: z
         .string()
         .min(1)
@@ -469,7 +468,7 @@ function createMcpServer(
     "Wait for a diagnostic change event for a version-checked document, or timeout. Returns a current snapshot; an event does not prove analysis completion or diagnostic freshness.",
     z.strictObject({
       uri,
-      version: version.min(1),
+      version,
       timeoutMs: z
         .number()
         .int()
@@ -536,8 +535,7 @@ function createMcpServer(
     "Get a known document's symbol outline with full range and selectionRange when known. Defaults to 20 results (max 100); filter name/kind and resend filters with nextOffset plus version for another page. Document changes reject; provider ordering is not a snapshot. scanLimitReached means additional nodes were not inspected. Flat provider locations have fullRangeKnown:false.",
     z.strictObject({
       uri,
-      version: index
-        .min(1)
+      version: version
         .optional()
         .describe(
           "Expected live document version; required with nonzero offset.",

@@ -1,3 +1,4 @@
+import { documentRevision } from "../../src/editorState";
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { WorkspaceService } from "../../src/workspace";
@@ -47,7 +48,7 @@ export async function readSymbolTools(
     for (let page = 0; page < 20; page++) {
       const result = await service.readSymbol({
         uri: fullUri.toString(),
-        version: document.version,
+        version: documentRevision(document),
         name: "method",
         maxChars: 2,
         startPosition,
@@ -65,7 +66,7 @@ export async function readSymbolTools(
     await assert.rejects(
       service.readSymbol({
         uri: flatUri.toString(),
-        version: flatDocument.version,
+        version: documentRevision(flatDocument),
         name: "method",
       }),
       (error: unknown) =>

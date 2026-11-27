@@ -31,8 +31,7 @@ Document responses include `version` and `consistency: "document-version"`.
 Optional input `version` rejects stale requests and is required with nonzero
 offset. Changes, closure or replacement of the document during a provider call
 or target admission reject with VERSION_CONFLICT. Pagination reruns the provider;
-a matching document version cannot guarantee stable provider order/index state,
-or detect a close/reopen between requests whose version number was reused.
+a matching document version cannot guarantee stable provider order/index state.
 Workspace responses explicitly use `consistency: "live"`: each page reruns the
 provider, so index changes can duplicate or skip results. Neither mode retains
 server cursors or claims snapshot consistency.
