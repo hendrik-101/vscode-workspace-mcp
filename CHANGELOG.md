@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4 - Marketplace icon fix
+
+- Resize the extension icon to meet the VS Code Marketplace upload limit.
+
 ## 0.1.3 — command settings and Marketplace preview
 
 - Run contributed commands without a profile using the explicit
