@@ -17,7 +17,10 @@ test("document revisions are stable for a snapshot, unique to a live model, and 
 
 test("tab capacity counts reserved openings and is recovered after completion or a tab closes", () => {
   let tabCount = 31;
-  const budget = new EditorTabBudget(() => tabCount);
+  const budget = new EditorTabBudget(
+    () => tabCount,
+    () => undefined,
+  );
   const release = budget.reserve();
   assert.throws(() => budget.reserve(), { code: "LIMIT_EXCEEDED" });
   release();
@@ -28,5 +31,28 @@ test("tab capacity counts reserved openings and is recovered after completion or
   release();
   assert.throws(() => budget.reserve(), { code: "LIMIT_EXCEEDED" });
   next();
+  budget.reserve()();
+});
+
+test("tab capacity respects an enabled VS Code limit and counts pending opens", () => {
+  let enabled = true;
+  let perEditorGroup = false;
+  const budget = new EditorTabBudget(
+    () => 3,
+    () =>
+      enabled
+        ? {
+            perEditorGroup,
+            value: 3,
+            tabCounts: [1, 2],
+          }
+        : undefined,
+  );
+  assert.throws(() => budget.reserve(), { code: "LIMIT_EXCEEDED" });
+  perEditorGroup = true;
+  const release = budget.reserve();
+  assert.throws(() => budget.reserve(), { code: "LIMIT_EXCEEDED" });
+  release();
+  enabled = false;
   budget.reserve()();
 });

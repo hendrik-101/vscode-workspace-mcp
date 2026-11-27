@@ -21,14 +21,32 @@ export function documentRevision(document: Model): number {
   return next;
 }
 
+type NativeTabLimit = {
+  perEditorGroup: boolean;
+  value: number;
+  tabCounts: readonly number[];
+};
+
 /** Count existing user tabs without assuming we own or may close any of them. */
 export class EditorTabBudget {
   private pending = 0;
 
-  constructor(private readonly count: () => number) {}
+  constructor(
+    private readonly count: () => number,
+    private readonly nativeLimit: () => NativeTabLimit | undefined,
+  ) {}
 
   reserve(): () => void {
-    if (this.count() + this.pending >= 32)
+    const count = this.count();
+    const limit = this.nativeLimit();
+    // An open can be routed to another group, e.g. if the active group is locked.
+    const nativeCount = limit?.perEditorGroup
+      ? limit.tabCounts.reduce((maximum, count) => Math.max(maximum, count), 0)
+      : count;
+    if (
+      count + this.pending >= 32 ||
+      (limit && limit.value > 0 && nativeCount + this.pending + 1 > limit.value)
+    )
       throw new WorkspaceError(
         "LIMIT_EXCEEDED",
         "The editor tab limit is reached. Close a tab or wait for another reveal to finish.",

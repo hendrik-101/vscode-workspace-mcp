@@ -28,8 +28,21 @@ export function loadWorkspace(
     exports: module.exports,
     require: (id: string) => {
       if (id === "vscode") {
-        const api = vscode as { window?: object };
-        return { ...api, window: { tabGroups: { all: [] }, ...api.window } };
+        const api = vscode as { window?: object; workspace?: object };
+        return {
+          ...api,
+          window: { tabGroups: { all: [] }, ...api.window },
+          workspace:
+            api.workspace &&
+            new Proxy(api.workspace, {
+              get: (target, property) =>
+                property === "getConfiguration" && !(property in target)
+                  ? () => ({
+                      get: (_key: string, fallback: unknown) => fallback,
+                    })
+                  : Reflect.get(target, property),
+            }),
+        };
       }
       // VM fixtures exercise provider branches with native counters as deterministic
       // test inputs. The production tracker is covered separately and in VS Code.

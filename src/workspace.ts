@@ -256,11 +256,22 @@ function range(value: vscode.Range): TextRange {
   return { start: position(value.start), end: position(value.end) };
 }
 
-const editorTabBudget = new EditorTabBudget(() =>
-  vscode.window.tabGroups.all.reduce(
-    (count, group) => count + group.tabs.length,
-    0,
-  ),
+const editorTabBudget = new EditorTabBudget(
+  () =>
+    vscode.window.tabGroups.all.reduce(
+      (count, group) => count + group.tabs.length,
+      0,
+    ),
+  () => {
+    const limit = vscode.workspace.getConfiguration("workbench.editor.limit");
+    if (!limit.get<boolean>("enabled", false)) return undefined;
+    return {
+      value: limit.get<number>("value", 10),
+      perEditorGroup: limit.get<boolean>("perEditorGroup", false),
+      // Count dirty tabs conservatively rather than depending on exceptions.
+      tabCounts: vscode.window.tabGroups.all.map((group) => group.tabs.length),
+    };
+  },
 );
 
 function state(document: vscode.TextDocument): DocumentState {
@@ -896,13 +907,18 @@ export class WorkspaceService implements WorkspaceApi {
     this.text(document);
     signal?.throwIfAborted();
     this.active();
+    const other =
+      input.otherUri === undefined
+        ? undefined
+        : await this.document(parseUri(input.otherUri));
+    if (other) this.text(other);
+    this.active();
+    signal?.throwIfAborted();
     let right: vscode.Uri;
     let snapshot: string | undefined;
     const releaseTab = editorTabBudget.reserve();
     try {
-      if (input.otherUri !== undefined) {
-        const other = await this.document(parseUri(input.otherUri));
-        this.text(other);
+      if (other) {
         right = other.uri;
       } else {
         this.expected(document, input.version ?? 0);
