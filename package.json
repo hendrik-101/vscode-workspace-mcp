@@ -2,7 +2,7 @@
   "name": "vscode-workspace-mcp",
   "displayName": "Workspace MCP",
   "description": "A small, authenticated MCP bridge to VS Code virtual workspaces and live editors.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "hendrik101",
   "license": "MIT",
   "private": true,
